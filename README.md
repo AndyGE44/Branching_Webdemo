@@ -83,6 +83,127 @@ PYTHONPATH=src uvicorn agent_safe_demo.main:app --host 0.0.0.0 --port 8000
 The `CheckpointLiteBackend` is in `src/agent_safe_demo/branching.py`. Full VM
 setup instructions live in `docs/ubuntu-checkpoint-lite.md`.
 
+## Bootstrap A Fresh Shared VM
+
+Use this section when `sf-exp` points to a newly rebuilt VM with the same OS
+configuration as the current shared VM but no project files.
+
+Assumptions:
+
+- You can SSH to the VM with `ssh sf-exp`.
+- You have `sudo` on the VM.
+- Your GitHub SSH key can access this private repo.
+- The checkpoint-lite source or binary is available at
+  `/users/alexxjk/checkpoint-lite`, or you can clone/build it there.
+
+### 1. Install System Packages
+
+On the VM:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  git \
+  curl \
+  python3 \
+  python3-pip \
+  python3.12-venv \
+  criu \
+  golang-go
+
+sudo criu check
+```
+
+`sudo criu check` should print success. If it fails, checkpoint-lite process
+checkpointing is not ready on that VM.
+
+### 2. Clone This Private Repo
+
+On the VM:
+
+```bash
+cd ~
+git clone git@github.com:AndyGE44/Web_Demo_For_Checkpointlite.git
+cd Web_Demo_For_Checkpointlite
+```
+
+If the repo already exists and you want a clean copy:
+
+```bash
+cd ~
+rm -rf Web_Demo_For_Checkpointlite
+git clone git@github.com:AndyGE44/Web_Demo_For_Checkpointlite.git
+cd Web_Demo_For_Checkpointlite
+```
+
+### 3. Prepare The Python Environment
+
+On the VM:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -e ".[dev]"
+pytest -q
+```
+
+### 4. Prepare Checkpoint-Lite
+
+If `/users/alexxjk/checkpoint-lite/checkpoint-lite` already exists:
+
+```bash
+/users/alexxjk/checkpoint-lite/checkpoint-lite version
+```
+
+If checkpoint-lite is missing, clone/build it on the VM:
+
+```bash
+cd /users/alexxjk
+git clone git@github.com:Alex-XJK/checkpoint-lite.git
+cd checkpoint-lite
+go build -o checkpoint-lite cmd/checkpoint-lite/main.go
+go build -o bash_init cmd/bash-init/main.go
+./checkpoint-lite version
+```
+
+### 5. Verify OverlayFS With Checkpoint-Lite
+
+On the VM:
+
+```bash
+sudo umount -l /tmp/checkpoint-sessions/*/work 2>/dev/null || true
+sudo rm -rf /tmp/checkpoint-sessions /tmp/checkpoint-sessions-info
+
+mkdir -p /tmp/ckpt-lite-min
+echo hello > /tmp/ckpt-lite-min/hello.txt
+
+sudo env CHECKPOINT_SESSIONS_DIR=/tmp/checkpoint-sessions \
+  /users/alexxjk/checkpoint-lite/checkpoint-lite \
+  init /tmp/ckpt-lite-min --quiet
+```
+
+Expected output:
+
+```text
+<session-id>,/tmp/checkpoint-sessions/<session-id>/work
+```
+
+If you see `mount command failed: exit status 32`, make sure
+`CHECKPOINT_SESSIONS_DIR=/tmp/checkpoint-sessions` is set. Some VM images have
+old checkpoint-lite config pointing at `/mydata2/checkpoint-sessions`.
+
+Clean up after the check:
+
+```bash
+sudo umount -l /tmp/checkpoint-sessions/*/work 2>/dev/null || true
+sudo rm -rf /tmp/checkpoint-sessions /tmp/checkpoint-sessions-info /tmp/ckpt-lite-min
+```
+
+### 6. Run The Demo
+
+Use the SSH port forwarding workflow below. The main app runs on VM-local
+`127.0.0.1:8000`, and checkpoint-lite branches run on VM-local `8200+`.
+
 ## Run On Shared VM With SSH Port Forwarding
 
 This private repo is currently tested on the shared Ubuntu VM reachable as:
