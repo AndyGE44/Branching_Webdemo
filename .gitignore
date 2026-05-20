@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+toy_inventory.db
+.branches/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
