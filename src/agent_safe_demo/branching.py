@@ -34,6 +34,9 @@ class BranchHandle:
     db_path: Path
     port: int
     url: str
+    session_id: str | None = None
+    base_checkpoint_id: str | None = None
+    work_dir: Path | None = None
     status: str = "running"
     created_at: float = field(default_factory=time.time)
     process: subprocess.Popen | None = None
@@ -45,6 +48,9 @@ class BranchHandle:
             "db_path": str(self.db_path),
             "port": self.port,
             "url": self.url,
+            "session_id": self.session_id,
+            "base_checkpoint_id": self.base_checkpoint_id,
+            "work_dir": str(self.work_dir) if self.work_dir else None,
             "status": self.status,
             "created_at": self.created_at,
             "pid": self.process.pid if self.process else None,
@@ -347,6 +353,8 @@ class CheckpointLiteBackend:
 
         session_id, work_dir = self._checkpoint_lite_init(self.project_root)
         branch_id = f"ckpt-{session_id[:8]}"
+        base_checkpoint_id = f"{branch_id}-base"
+        self._checkpoint_lite_create(session_id, base_checkpoint_id)
         branch_db = Path(work_dir) / self.main_db_path.name
         port = self._next_port()
 
@@ -390,6 +398,9 @@ class CheckpointLiteBackend:
             db_path=branch_db,
             port=port,
             url=f"http://{self.host}:{port}",
+            session_id=session_id,
+            base_checkpoint_id=base_checkpoint_id,
+            work_dir=Path(work_dir),
             process=process,
         )
         self.branches[branch_id] = branch
@@ -491,10 +502,28 @@ class CheckpointLiteBackend:
             raise BranchError(f"Unexpected checkpoint-lite init output: {output}") from error
         return session_id, work_dir
 
+    def _checkpoint_lite_create(self, session_id: str, checkpoint_id: str) -> None:
+        proc = subprocess.run(
+            self._ckpt_cmd("create", session_id, checkpoint_id, "-1"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            self._cleanup_session_by_id(session_id)
+            raise BranchError(
+                "checkpoint-lite base checkpoint failed: "
+                f"{proc.stderr.strip() or proc.stdout.strip() or proc.returncode}"
+            )
+
     def _cleanup_session(self, branch_id: str) -> None:
         session_id = self.sessions.pop(branch_id, None)
         if not session_id:
             return
+        self._cleanup_session_by_id(session_id)
+
+    def _cleanup_session_by_id(self, session_id: str) -> None:
         subprocess.run(
             self._ckpt_cmd("cleanup", session_id, "--force"),
             stdout=subprocess.DEVNULL,

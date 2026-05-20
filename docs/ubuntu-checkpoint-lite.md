@@ -113,10 +113,12 @@ force a known-good local path such as `/tmp/checkpoint-sessions`.
 
 ## 6. What This Backend Does Today
 
-The first `CheckpointLiteBackend` is intentionally conservative:
+The first `CheckpointLiteBackend` is intentionally conservative, but it now
+creates an explicit named base checkpoint for every branch:
 
 ```text
 create branch -> sudo checkpoint-lite init <project-root> --quiet
+              -> sudo checkpoint-lite create <session> <branch>-base -1
               -> start branch uvicorn in the overlay workdir
               -> set TOY_INVENTORY_DB_PATH=<overlay>/toy_inventory.db
 
@@ -131,7 +133,8 @@ multi-process CRIU restore in the same step.
 
 ## 7. Known Limitations
 
-- The first backend uses `checkpoint-lite init`, not full `create/restore` yet.
+- The first backend uses `checkpoint-lite init` and `create`; it does not yet
+  restore multiple active branches from one shared base session.
 - Commit is SQLite promotion, not a general filesystem merge.
 - If main state changes while a branch is active, this prototype does not yet
   implement conflict detection.
@@ -142,8 +145,7 @@ multi-process CRIU restore in the same step.
 
 After the first Ubuntu smoke test works, the next implementation should add:
 
-- an explicit base checkpoint after main app initialization
-- branch creation from that named checkpoint
+- branch creation from a shared named checkpoint
 - branch metadata persisted across controller restarts
 - conflict detection before commit
 - optional process checkpoint/restore for long-running app state

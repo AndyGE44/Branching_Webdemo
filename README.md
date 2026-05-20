@@ -86,7 +86,8 @@ setup instructions live in `docs/ubuntu-checkpoint-lite.md`.
 Target lifecycle:
 
 ```text
-create branch -> checkpoint-lite create/restore -> start branch app URL
+create branch -> checkpoint-lite init -> checkpoint-lite create <branch>-base
+              -> start branch app URL in the post-checkpoint current layer
 run agent     -> HTTP calls against branch URL
 discard       -> checkpoint-lite cleanup branch state
 commit        -> promote branch state to main

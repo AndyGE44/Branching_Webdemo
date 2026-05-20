@@ -294,11 +294,16 @@ function renderBranches(branches, diffs = {}) {
   branchesEl.innerHTML = branches.length
     ? branches
         .map(
-          (branch) => `
+          (branch) => {
+            const checkpointDetails = branch.base_checkpoint_id
+              ? `<p>session ${escapeHtml(branch.session_id)} · base ${escapeHtml(branch.base_checkpoint_id)}</p>`
+              : `<p>${escapeHtml(branch.backend)} · port ${escapeHtml(branch.port)}</p>`;
+            return `
             <article class="branch-card" data-branch-id="${escapeHtml(branch.id)}">
               <div class="branch-card-main">
                 <div>
                   <h3>${escapeHtml(branch.id)}</h3>
+                  ${checkpointDetails}
                   <p>${escapeHtml(branch.backend)} · port ${escapeHtml(branch.port)}</p>
                 </div>
                 ${badge(branch.status)}
@@ -312,7 +317,8 @@ function renderBranches(branches, diffs = {}) {
               </div>
               ${renderDiff(diffs[branch.id])}
             </article>
-          `,
+          `;
+          },
         )
         .join("")
     : `<p class="empty">No agent branches yet.</p>`;
