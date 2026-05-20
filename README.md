@@ -28,20 +28,28 @@ Run this on your laptop and keep the terminal open:
 
 ```bash
 ssh \
-  -L 8000:127.0.0.1:8000 \
-  -L 8200:127.0.0.1:8200 \
-  -L 8201:127.0.0.1:8201 \
-  -L 8202:127.0.0.1:8202 \
+  -o ExitOnForwardFailure=yes \
+  -L 18000:127.0.0.1:8000 \
+  -L 18200:127.0.0.1:8200 \
+  -L 18201:127.0.0.1:8201 \
+  -L 18202:127.0.0.1:8202 \
   sf-exp
 ```
 
 Port meanings:
 
-- `8000`: main FastAPI app
-- `8200+`: checkpoint-lite branch apps
+- `18000`: forwards your laptop's `127.0.0.1:18000` to the VM main FastAPI app
+  on `127.0.0.1:8000`
+- `18200+`: forwards your laptop's `127.0.0.1:18200+` to the VM checkpoint-lite
+  branch apps on `127.0.0.1:8200+`
 
 If you create more than three branches at once, add more forwarded ports, for
-example `-L 8203:127.0.0.1:8203`.
+example `-L 18203:127.0.0.1:8203`.
+
+Using `18000` and `18200+` avoids colliding with a local copy of this demo that
+may already be running on your laptop. The `ExitOnForwardFailure=yes` option
+makes SSH fail immediately if a requested local port is already occupied, instead
+of silently leaving you connected to the wrong server.
 
 ### 2. Prepare The Repo On The VM
 
@@ -88,7 +96,7 @@ uvicorn agent_safe_demo.main:app --host 127.0.0.1 --port 8000
 On your laptop, open:
 
 ```text
-http://127.0.0.1:8000
+http://127.0.0.1:18000
 ```
 
 Try this flow:
@@ -103,10 +111,47 @@ The branch URL should look like:
 http://127.0.0.1:8200
 ```
 
-That URL works in your local browser because the SSH tunnel forwards local
-`8200` to the VM's `127.0.0.1:8200`.
+With the safer tunnel above, open the branch locally as:
 
-### 5. Optional Smoke Test On The VM
+```text
+http://127.0.0.1:18200
+```
+
+The app may still display the VM-side branch URL `http://127.0.0.1:8200`.
+Manually replace local port `8200` with `18200` in your browser. Branch `8201`
+maps to local `18201`, branch `8202` maps to local `18202`, and so on.
+
+### 5. Avoid Accidentally Opening A Local Demo
+
+If you forwarded ports but still see the local-copy version, your laptop may
+already have a local server listening on the same port.
+
+Check whether your laptop has a local main server on `8000`:
+
+```bash
+lsof -iTCP:8000 -sTCP:LISTEN -n -P
+```
+
+Stop local demo servers before testing the VM:
+
+```bash
+lsof -tiTCP:8000 -sTCP:LISTEN | xargs -r kill
+lsof -tiTCP:8200-8250 -sTCP:LISTEN | xargs -r kill
+```
+
+You are seeing the checkpoint-lite VM version when:
+
+- Branch IDs start with `ckpt-`.
+- The branch card includes checkpoint-lite session/base details.
+- Branch apps use VM ports `8200+`, viewed locally through `18200+`.
+
+You are probably seeing the local development version when:
+
+- Branch IDs start with `br-`.
+- Branch apps use local-copy ports around `8100+`.
+- The UI does not show checkpoint-lite session/base details.
+
+### 6. Optional Smoke Test On The VM
 
 In another SSH session or after stopping the server:
 
@@ -125,7 +170,7 @@ audit_log delta: +3
 main state after agent: unchanged
 ```
 
-### 6. Cleanup
+### 7. Cleanup
 
 If a run is interrupted, clean up ports and checkpoint-lite mounts:
 
