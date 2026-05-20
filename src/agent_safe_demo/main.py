@@ -27,6 +27,10 @@ def create_branch_backend() -> LocalCopyBackend | CheckpointLiteBackend:
             PROJECT_ROOT,
             DB_PATH,
             checkpoint_lite_bin=os.getenv("CHECKPOINT_LITE_BIN", "./checkpoint-lite"),
+            checkpoint_sessions_dir=os.getenv(
+                "TOY_CHECKPOINT_SESSIONS_DIR",
+                "/tmp/checkpoint-sessions",
+            ),
             host=os.getenv("TOY_BRANCH_HOST", "127.0.0.1"),
             port_start=int(os.getenv("TOY_BRANCH_PORT_START", "8200")),
             use_sudo=os.getenv("TOY_CHECKPOINT_USE_SUDO", "1") != "0",

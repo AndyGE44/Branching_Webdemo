@@ -71,7 +71,6 @@ class LocalCopyBackend:
         self.host = host
         self.port_start = port_start
         self.branches_dir = project_root / ".branches"
-        self.branches_dir.mkdir(exist_ok=True)
         self.branches: dict[str, BranchHandle] = {}
         self.name = "local-copy"
 
@@ -326,6 +325,7 @@ class CheckpointLiteBackend:
         project_root: Path,
         main_db_path: Path,
         checkpoint_lite_bin: str = "./checkpoint-lite",
+        checkpoint_sessions_dir: str = "/tmp/checkpoint-sessions",
         host: str = "127.0.0.1",
         port_start: int = 8200,
         use_sudo: bool = True,
@@ -333,6 +333,7 @@ class CheckpointLiteBackend:
         self.project_root = project_root
         self.main_db_path = main_db_path
         self.checkpoint_lite_bin = checkpoint_lite_bin
+        self.checkpoint_sessions_dir = checkpoint_sessions_dir
         self.host = host
         self.port_start = port_start
         self.use_sudo = use_sudo
@@ -355,17 +356,29 @@ class CheckpointLiteBackend:
         env["TOY_BRANCH_BACKEND"] = "local-copy"
         env["PYTHONPATH"] = pythonpath_for(Path(work_dir))
 
+        command = [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "agent_safe_demo.main:app",
+            "--host",
+            self.host,
+            "--port",
+            str(port),
+        ]
+        if self.use_sudo and os.geteuid() != 0:
+            command = [
+                "sudo",
+                "env",
+                f"PYTHONPATH={env['PYTHONPATH']}",
+                f"TOY_INVENTORY_DB_PATH={env['TOY_INVENTORY_DB_PATH']}",
+                f"TOY_INVENTORY_BRANCH_ID={env['TOY_INVENTORY_BRANCH_ID']}",
+                f"TOY_BRANCH_BACKEND={env['TOY_BRANCH_BACKEND']}",
+                *command,
+            ]
+
         process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "uvicorn",
-                "agent_safe_demo.main:app",
-                "--host",
-                self.host,
-                "--port",
-                str(port),
-            ],
+            command,
             cwd=work_dir,
             env=env,
             stdout=subprocess.DEVNULL,
@@ -491,9 +504,10 @@ class CheckpointLiteBackend:
 
     def _ckpt_cmd(self, *args: str) -> list[str]:
         cmd = [self.checkpoint_lite_bin, *args]
+        env = [f"CHECKPOINT_SESSIONS_DIR={self.checkpoint_sessions_dir}"]
         if self.use_sudo and os.geteuid() != 0:
-            return ["sudo", *cmd]
-        return cmd
+            return ["sudo", "env", *env, *cmd]
+        return ["env", *env, *cmd]
 
     def _next_port(self) -> int:
         used = {branch.port for branch in self.branches.values()}

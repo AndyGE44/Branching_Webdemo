@@ -76,6 +76,7 @@ The checkpoint-lite backend uses the same branch API:
 ```bash
 export TOY_BRANCH_BACKEND=checkpoint-lite
 export CHECKPOINT_LITE_BIN=/path/to/checkpoint-lite
+export TOY_CHECKPOINT_SESSIONS_DIR=/tmp/checkpoint-sessions
 PYTHONPATH=src uvicorn agent_safe_demo.main:app --host 0.0.0.0 --port 8000
 ```
 

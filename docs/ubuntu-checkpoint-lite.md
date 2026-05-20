@@ -88,6 +88,7 @@ export CHECKPOINT_LITE_BIN=../checkpoint-lite/checkpoint-lite
 export TOY_BRANCH_HOST=0.0.0.0
 export TOY_BRANCH_PORT_START=8200
 export TOY_CHECKPOINT_USE_SUDO=1
+export TOY_CHECKPOINT_SESSIONS_DIR=/tmp/checkpoint-sessions
 
 PYTHONPATH=src uvicorn agent_safe_demo.main:app --host 0.0.0.0 --port 8000
 ```
@@ -104,6 +105,11 @@ Expected first result:
 - Branch apps start on `8200+`.
 - Branch state writes to the checkpoint-lite overlay workdir.
 - Main `toy_inventory.db` is not modified until `Commit`.
+
+If checkpoint-lite fails with `mount command failed: exit status 32`, verify
+the session directory. Some CloudLab images have a checkpoint-lite config that
+points at `/mydata2/checkpoint-sessions`; use `TOY_CHECKPOINT_SESSIONS_DIR` to
+force a known-good local path such as `/tmp/checkpoint-sessions`.
 
 ## 6. What This Backend Does Today
 
