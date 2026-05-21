@@ -87,3 +87,27 @@ def test_base_checkpoint_api_shapes_branch_creation(monkeypatch, tmp_path):
     assert branch["base_checkpoint_id"] == base["checkpoint_id"]
     assert branches.json()["branches"][0]["base_id"] == base["id"]
     assert deleted.json()["status"] == "deleted"
+
+
+def test_reset_clears_bases_and_branches(monkeypatch, tmp_path):
+    app = load_app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        base = client.post("/api/bases", json={"label": "reset-base"}).json()["base"]
+        branch = client.post(f"/api/bases/{base['id']}/branches").json()["branch"]
+
+        before_reset = client.get("/api/branches").json()
+        assert before_reset["branches"][0]["id"] == branch["id"]
+
+        reset = client.post("/api/reset")
+        assert reset.status_code == 200
+
+        bases = client.get("/api/bases")
+        branches = client.get("/api/branches")
+        state = client.get("/api/state")
+
+    assert reset.json()["cleanup"] == {"branches_deleted": 1, "bases_deleted": 1}
+    assert bases.json()["bases"] == []
+    assert branches.json()["branches"] == []
+    assert len(state.json()["build_orders"]) == 0
+    assert len(state.json()["purchase_orders"]) == 0
+    assert len(state.json()["audit_log"]) == 1

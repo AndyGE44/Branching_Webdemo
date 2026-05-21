@@ -8,9 +8,10 @@ import subprocess
 import sys
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterator
 from urllib import request
 from urllib.error import URLError
 
@@ -270,6 +271,18 @@ class LocalCopyBackend:
         shutil.rmtree(branch.db_path.parent, ignore_errors=True)
         self.branches.pop(branch_id, None)
         return {"status": "discarded", "branch_id": branch_id}
+
+    def reset(self) -> dict[str, Any]:
+        branch_count = len(self.branches)
+        base_count = len(self.bases)
+        for branch in list(self.branches.values()):
+            branch.status = "discarded"
+            self._terminate(branch)
+            shutil.rmtree(branch.db_path.parent, ignore_errors=True)
+        self.branches.clear()
+        shutil.rmtree(self.bases_dir, ignore_errors=True)
+        self.bases.clear()
+        return {"branches_deleted": branch_count, "bases_deleted": base_count}
 
     def _next_port(self) -> int:
         used = {branch.port for branch in self.branches.values()}
@@ -607,6 +620,21 @@ class CheckpointLiteBackend:
         self.branches.pop(branch_id, None)
         return {"status": "discarded", "branch_id": branch_id}
 
+    def reset(self) -> dict[str, Any]:
+        branch_count = len(self.branches)
+        base_count = len(self.bases)
+        for branch_id, branch in list(self.branches.items()):
+            branch.status = "discarded"
+            self._terminate(branch)
+            self._cleanup_session(branch_id)
+        for base in list(self.bases.values()):
+            if base.session_id:
+                self._cleanup_session_by_id(base.session_id)
+        self.branches.clear()
+        self.sessions.clear()
+        self.bases.clear()
+        return {"branches_deleted": branch_count, "bases_deleted": base_count}
+
     def _checkpoint_lite_init(self, work_directory: Path) -> tuple[str, str]:
         proc = subprocess.run(
             self._ckpt_cmd("init", str(work_directory), "--quiet"),
@@ -804,3 +832,206 @@ class CheckpointLiteBackend:
         finally:
             target.close()
             source.close()
+
+
+class StateForkBackend(CheckpointLiteBackend):
+    """StateFork controller adapter for the same base/branch demo API.
+
+    StateFork is a Python controller package, not a web API in this workspace.
+    This adapter uses its EnvironmentManager API as the control plane:
+    snapshot, restore, create_env_from_snapshot, and cleanup. The toy web app
+    still runs as uvicorn so the rest of the demo UI can stay unchanged.
+    """
+
+    def __init__(
+        self,
+        project_root: Path,
+        main_db_path: Path,
+        statefork_root: Path,
+        statefork_method: str = "ckpt_build",
+        statefork_cwd: Path | None = None,
+        statefork_kwargs: dict[str, Any] | None = None,
+        host: str = "127.0.0.1",
+        port_start: int = 8300,
+    ) -> None:
+        super().__init__(
+            project_root=project_root,
+            main_db_path=main_db_path,
+            checkpoint_lite_bin="",
+            checkpoint_sessions_dir="",
+            host=host,
+            port_start=port_start,
+            use_sudo=False,
+        )
+        self.name = "statefork"
+        self.statefork_root = statefork_root
+        self.statefork_method = statefork_method
+        self.statefork_cwd = statefork_cwd or project_root
+        self.statefork_kwargs = statefork_kwargs or {}
+        self.base_managers: dict[str, Any] = {}
+        self.branch_environments: dict[str, str] = {}
+
+    def create_base(self, label: str | None = None) -> dict[str, Any]:
+        if not self.main_db_path.exists():
+            raise BranchError(f"Main database does not exist: {self.main_db_path}")
+
+        manager = self._create_statefork_manager()
+        snapshot_id = self._call_statefork(manager.snapshot)
+        if not snapshot_id:
+            self._cleanup_manager(manager)
+            raise BranchError("StateFork snapshot failed")
+
+        base_id = f"sfbase-{snapshot_id}"
+        work_dir = Path(getattr(manager, "work_dir", self.project_root))
+        base = BaseHandle(
+            id=base_id,
+            backend="statefork",
+            label=label or f"Base {len(self.bases) + 1}",
+            checkpoint_id=snapshot_id,
+            session_id=getattr(manager, "current_snapshot", snapshot_id),
+            db_path=work_dir / self.main_db_path.name,
+            work_dir=work_dir,
+        )
+        self.bases[base_id] = base
+        self.base_managers[base_id] = manager
+        return base.to_dict()
+
+    def delete_base(self, base_id: str) -> dict[str, Any]:
+        self._require_base(base_id)
+        active_branches = [
+            branch.id
+            for branch in self.branches.values()
+            if branch.base_id == base_id and branch.status == "running"
+        ]
+        if active_branches:
+            raise BranchError(
+                f"Base {base_id} still has active branches: {', '.join(active_branches)}"
+            )
+        manager = self.base_managers.pop(base_id, None)
+        if manager is not None:
+            self._cleanup_manager(manager)
+        self.bases.pop(base_id, None)
+        return {"status": "deleted", "base_id": base_id}
+
+    def create_branch(self, base_id: str | None = None) -> dict[str, Any]:
+        base = self._require_base(base_id) if base_id else self._create_auto_base()
+        manager = self.base_managers.get(base.id)
+        if manager is None:
+            raise BranchError(f"Base {base.id} does not have a StateFork manager")
+
+        ok = self._call_statefork(lambda: manager.restore(base.checkpoint_id))
+        if not ok:
+            raise BranchError(f"StateFork restore failed for base {base.id}")
+        environment_name = self._call_statefork(
+            lambda: manager.create_env_from_snapshot(base.checkpoint_id)
+        )
+        if not environment_name:
+            environment_name = base.checkpoint_id
+
+        work_dir = Path(getattr(manager, "work_dir", base.work_dir or self.project_root))
+        branch_db = work_dir / self.main_db_path.name
+        if not branch_db.exists():
+            raise BranchError(f"StateFork branch database does not exist: {branch_db}")
+
+        branch_id = f"sf-{uuid.uuid4().hex[:8]}"
+        port = self._next_port()
+        env = os.environ.copy()
+        env["TOY_INVENTORY_DB_PATH"] = str(branch_db)
+        env["TOY_INVENTORY_BRANCH_ID"] = branch_id
+        env["TOY_BRANCH_BACKEND"] = "local-copy"
+        env["PYTHONPATH"] = pythonpath_for(work_dir)
+
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "agent_safe_demo.main:app",
+                "--host",
+                self.host,
+                "--port",
+                str(port),
+            ],
+            cwd=work_dir,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        branch = BranchHandle(
+            id=branch_id,
+            backend="statefork",
+            db_path=branch_db,
+            port=port,
+            url=f"http://{self.host}:{port}",
+            base_id=base.id,
+            session_id=str(environment_name),
+            base_checkpoint_id=base.checkpoint_id,
+            work_dir=work_dir,
+            process=process,
+        )
+        self.branches[branch_id] = branch
+        self.branch_environments[branch_id] = str(environment_name)
+        self._wait_until_ready(branch)
+        return branch.to_dict()
+
+    def discard(self, branch_id: str) -> dict[str, Any]:
+        branch = self._require_branch(branch_id)
+        branch.status = "discarded"
+        self._terminate(branch)
+        self.branch_environments.pop(branch_id, None)
+        self.branches.pop(branch_id, None)
+        return {"status": "discarded", "branch_id": branch_id}
+
+    def reset(self) -> dict[str, Any]:
+        branch_count = len(self.branches)
+        base_count = len(self.bases)
+        for branch in list(self.branches.values()):
+            branch.status = "discarded"
+            self._terminate(branch)
+        for manager in list(self.base_managers.values()):
+            self._cleanup_manager(manager)
+        self.branches.clear()
+        self.branch_environments.clear()
+        self.bases.clear()
+        self.base_managers.clear()
+        return {"branches_deleted": branch_count, "bases_deleted": base_count}
+
+    def _create_statefork_manager(self) -> Any:
+        if not self.statefork_root.exists():
+            raise BranchError(f"StateFork root does not exist: {self.statefork_root}")
+        root = str(self.statefork_root)
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        try:
+            from controller import create_env_manager
+        except Exception as error:
+            raise BranchError(f"Could not import StateFork controller: {error}") from error
+
+        kwargs = {
+            "dockerfile_dir": str(self.project_root),
+            "build": False,
+            **self.statefork_kwargs,
+        }
+        return self._call_statefork(lambda: create_env_manager(self.statefork_method, **kwargs))
+
+    def _cleanup_session(self, branch_id: str) -> None:
+        self.branch_environments.pop(branch_id, None)
+
+    def _cleanup_manager(self, manager: Any) -> None:
+        try:
+            self._call_statefork(manager.cleanup)
+        except Exception:
+            pass
+
+    def _call_statefork(self, fn: Callable[[], Any]) -> Any:
+        with self._statefork_working_directory():
+            return fn()
+
+    @contextmanager
+    def _statefork_working_directory(self) -> Iterator[None]:
+        previous = Path.cwd()
+        os.chdir(self.statefork_cwd)
+        try:
+            yield
+        finally:
+            os.chdir(previous)
