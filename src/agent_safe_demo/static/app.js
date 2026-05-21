@@ -9,6 +9,9 @@ const buildOrderInput = document.querySelector("#buildOrderInput");
 const basesEl = document.querySelector("#bases");
 const baseLabelInput = document.querySelector("#baseLabelInput");
 const branchesEl = document.querySelector("#branches");
+const backendModeEl = document.querySelector("#backendMode");
+const backendStatsEl = document.querySelector("#backendStats");
+const snapshotModeEl = document.querySelector("#snapshotMode");
 const branchDiffs = {};
 let selectedBaseId = null;
 let baseCache = [];
@@ -38,6 +41,40 @@ function showResult(text, ok = true) {
   resultPill.textContent = text;
   resultPill.style.background = ok ? "#e8f1ec" : "#f8e7df";
   resultPill.style.color = ok ? "#174938" : "#8a341f";
+}
+
+function formatMs(value) {
+  const number = Number(value || 0);
+  if (number >= 1000) {
+    return `${(number / 1000).toFixed(2)}s`;
+  }
+  return `${number.toFixed(number >= 10 ? 0 : 1)}ms`;
+}
+
+function statCard(label, value, hint = "") {
+  return `
+    <article class="status-metric">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      ${hint ? `<p>${escapeHtml(hint)}</p>` : ""}
+    </article>
+  `;
+}
+
+function renderBackendStatus(status) {
+  const snapshotOps = status.operations?.snapshot || {};
+  const restoreOps = status.operations?.restore || {};
+  const totals = status.totals || {};
+  backendModeEl.textContent = `${status.backend} / ${status.method}`;
+  snapshotModeEl.textContent = `${status.host}:${status.port_start}+`;
+  backendStatsEl.innerHTML = [
+    statCard("Backend", status.backend, status.method),
+    statCard("Bases", totals.bases ?? 0, "frozen starting points"),
+    statCard("Branches", totals.branches ?? 0, "active agent sandboxes"),
+    statCard("Tree snapshots", totals.snapshots ?? 0, "visible branch nodes"),
+    statCard("Snapshot calls", snapshotOps.count ?? 0, `avg ${formatMs(snapshotOps.mean_ms)}`),
+    statCard("Restore/fork calls", restoreOps.count ?? 0, `avg ${formatMs(restoreOps.mean_ms)}`),
+  ].join("");
 }
 
 function renderInventory(items) {
@@ -434,10 +471,12 @@ function renderBranches(branches, diffs = {}) {
 
 async function refreshBranches(diffs = {}) {
   Object.assign(branchDiffs, diffs);
-  const [baseData, branchData] = await Promise.all([
+  const [backendData, baseData, branchData] = await Promise.all([
+    request("/api/backend"),
     request("/api/bases"),
     request("/api/branches"),
   ]);
+  renderBackendStatus(backendData);
   baseCache = baseData.bases;
   renderBases(baseCache);
 

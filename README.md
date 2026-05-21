@@ -105,6 +105,11 @@ Try this flow:
 Create Agent Branch -> Run Agent -> Diff -> Open Branch -> Discard
 ```
 
+The header should show `checkpoint-lite / checkpoint-lite-cli`. The
+`Backend & Snapshot Stats` panel shows the active backend, base count, branch
+count, visible snapshot-tree nodes, and measured snapshot/restore calls for the
+current server process.
+
 The branch URL should look like:
 
 ```text
@@ -329,6 +334,7 @@ create branch -> checkpoint-lite restore <base-id>
               -> start branch app URL in a restored layer
 run agent     -> HTTP calls against branch URL
               -> create step snapshots after each agent action
+status        -> /api/backend reports backend mode and snapshot/restore stats
 discard       -> checkpoint-lite cleanup branch state
 commit        -> promote branch state to main
 reset         -> delete active branches, bases, sessions, and reset main DB
@@ -367,6 +373,8 @@ base checkpoint
 
 It is intentionally behind the `TOY_BRANCH_BACKEND=statefork` flag while the
 direct checkpoint-lite backend remains the primary shared VM demo path.
+The same `Backend & Snapshot Stats` UI and `GET /api/backend` endpoint work in
+this mode, with the method shown as `statefork:<method>`.
 
 ## Repository Layout
 
@@ -400,6 +408,7 @@ dist/
 - `GET /api/state`
 - `POST /api/reset` clears active branches, base checkpoints, backend sessions,
   and recreates the main toy database
+- `GET /api/backend`
 - `GET /api/bases`
 - `POST /api/bases`
 - `DELETE /api/bases/{base_id}`

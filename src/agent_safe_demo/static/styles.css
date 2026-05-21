@@ -95,6 +95,10 @@ h2 {
   grid-column: 1 / -1;
 }
 
+.status-panel {
+  grid-column: 1 / -1;
+}
+
 .branch-panel {
   grid-column: 1 / -1;
 }
@@ -224,6 +228,57 @@ button:hover,
   color: var(--accent-dark);
   font-size: 12px;
   font-weight: 700;
+}
+
+.backend-pill {
+  min-height: 38px;
+  max-width: 260px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 9px 12px;
+  background: var(--soft);
+  color: var(--accent-dark);
+  font-size: 12px;
+  font-weight: 750;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.status-metric {
+  min-width: 0;
+  min-height: 92px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.status-metric span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.status-metric strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 20px;
+  overflow-wrap: anywhere;
+}
+
+.status-metric p {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 
 .divider {
@@ -591,6 +646,7 @@ tr:last-child td {
   .item,
   .state-grid,
   .state-summary,
+  .status-grid,
   .audit-event,
   .base-card-main,
   .branch-card-main,

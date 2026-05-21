@@ -28,6 +28,58 @@ def pythonpath_for(root: Path) -> str:
     return src_path
 
 
+def new_operation_stats() -> dict[str, list[float]]:
+    return {"snapshot": [], "restore": []}
+
+
+def record_operation(stats: dict[str, list[float]], name: str, started_at: float) -> None:
+    stats.setdefault(name, []).append(time.time() - started_at)
+
+
+def summarize_operations(stats: dict[str, list[float]]) -> dict[str, dict[str, float | int]]:
+    summary = {}
+    for name, durations in stats.items():
+        total = sum(durations)
+        count = len(durations)
+        summary[name] = {
+            "count": count,
+            "total_ms": round(total * 1000, 2),
+            "mean_ms": round((total / count) * 1000, 2) if count else 0,
+            "last_ms": round(durations[-1] * 1000, 2) if durations else 0,
+        }
+    return summary
+
+
+def count_snapshots(branches: dict[str, "BranchHandle"]) -> int:
+    return sum(len(branch.snapshots) for branch in branches.values())
+
+
+def build_status(
+    *,
+    backend: str,
+    method: str,
+    host: str,
+    port_start: int,
+    bases: dict[str, BaseHandle],
+    branches: dict[str, "BranchHandle"],
+    operations: dict[str, list[float]],
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "backend": backend,
+        "method": method,
+        "host": host,
+        "port_start": port_start,
+        "totals": {
+            "bases": len(bases),
+            "branches": len(branches),
+            "snapshots": count_snapshots(branches),
+        },
+        "operations": summarize_operations(operations),
+        "details": details or {},
+    }
+
+
 @dataclass
 class BaseHandle:
     id: str
@@ -131,7 +183,19 @@ class LocalCopyBackend:
         self.bases_dir = self.branches_dir / "bases"
         self.bases: dict[str, BaseHandle] = {}
         self.branches: dict[str, BranchHandle] = {}
+        self.operation_stats = new_operation_stats()
         self.name = "local-copy"
+
+    def status(self) -> dict[str, Any]:
+        return build_status(
+            backend=self.name,
+            method="file-copy",
+            host=self.host,
+            port_start=self.port_start,
+            bases=self.bases,
+            branches=self.branches,
+            operations=self.operation_stats,
+        )
 
     def list_bases(self) -> list[dict[str, Any]]:
         return [base.to_dict() for base in self.bases.values()]
@@ -140,11 +204,13 @@ class LocalCopyBackend:
         if not self.main_db_path.exists():
             raise BranchError(f"Main database does not exist: {self.main_db_path}")
 
+        started_at = time.time()
         base_id = f"base-{uuid.uuid4().hex[:8]}"
         base_dir = self.bases_dir / base_id
         base_dir.mkdir(parents=True)
         base_db = base_dir / "toy_inventory.db"
         shutil.copy2(self.main_db_path, base_db)
+        record_operation(self.operation_stats, "snapshot", started_at)
 
         base = BaseHandle(
             id=base_id,
@@ -176,6 +242,7 @@ class LocalCopyBackend:
     def create_branch(self, base_id: str | None = None) -> dict[str, Any]:
         base = self._require_base(base_id) if base_id else self._create_auto_base()
 
+        started_at = time.time()
         branch_id = f"br-{uuid.uuid4().hex[:8]}"
         branch_dir = self.branches_dir / branch_id
         branch_dir.mkdir(parents=True)
@@ -219,6 +286,7 @@ class LocalCopyBackend:
         )
         self.branches[branch_id] = handle
         self._wait_until_ready(handle)
+        record_operation(self.operation_stats, "restore", started_at)
         return handle.to_dict()
 
     def list_branches(self) -> list[dict[str, Any]]:
@@ -320,6 +388,7 @@ class LocalCopyBackend:
         self.branches.clear()
         shutil.rmtree(self.bases_dir, ignore_errors=True)
         self.bases.clear()
+        self.operation_stats = new_operation_stats()
         return {"branches_deleted": branch_count, "bases_deleted": base_count}
 
     def _next_port(self) -> int:
@@ -367,6 +436,7 @@ class LocalCopyBackend:
         action: str,
         label: str,
     ) -> dict[str, Any]:
+        started_at = time.time()
         parent_id = branch.snapshots[-1].id if branch.snapshots else branch.base_checkpoint_id
         snapshot = SnapshotHandle(
             id=f"logical-{uuid.uuid4().hex[:8]}",
@@ -376,6 +446,7 @@ class LocalCopyBackend:
             parent_id=parent_id,
         )
         branch.snapshots.append(snapshot)
+        record_operation(self.operation_stats, "snapshot", started_at)
         return snapshot.to_dict()
 
     def _require_base(self, base_id: str) -> BaseHandle:
@@ -498,6 +569,22 @@ class CheckpointLiteBackend:
         self.bases: dict[str, BaseHandle] = {}
         self.branches: dict[str, BranchHandle] = {}
         self.sessions: dict[str, str] = {}
+        self.operation_stats = new_operation_stats()
+
+    def status(self) -> dict[str, Any]:
+        return build_status(
+            backend=self.name,
+            method="checkpoint-lite-cli",
+            host=self.host,
+            port_start=self.port_start,
+            bases=self.bases,
+            branches=self.branches,
+            operations=self.operation_stats,
+            details={
+                "checkpoint_lite_bin": self.checkpoint_lite_bin,
+                "checkpoint_sessions_dir": self.checkpoint_sessions_dir,
+            },
+        )
 
     def list_bases(self) -> list[dict[str, Any]]:
         return [base.to_dict() for base in self.bases.values()]
@@ -704,6 +791,7 @@ class CheckpointLiteBackend:
         self.branches.clear()
         self.sessions.clear()
         self.bases.clear()
+        self.operation_stats = new_operation_stats()
         return {"branches_deleted": branch_count, "bases_deleted": base_count}
 
     def _checkpoint_lite_init(self, work_directory: Path) -> tuple[str, str]:
@@ -727,6 +815,7 @@ class CheckpointLiteBackend:
         return session_id, work_dir
 
     def _checkpoint_lite_create(self, session_id: str, checkpoint_id: str) -> None:
+        started_at = time.time()
         proc = subprocess.run(
             self._ckpt_cmd("create", session_id, checkpoint_id, "-1"),
             stdout=subprocess.PIPE,
@@ -740,8 +829,10 @@ class CheckpointLiteBackend:
                 "checkpoint-lite base checkpoint failed: "
                 f"{proc.stderr.strip() or proc.stdout.strip() or proc.returncode}"
             )
+        record_operation(self.operation_stats, "snapshot", started_at)
 
     def _checkpoint_lite_restore(self, session_id: str, checkpoint_id: str) -> None:
+        started_at = time.time()
         proc = subprocess.run(
             self._ckpt_cmd("restore", session_id, checkpoint_id),
             stdout=subprocess.PIPE,
@@ -754,6 +845,7 @@ class CheckpointLiteBackend:
                 "checkpoint-lite restore failed: "
                 f"{proc.stderr.strip() or proc.stdout.strip() or proc.returncode}"
             )
+        record_operation(self.operation_stats, "restore", started_at)
 
     def _cleanup_session(self, branch_id: str) -> None:
         session_id = self.sessions.pop(branch_id, None)
@@ -963,15 +1055,33 @@ class StateForkBackend(CheckpointLiteBackend):
         self.base_managers: dict[str, Any] = {}
         self.branch_environments: dict[str, str] = {}
 
+    def status(self) -> dict[str, Any]:
+        return build_status(
+            backend=self.name,
+            method=f"statefork:{self.statefork_method}",
+            host=self.host,
+            port_start=self.port_start,
+            bases=self.bases,
+            branches=self.branches,
+            operations=self.operation_stats,
+            details={
+                "statefork_root": str(self.statefork_root),
+                "statefork_cwd": str(self.statefork_cwd),
+                "statefork_method": self.statefork_method,
+            },
+        )
+
     def create_base(self, label: str | None = None) -> dict[str, Any]:
         if not self.main_db_path.exists():
             raise BranchError(f"Main database does not exist: {self.main_db_path}")
 
         manager = self._create_statefork_manager()
+        started_at = time.time()
         snapshot_id = self._call_statefork(manager.snapshot)
         if not snapshot_id:
             self._cleanup_manager(manager)
             raise BranchError("StateFork snapshot failed")
+        record_operation(self.operation_stats, "snapshot", started_at)
 
         base_id = f"sfbase-{snapshot_id}"
         work_dir = Path(getattr(manager, "work_dir", self.project_root))
@@ -1011,12 +1121,16 @@ class StateForkBackend(CheckpointLiteBackend):
         if manager is None:
             raise BranchError(f"Base {base.id} does not have a StateFork manager")
 
+        restore_started_at = time.time()
         ok = self._call_statefork(lambda: manager.restore(base.checkpoint_id))
         if not ok:
             raise BranchError(f"StateFork restore failed for base {base.id}")
+        record_operation(self.operation_stats, "restore", restore_started_at)
+        env_started_at = time.time()
         environment_name = self._call_statefork(
             lambda: manager.create_env_from_snapshot(base.checkpoint_id)
         )
+        record_operation(self.operation_stats, "restore", env_started_at)
         if not environment_name:
             environment_name = base.checkpoint_id
 
@@ -1085,9 +1199,11 @@ class StateForkBackend(CheckpointLiteBackend):
         manager = self.base_managers.get(branch.base_id)
         if manager is None:
             raise BranchError(f"Base {branch.base_id} does not have a StateFork manager")
+        started_at = time.time()
         snapshot_id = self._call_statefork(manager.snapshot)
         if not snapshot_id:
             raise BranchError(f"StateFork snapshot failed after {action}")
+        record_operation(self.operation_stats, "snapshot", started_at)
         parent_id = branch.snapshots[-1].id if branch.snapshots else branch.base_checkpoint_id
         snapshot = SnapshotHandle(
             id=snapshot_id,
@@ -1111,6 +1227,7 @@ class StateForkBackend(CheckpointLiteBackend):
         self.branch_environments.clear()
         self.bases.clear()
         self.base_managers.clear()
+        self.operation_stats = new_operation_stats()
         return {"branches_deleted": branch_count, "bases_deleted": base_count}
 
     def _create_statefork_manager(self) -> Any:

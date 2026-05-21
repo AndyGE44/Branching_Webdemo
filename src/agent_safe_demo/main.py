@@ -454,6 +454,11 @@ def branch_error(error: BranchError) -> HTTPException:
     return HTTPException(status_code=400, detail=str(error))
 
 
+@app.get("/api/backend")
+def backend_status() -> dict:
+    return branch_backend.status()
+
+
 @app.get("/api/bases")
 def list_bases() -> dict:
     return {"backend": branch_backend.name, "bases": branch_backend.list_bases()}

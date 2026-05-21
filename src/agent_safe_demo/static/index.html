@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Agent-Safe Toy Inventory</title>
-    <link rel="stylesheet" href="/static/styles.css?v=5" />
+    <link rel="stylesheet" href="/static/styles.css?v=6" />
   </head>
   <body>
     <header class="topbar">
@@ -13,6 +13,7 @@
         <p>Inventory, build orders, substitutions, and draft purchase orders.</p>
       </div>
       <div class="actions">
+        <span id="backendMode" class="backend-pill">Backend...</span>
         <a class="icon-link" href="/docs" title="Open API docs">API</a>
         <button id="resetBtn" class="danger" type="button">Reset</button>
       </div>
@@ -75,6 +76,16 @@
         </div>
       </section>
 
+      <section class="panel status-panel">
+        <div class="panel-header">
+          <div>
+            <h2>Backend & Snapshot Stats</h2>
+            <p id="snapshotMode" class="muted">Runtime branch control</p>
+          </div>
+        </div>
+        <div id="backendStats" class="status-grid"></div>
+      </section>
+
       <section class="panel branch-panel">
         <div class="panel-header">
           <div>
@@ -111,6 +122,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=5"></script>
+    <script src="/static/app.js?v=6"></script>
   </body>
 </html>

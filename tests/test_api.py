@@ -79,6 +79,9 @@ def test_base_checkpoint_api_shapes_branch_creation(monkeypatch, tmp_path):
         branches = client.get("/api/branches")
         assert branches.status_code == 200
 
+        backend = client.get("/api/backend")
+        assert backend.status_code == 200
+
         blocked_delete = client.delete(f"/api/bases/{base['id']}")
         assert blocked_delete.status_code == 400
 
@@ -98,6 +101,12 @@ def test_base_checkpoint_api_shapes_branch_creation(monkeypatch, tmp_path):
     assert snapshots[0]["parent_id"] == base["checkpoint_id"]
     assert snapshots[1]["parent_id"] == snapshots[0]["id"]
     assert len(branches.json()["branches"][0]["snapshots"]) == 3
+    backend_status = backend.json()
+    assert backend_status["backend"] == "local-copy"
+    assert backend_status["method"] == "file-copy"
+    assert backend_status["totals"] == {"bases": 1, "branches": 1, "snapshots": 3}
+    assert backend_status["operations"]["snapshot"]["count"] >= 4
+    assert backend_status["operations"]["restore"]["count"] >= 1
     assert deleted.json()["status"] == "deleted"
 
 
@@ -115,11 +124,15 @@ def test_reset_clears_bases_and_branches(monkeypatch, tmp_path):
 
         bases = client.get("/api/bases")
         branches = client.get("/api/branches")
+        backend = client.get("/api/backend")
         state = client.get("/api/state")
 
     assert reset.json()["cleanup"] == {"branches_deleted": 1, "bases_deleted": 1}
     assert bases.json()["bases"] == []
     assert branches.json()["branches"] == []
+    assert backend.json()["totals"] == {"bases": 0, "branches": 0, "snapshots": 0}
+    assert backend.json()["operations"]["snapshot"]["count"] == 0
+    assert backend.json()["operations"]["restore"]["count"] == 0
     assert len(state.json()["build_orders"]) == 0
     assert len(state.json()["purchase_orders"]) == 0
     assert len(state.json()["audit_log"]) == 1
