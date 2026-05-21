@@ -6,8 +6,12 @@ const substituteSelect = document.querySelector("#substituteSelect");
 const quantityInput = document.querySelector("#quantityInput");
 const actorSelect = document.querySelector("#actorSelect");
 const buildOrderInput = document.querySelector("#buildOrderInput");
+const basesEl = document.querySelector("#bases");
+const baseLabelInput = document.querySelector("#baseLabelInput");
 const branchesEl = document.querySelector("#branches");
 const branchDiffs = {};
+let selectedBaseId = null;
+let baseCache = [];
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -290,50 +294,125 @@ function renderDiff(diff) {
   `;
 }
 
-function renderBranches(branches, diffs = {}) {
-  branchesEl.innerHTML = branches.length
-    ? branches
-        .map(
-          (branch) => {
-            const checkpointDetails = branch.base_checkpoint_id
-              ? `<p>session ${escapeHtml(branch.session_id)} · base ${escapeHtml(branch.base_checkpoint_id)}</p>`
-              : `<p>${escapeHtml(branch.backend)} · port ${escapeHtml(branch.port)}</p>`;
-            return `
-            <article class="branch-card" data-branch-id="${escapeHtml(branch.id)}">
-              <div class="branch-card-main">
+function formatTime(epochSeconds) {
+  return new Date(epochSeconds * 1000).toLocaleString();
+}
+
+function baseTitle(baseId) {
+  const base = baseCache.find((candidate) => candidate.id === baseId);
+  return base ? `${base.label} · ${base.id}` : baseId || "Ad hoc base";
+}
+
+function renderBases(bases) {
+  if (bases.length && !selectedBaseId) {
+    selectedBaseId = bases[0].id;
+  }
+  if (selectedBaseId && !bases.some((base) => base.id === selectedBaseId)) {
+    selectedBaseId = bases[0]?.id || null;
+  }
+
+  basesEl.innerHTML = bases.length
+    ? bases
+        .map((base) => {
+          const selected = base.id === selectedBaseId ? "selected" : "";
+          const sessionDetails = base.session_id
+            ? `<p>session ${escapeHtml(base.session_id)}</p>`
+            : `<p>${escapeHtml(base.backend)}</p>`;
+          return `
+            <article class="base-card ${selected}" data-base-id="${escapeHtml(base.id)}">
+              <div class="base-card-main">
                 <div>
-                  <h3>${escapeHtml(branch.id)}</h3>
-                  ${checkpointDetails}
-                  <p>${escapeHtml(branch.backend)} · port ${escapeHtml(branch.port)}</p>
+                  <h3>${escapeHtml(base.label)}</h3>
+                  <p>${escapeHtml(base.id)} · checkpoint ${escapeHtml(base.checkpoint_id)}</p>
+                  ${sessionDetails}
+                  <time>${escapeHtml(formatTime(base.created_at))}</time>
                 </div>
-                ${badge(branch.status)}
+                ${badge(base.status)}
               </div>
               <div class="branch-actions">
-                <a class="icon-link" href="${escapeHtml(branch.url)}" target="_blank" rel="noreferrer">Open Branch</a>
-                <button data-action="run-agent" data-id="${escapeHtml(branch.id)}" type="button">Run Agent</button>
-                <button data-action="refresh-diff" data-id="${escapeHtml(branch.id)}" type="button">Diff</button>
-                <button data-action="commit" data-id="${escapeHtml(branch.id)}" type="button">Commit</button>
-                <button class="danger" data-action="discard" data-id="${escapeHtml(branch.id)}" type="button">Discard</button>
+                <button data-action="select-base" data-id="${escapeHtml(base.id)}" type="button">Select</button>
+                <button data-action="create-branch" data-id="${escapeHtml(base.id)}" class="primary" type="button">Create Branch</button>
+                <button data-action="delete-base" data-id="${escapeHtml(base.id)}" class="danger" type="button">Delete</button>
               </div>
-              ${renderDiff(diffs[branch.id])}
             </article>
           `;
-          },
-        )
+        })
         .join("")
-    : `<p class="empty">No agent branches yet.</p>`;
+    : `<p class="empty">No base checkpoints yet.</p>`;
+}
+
+function renderBranchCard(branch, diffs = {}) {
+  const checkpointDetails = branch.base_checkpoint_id
+    ? `<p>from ${escapeHtml(branch.base_id)} · checkpoint ${escapeHtml(branch.base_checkpoint_id)}</p>`
+    : `<p>${escapeHtml(branch.backend)} · port ${escapeHtml(branch.port)}</p>`;
+  return `
+    <article class="branch-card" data-branch-id="${escapeHtml(branch.id)}">
+      <div class="branch-card-main">
+        <div>
+          <h3>${escapeHtml(branch.id)}</h3>
+          ${checkpointDetails}
+          <p>${escapeHtml(branch.backend)} · port ${escapeHtml(branch.port)}</p>
+        </div>
+        ${badge(branch.status)}
+      </div>
+      <div class="branch-actions">
+        <a class="icon-link" href="${escapeHtml(branch.url)}" target="_blank" rel="noreferrer">Open Branch</a>
+        <button data-action="run-agent" data-id="${escapeHtml(branch.id)}" type="button">Run Agent</button>
+        <button data-action="refresh-diff" data-id="${escapeHtml(branch.id)}" type="button">Diff</button>
+        <button data-action="commit" data-id="${escapeHtml(branch.id)}" type="button">Commit</button>
+        <button class="danger" data-action="discard" data-id="${escapeHtml(branch.id)}" type="button">Discard</button>
+      </div>
+      ${renderDiff(diffs[branch.id])}
+    </article>
+  `;
+}
+
+function renderBranches(branches, diffs = {}) {
+  if (!branches.length) {
+    branchesEl.innerHTML = `<p class="empty">No agent branches yet.</p>`;
+    return;
+  }
+
+  const grouped = branches.reduce((groups, branch) => {
+    const key = branch.base_id || "ad-hoc";
+    groups[key] ||= [];
+    groups[key].push(branch);
+    return groups;
+  }, {});
+
+  branchesEl.innerHTML = Object.entries(grouped)
+    .map(
+      ([baseId, group]) => `
+        <section class="branch-group">
+          <div class="branch-group-header">
+            <h3>${escapeHtml(baseTitle(baseId))}</h3>
+            <span>${group.length} branch${group.length === 1 ? "" : "es"}</span>
+          </div>
+          <div class="branch-group-list">
+            ${group.map((branch) => renderBranchCard(branch, diffs)).join("")}
+          </div>
+        </section>
+      `,
+    )
+    .join("");
 }
 
 async function refreshBranches(diffs = {}) {
   Object.assign(branchDiffs, diffs);
-  const data = await request("/api/branches");
-  const liveBranchIds = new Set(data.branches.map((branch) => branch.id));
+  const [baseData, branchData] = await Promise.all([
+    request("/api/bases"),
+    request("/api/branches"),
+  ]);
+  baseCache = baseData.bases;
+  renderBases(baseCache);
+
+  const liveBranchIds = new Set(branchData.branches.map((branch) => branch.id));
   for (const branchId of Object.keys(branchDiffs)) {
     if (!liveBranchIds.has(branchId)) {
       delete branchDiffs[branchId];
     }
   }
-  renderBranches(data.branches, branchDiffs);
+  renderBranches(branchData.branches, branchDiffs);
 }
 
 async function refresh() {
@@ -447,12 +526,54 @@ document.querySelector("#agentDemoBtn").addEventListener("click", async () => {
   }
 });
 
-document.querySelector("#createBranchBtn").addEventListener("click", async () => {
-  await mutate("Branch created", async () => {
-    const data = await request("/api/branches", { method: "POST" });
+document.querySelector("#createBaseBtn").addEventListener("click", async () => {
+  await mutate("Base created", async () => {
+    const label = baseLabelInput.value.trim();
+    const data = await request("/api/bases", {
+      method: "POST",
+      body: JSON.stringify({ label: label || null }),
+    });
+    selectedBaseId = data.base.id;
+    baseLabelInput.value = "";
     await refreshBranches();
-    return data.branch;
+    return data.base;
   });
+});
+
+basesEl.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-action]");
+  if (!button) {
+    return;
+  }
+  const baseId = button.dataset.id;
+  const action = button.dataset.action;
+  try {
+    if (action === "select-base") {
+      selectedBaseId = baseId;
+      renderBases(baseCache);
+      showResult("Base selected");
+      return;
+    }
+    if (action === "create-branch") {
+      selectedBaseId = baseId;
+      showResult("Creating branch...");
+      const data = await request(`/api/bases/${baseId}/branches`, { method: "POST" });
+      await refreshBranches();
+      showResult(`Branch ${data.branch.id} created`);
+      return;
+    }
+    if (action === "delete-base") {
+      await request(`/api/bases/${baseId}`, { method: "DELETE" });
+      if (selectedBaseId === baseId) {
+        selectedBaseId = null;
+      }
+      await refreshBranches();
+      showResult("Base deleted");
+    }
+  } catch (error) {
+    showResult(error.message, false);
+    await refreshBranches();
+  }
 });
 
 branchesEl.addEventListener("click", async (event) => {

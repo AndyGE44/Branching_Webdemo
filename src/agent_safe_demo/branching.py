@@ -28,12 +28,39 @@ def pythonpath_for(root: Path) -> str:
 
 
 @dataclass
+class BaseHandle:
+    id: str
+    backend: str
+    label: str
+    checkpoint_id: str
+    session_id: str | None = None
+    db_path: Path | None = None
+    work_dir: Path | None = None
+    status: str = "ready"
+    created_at: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "backend": self.backend,
+            "label": self.label,
+            "checkpoint_id": self.checkpoint_id,
+            "session_id": self.session_id,
+            "db_path": str(self.db_path) if self.db_path else None,
+            "work_dir": str(self.work_dir) if self.work_dir else None,
+            "status": self.status,
+            "created_at": self.created_at,
+        }
+
+
+@dataclass
 class BranchHandle:
     id: str
     backend: str
     db_path: Path
     port: int
     url: str
+    base_id: str | None = None
     session_id: str | None = None
     base_checkpoint_id: str | None = None
     work_dir: Path | None = None
@@ -48,6 +75,7 @@ class BranchHandle:
             "db_path": str(self.db_path),
             "port": self.port,
             "url": self.url,
+            "base_id": self.base_id,
             "session_id": self.session_id,
             "base_checkpoint_id": self.base_checkpoint_id,
             "work_dir": str(self.work_dir) if self.work_dir else None,
@@ -77,18 +105,61 @@ class LocalCopyBackend:
         self.host = host
         self.port_start = port_start
         self.branches_dir = project_root / ".branches"
+        self.bases_dir = self.branches_dir / "bases"
+        self.bases: dict[str, BaseHandle] = {}
         self.branches: dict[str, BranchHandle] = {}
         self.name = "local-copy"
 
-    def create_branch(self) -> dict[str, Any]:
+    def list_bases(self) -> list[dict[str, Any]]:
+        return [base.to_dict() for base in self.bases.values()]
+
+    def create_base(self, label: str | None = None) -> dict[str, Any]:
         if not self.main_db_path.exists():
             raise BranchError(f"Main database does not exist: {self.main_db_path}")
+
+        base_id = f"base-{uuid.uuid4().hex[:8]}"
+        base_dir = self.bases_dir / base_id
+        base_dir.mkdir(parents=True)
+        base_db = base_dir / "toy_inventory.db"
+        shutil.copy2(self.main_db_path, base_db)
+
+        base = BaseHandle(
+            id=base_id,
+            backend="local-copy",
+            label=label or f"Base {len(self.bases) + 1}",
+            checkpoint_id=base_id,
+            db_path=base_db,
+            work_dir=base_dir,
+        )
+        self.bases[base_id] = base
+        return base.to_dict()
+
+    def delete_base(self, base_id: str) -> dict[str, Any]:
+        base = self._require_base(base_id)
+        active_branches = [
+            branch.id
+            for branch in self.branches.values()
+            if branch.base_id == base_id and branch.status == "running"
+        ]
+        if active_branches:
+            raise BranchError(
+                f"Base {base_id} still has active branches: {', '.join(active_branches)}"
+            )
+        if base.work_dir:
+            shutil.rmtree(base.work_dir, ignore_errors=True)
+        self.bases.pop(base_id, None)
+        return {"status": "deleted", "base_id": base_id}
+
+    def create_branch(self, base_id: str | None = None) -> dict[str, Any]:
+        base = self._require_base(base_id) if base_id else self._create_auto_base()
 
         branch_id = f"br-{uuid.uuid4().hex[:8]}"
         branch_dir = self.branches_dir / branch_id
         branch_dir.mkdir(parents=True)
         branch_db = branch_dir / "toy_inventory.db"
-        shutil.copy2(self.main_db_path, branch_db)
+        if base.db_path is None:
+            raise BranchError(f"Base {base.id} does not have a database snapshot")
+        shutil.copy2(base.db_path, branch_db)
 
         port = self._next_port()
         env = os.environ.copy()
@@ -119,6 +190,8 @@ class LocalCopyBackend:
             db_path=branch_db,
             port=port,
             url=f"http://{self.host}:{port}",
+            base_id=base.id,
+            base_checkpoint_id=base.checkpoint_id,
             process=process,
         )
         self.branches[branch_id] = handle
@@ -237,6 +310,16 @@ class LocalCopyBackend:
         self._refresh_status(branch)
         return branch
 
+    def _require_base(self, base_id: str) -> BaseHandle:
+        base = self.bases.get(base_id)
+        if base is None:
+            raise BranchError(f"Unknown base checkpoint: {base_id}")
+        return base
+
+    def _create_auto_base(self) -> BaseHandle:
+        base = self.create_base(label=f"Auto base {len(self.bases) + 1}")
+        return self._require_base(base["id"])
+
     def _terminate(self, branch: BranchHandle) -> None:
         if branch.process and branch.process.poll() is None:
             branch.process.terminate()
@@ -344,17 +427,58 @@ class CheckpointLiteBackend:
         self.port_start = port_start
         self.use_sudo = use_sudo
         self.name = "checkpoint-lite"
+        self.bases: dict[str, BaseHandle] = {}
         self.branches: dict[str, BranchHandle] = {}
         self.sessions: dict[str, str] = {}
 
-    def create_branch(self) -> dict[str, Any]:
+    def list_bases(self) -> list[dict[str, Any]]:
+        return [base.to_dict() for base in self.bases.values()]
+
+    def create_base(self, label: str | None = None) -> dict[str, Any]:
         if not self.main_db_path.exists():
             raise BranchError(f"Main database does not exist: {self.main_db_path}")
 
         session_id, work_dir = self._checkpoint_lite_init(self.project_root)
+        base_id = f"base-{session_id[:8]}"
+        self._checkpoint_lite_create(session_id, base_id)
+        base = BaseHandle(
+            id=base_id,
+            backend="checkpoint-lite",
+            label=label or f"Base {len(self.bases) + 1}",
+            checkpoint_id=base_id,
+            session_id=session_id,
+            db_path=Path(work_dir) / self.main_db_path.name,
+            work_dir=Path(work_dir),
+        )
+        self.bases[base_id] = base
+        return base.to_dict()
+
+    def delete_base(self, base_id: str) -> dict[str, Any]:
+        base = self._require_base(base_id)
+        active_branches = [
+            branch.id
+            for branch in self.branches.values()
+            if branch.base_id == base_id and branch.status == "running"
+        ]
+        if active_branches:
+            raise BranchError(
+                f"Base {base_id} still has active branches: {', '.join(active_branches)}"
+            )
+        if base.session_id:
+            self._cleanup_session_by_id(base.session_id)
+        self.bases.pop(base_id, None)
+        return {"status": "deleted", "base_id": base_id}
+
+    def create_branch(self, base_id: str | None = None) -> dict[str, Any]:
+        base = self._require_base(base_id) if base_id else self._create_auto_base()
+        if base.session_id is None or base.work_dir is None:
+            raise BranchError(f"Base {base.id} does not have checkpoint-lite session data")
+
+        self._checkpoint_lite_restore(base.session_id, base.checkpoint_id)
+        session_id, work_dir = self._checkpoint_lite_init(base.work_dir)
         branch_id = f"ckpt-{session_id[:8]}"
-        base_checkpoint_id = f"{branch_id}-base"
-        self._checkpoint_lite_create(session_id, base_checkpoint_id)
+        branch_start_checkpoint_id = f"{branch_id}-start"
+        self._checkpoint_lite_create(session_id, branch_start_checkpoint_id)
         branch_db = Path(work_dir) / self.main_db_path.name
         port = self._next_port()
 
@@ -398,8 +522,9 @@ class CheckpointLiteBackend:
             db_path=branch_db,
             port=port,
             url=f"http://{self.host}:{port}",
+            base_id=base.id,
             session_id=session_id,
-            base_checkpoint_id=base_checkpoint_id,
+            base_checkpoint_id=base.checkpoint_id,
             work_dir=Path(work_dir),
             process=process,
         )
@@ -517,6 +642,20 @@ class CheckpointLiteBackend:
                 f"{proc.stderr.strip() or proc.stdout.strip() or proc.returncode}"
             )
 
+    def _checkpoint_lite_restore(self, session_id: str, checkpoint_id: str) -> None:
+        proc = subprocess.run(
+            self._ckpt_cmd("restore", session_id, checkpoint_id),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise BranchError(
+                "checkpoint-lite restore failed: "
+                f"{proc.stderr.strip() or proc.stdout.strip() or proc.returncode}"
+            )
+
     def _cleanup_session(self, branch_id: str) -> None:
         session_id = self.sessions.pop(branch_id, None)
         if not session_id:
@@ -576,6 +715,16 @@ class CheckpointLiteBackend:
             raise BranchError(f"Unknown branch: {branch_id}")
         self._refresh_status(branch)
         return branch
+
+    def _require_base(self, base_id: str) -> BaseHandle:
+        base = self.bases.get(base_id)
+        if base is None:
+            raise BranchError(f"Unknown base checkpoint: {base_id}")
+        return base
+
+    def _create_auto_base(self) -> BaseHandle:
+        base = self.create_base(label=f"Auto base {len(self.bases) + 1}")
+        return self._require_base(base["id"])
 
     def _terminate(self, branch: BranchHandle) -> None:
         if branch.process and branch.process.poll() is None:

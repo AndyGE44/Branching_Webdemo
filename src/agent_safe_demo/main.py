@@ -88,6 +88,10 @@ class PurchaseOrderRequest(BaseModel):
     actor: str = "agent"
 
 
+class BaseCheckpointRequest(BaseModel):
+    label: str | None = Field(default=None, max_length=80)
+
+
 @contextmanager
 def db() -> Iterator[sqlite3.Connection]:
     conn = sqlite3.connect(DB_PATH)
@@ -428,6 +432,36 @@ def reset() -> dict:
 
 def branch_error(error: BranchError) -> HTTPException:
     return HTTPException(status_code=400, detail=str(error))
+
+
+@app.get("/api/bases")
+def list_bases() -> dict:
+    return {"backend": branch_backend.name, "bases": branch_backend.list_bases()}
+
+
+@app.post("/api/bases")
+def create_base(payload: BaseCheckpointRequest | None = None) -> dict:
+    try:
+        label = payload.label if payload else None
+        return {"base": branch_backend.create_base(label=label)}
+    except BranchError as error:
+        raise branch_error(error) from error
+
+
+@app.post("/api/bases/{base_id}/branches")
+def create_branch_from_base(base_id: str) -> dict:
+    try:
+        return {"branch": branch_backend.create_branch(base_id=base_id)}
+    except BranchError as error:
+        raise branch_error(error) from error
+
+
+@app.delete("/api/bases/{base_id}")
+def delete_base(base_id: str) -> dict:
+    try:
+        return branch_backend.delete_base(base_id)
+    except BranchError as error:
+        raise branch_error(error) from error
 
 
 @app.get("/api/branches")

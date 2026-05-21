@@ -55,3 +55,35 @@ def test_agent_demo_workflow_mutates_state(monkeypatch, tmp_path):
     assert len(state["build_orders"]) == 1
     assert len(state["purchase_orders"]) == 1
     assert len(state["audit_log"]) == 4
+
+
+def test_base_checkpoint_api_shapes_branch_creation(monkeypatch, tmp_path):
+    app = load_app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        base_response = client.post("/api/bases", json={"label": "test-base"})
+        assert base_response.status_code == 200
+        base = base_response.json()["base"]
+
+        bases = client.get("/api/bases")
+        assert bases.status_code == 200
+        assert bases.json()["bases"][0]["id"] == base["id"]
+
+        branch_response = client.post(f"/api/bases/{base['id']}/branches")
+        assert branch_response.status_code == 200
+        branch = branch_response.json()["branch"]
+
+        branches = client.get("/api/branches")
+        assert branches.status_code == 200
+
+        blocked_delete = client.delete(f"/api/bases/{base['id']}")
+        assert blocked_delete.status_code == 400
+
+        client.post(f"/api/branches/{branch['id']}/discard")
+        deleted = client.delete(f"/api/bases/{base['id']}")
+        assert deleted.status_code == 200
+
+    assert base["label"] == "test-base"
+    assert branch["base_id"] == base["id"]
+    assert branch["base_checkpoint_id"] == base["checkpoint_id"]
+    assert branches.json()["branches"][0]["base_id"] == base["id"]
+    assert deleted.json()["status"] == "deleted"
