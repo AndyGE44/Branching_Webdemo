@@ -2,10 +2,7 @@ const inventoryEl = document.querySelector("#inventory");
 const stateView = document.querySelector("#stateView");
 const resultPill = document.querySelector("#lastResult");
 const partSelect = document.querySelector("#partSelect");
-const substituteSelect = document.querySelector("#substituteSelect");
 const quantityInput = document.querySelector("#quantityInput");
-const actorSelect = document.querySelector("#actorSelect");
-const buildOrderInput = document.querySelector("#buildOrderInput");
 const basesEl = document.querySelector("#bases");
 const baseLabelInput = document.querySelector("#baseLabelInput");
 const branchesEl = document.querySelector("#branches");
@@ -111,13 +108,9 @@ function renderInventory(items) {
     .map((item) => `<option value="${item.id}">${item.id}</option>`)
     .join("");
   partSelect.innerHTML = options;
-  substituteSelect.innerHTML = options;
   if (currentPart) {
     partSelect.value = currentPart;
   }
-  substituteSelect.value = items.some((item) => item.id === "MCU-ALT")
-    ? "MCU-ALT"
-    : items[0]?.id;
 }
 
 function badge(value) {
@@ -127,10 +120,18 @@ function badge(value) {
   if (["ready", "active", "draft"].includes(normalized)) {
     tone = "ok";
   }
-  if (["blocked", "failed", "substitute_failed"].includes(normalized)) {
+  if (["blocked", "failed"].includes(normalized)) {
     tone = "warn";
   }
   return `<span class="badge ${tone}">${safeValue}</span>`;
+}
+
+function selectedInventoryPayload() {
+  return {
+    part_id: partSelect.value,
+    quantity: Number(quantityInput.value),
+    actor: "user",
+  };
 }
 
 function emptyRow(columns, label = "No records yet") {
@@ -229,23 +230,6 @@ function renderState(state) {
         { label: "Status", value: (row) => badge(row.status), html: true },
         { label: "Actor", value: "actor" },
       ])}
-
-      ${renderTable("Build Orders", state.build_orders, [
-        { label: "ID", value: "id" },
-        { label: "SKU", value: "sku" },
-        { label: "Part", value: "part_id" },
-        { label: "Qty", value: "quantity" },
-        { label: "Status", value: (row) => badge(row.status), html: true },
-        { label: "Validation", value: "validation_message" },
-      ])}
-
-      ${renderTable("Purchase Orders", state.purchase_orders, [
-        { label: "ID", value: "id" },
-        { label: "Part", value: "part_id" },
-        { label: "Qty", value: "quantity" },
-        { label: "Status", value: (row) => badge(row.status), html: true },
-        { label: "Actor", value: "actor" },
-      ])}
     </div>
 
     <section class="state-card audit-card">
@@ -279,7 +263,7 @@ function renderState(state) {
 
 function renderDiff(diff) {
   if (!diff) {
-    return `<p class="empty">Run the branch agent flow to see a diff.</p>`;
+    return `<p class="empty">Run the agent to create a planned branch diff.</p>`;
   }
   const hasCountChanges = Object.values(diff.counts).some((count) => count.delta !== 0);
   const hasInventoryChanges = diff.inventory.length > 0;
@@ -304,13 +288,14 @@ function renderDiff(diff) {
           (item) => `
             <tr>
               <td>${escapeHtml(item.part_id)}</td>
+              <td>${item.on_hand_delta > 0 ? "+" : ""}${item.on_hand_delta}</td>
               <td>${item.available_delta > 0 ? "+" : ""}${item.available_delta}</td>
               <td>${item.reserved_delta > 0 ? "+" : ""}${item.reserved_delta}</td>
             </tr>
           `,
         )
         .join("")
-    : emptyRow(3, "No inventory quantity changes");
+    : emptyRow(4, "No inventory quantity changes");
 
   return `
     <p class="diff-summary">${summary}</p>
@@ -323,7 +308,7 @@ function renderDiff(diff) {
       </table>
       <table>
         <thead>
-          <tr><th>Part</th><th>Available Δ</th><th>Reserved Δ</th></tr>
+          <tr><th>Part</th><th>On Hand Δ</th><th>Available Δ</th><th>Reserved Δ</th></tr>
         </thead>
         <tbody>${inventoryRows}</tbody>
       </table>
@@ -349,7 +334,7 @@ function renderSnapshotTree(branch) {
           `,
         )
         .join("")
-    : `<li class="snapshot-empty"><span></span><p>Run Agent to create step snapshots.</p></li>`;
+    : `<li class="snapshot-empty"><span></span><p>No branch actions yet.</p></li>`;
 
   return `
     <section class="snapshot-tree">
@@ -428,7 +413,7 @@ function renderBranchCard(branch, diffs = {}) {
       </div>
       <div class="branch-actions">
         <a class="icon-link" href="${escapeHtml(branch.url)}" target="_blank" rel="noreferrer">Open Branch</a>
-        <button data-action="run-agent" data-id="${escapeHtml(branch.id)}" type="button">Run Agent</button>
+        <button data-action="run-agent" data-id="${escapeHtml(branch.id)}" class="primary" type="button">Run Agent</button>
         <button data-action="refresh-diff" data-id="${escapeHtml(branch.id)}" type="button">Diff</button>
         <button data-action="commit" data-id="${escapeHtml(branch.id)}" type="button">Commit</button>
         <button class="danger" data-action="discard" data-id="${escapeHtml(branch.id)}" type="button">Discard</button>
@@ -501,11 +486,8 @@ async function refresh() {
 
 async function mutate(label, fn) {
   try {
-    const data = await fn();
+    await fn();
     showResult(label);
-    if (data.build_order_id) {
-      buildOrderInput.value = data.build_order_id;
-    }
     await refresh();
   } catch (error) {
     showResult(error.message, false);
@@ -519,85 +501,31 @@ document.querySelector("#resetBtn").addEventListener("click", async () => {
   await mutate("Reset", () => request("/api/reset", { method: "POST" }));
 });
 
+document.querySelector("#buyBtn").addEventListener("click", async () => {
+  await mutate("Bought", () =>
+    request("/api/inventory/buy", {
+      method: "POST",
+      body: JSON.stringify(selectedInventoryPayload()),
+    }),
+  );
+});
+
+document.querySelector("#sellBtn").addEventListener("click", async () => {
+  await mutate("Sold", () =>
+    request("/api/inventory/sell", {
+      method: "POST",
+      body: JSON.stringify(selectedInventoryPayload()),
+    }),
+  );
+});
+
 document.querySelector("#reserveBtn").addEventListener("click", async () => {
   await mutate("Reserved", () =>
     request("/api/reservations", {
       method: "POST",
-      body: JSON.stringify({
-        part_id: partSelect.value,
-        quantity: Number(quantityInput.value),
-        actor: actorSelect.value,
-      }),
+      body: JSON.stringify(selectedInventoryPayload()),
     }),
   );
-});
-
-document.querySelector("#buildBtn").addEventListener("click", async () => {
-  await mutate("Build order", () =>
-    request("/api/build-orders", {
-      method: "POST",
-      body: JSON.stringify({
-        sku: "DEMO-KIT",
-        part_id: partSelect.value,
-        quantity: Number(quantityInput.value),
-        actor: actorSelect.value,
-      }),
-    }),
-  );
-});
-
-document.querySelector("#poBtn").addEventListener("click", async () => {
-  await mutate("Draft PO", () =>
-    request("/api/purchase-orders", {
-      method: "POST",
-      body: JSON.stringify({
-        part_id: partSelect.value,
-        quantity: Number(quantityInput.value),
-        actor: actorSelect.value,
-      }),
-    }),
-  );
-});
-
-document.querySelector("#substituteBtn").addEventListener("click", async () => {
-  await mutate("Substitute checked", () =>
-    request(`/api/build-orders/${Number(buildOrderInput.value)}/try-substitute`, {
-      method: "POST",
-      body: JSON.stringify({
-        substitute_part_id: substituteSelect.value,
-        actor: actorSelect.value,
-      }),
-    }),
-  );
-});
-
-document.querySelector("#agentDemoBtn").addEventListener("click", async () => {
-  try {
-    showResult("Running...");
-    const order = await request("/api/build-orders", {
-      method: "POST",
-      body: JSON.stringify({
-        sku: "AGENT-EXPLORATION",
-        part_id: "SENSOR-9",
-        quantity: 5,
-        actor: "agent",
-      }),
-    });
-    buildOrderInput.value = order.build_order_id;
-    await request(`/api/build-orders/${order.build_order_id}/try-substitute`, {
-      method: "POST",
-      body: JSON.stringify({ substitute_part_id: "MCU-ALT", actor: "agent" }),
-    });
-    await request("/api/purchase-orders", {
-      method: "POST",
-      body: JSON.stringify({ part_id: "SENSOR-9", quantity: 6, actor: "agent" }),
-    });
-    showResult("Agent flow done");
-    await refresh();
-  } catch (error) {
-    showResult(error.message, false);
-    await refresh();
-  }
 });
 
 document.querySelector("#createBaseBtn").addEventListener("click", async () => {
@@ -659,12 +587,12 @@ branchesEl.addEventListener("click", async (event) => {
   const action = button.dataset.action;
   try {
     if (action === "run-agent") {
-      showResult("Branch agent...");
+      showResult("Agent running...");
       const data = await request(`/api/branches/${branchId}/run-agent-demo`, {
         method: "POST",
       });
       await refreshBranches({ [branchId]: data.diff });
-      showResult("Branch agent done");
+      showResult("Agent plan done");
       return;
     }
     if (action === "refresh-diff") {

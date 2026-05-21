@@ -89,22 +89,10 @@ class ReserveRequest(BaseModel):
     actor: str = "user"
 
 
-class BuildOrderRequest(BaseModel):
-    sku: str
+class InventoryActionRequest(BaseModel):
     part_id: str
     quantity: int = Field(gt=0)
     actor: str = "user"
-
-
-class SubstituteRequest(BaseModel):
-    substitute_part_id: str
-    actor: str = "agent"
-
-
-class PurchaseOrderRequest(BaseModel):
-    part_id: str
-    quantity: int = Field(gt=0)
-    actor: str = "agent"
 
 
 class BaseCheckpointRequest(BaseModel):
@@ -157,6 +145,29 @@ def available_quantity(conn: sqlite3.Connection, part_id: str) -> int:
     return int(row["available"])
 
 
+def inventory_item(conn: sqlite3.Connection, part_id: str) -> dict:
+    row = conn.execute(
+        """
+        SELECT
+            p.id,
+            p.name,
+            p.location,
+            p.on_hand,
+            p.reorder_point,
+            p.on_hand - COALESCE(SUM(r.quantity), 0) AS available,
+            COALESCE(SUM(r.quantity), 0) AS reserved
+        FROM parts p
+        LEFT JOIN reservations r ON r.part_id = p.id AND r.status = 'active'
+        WHERE p.id = ?
+        GROUP BY p.id
+        """,
+        (part_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Unknown part: {part_id}")
+    return dict(row)
+
+
 def init_db() -> None:
     with db() as conn:
         conn.executescript(
@@ -169,38 +180,7 @@ def init_db() -> None:
                 reorder_point INTEGER NOT NULL CHECK(reorder_point >= 0)
             );
 
-            CREATE TABLE IF NOT EXISTS substitutes (
-                part_id TEXT NOT NULL,
-                substitute_part_id TEXT NOT NULL,
-                note TEXT NOT NULL,
-                PRIMARY KEY(part_id, substitute_part_id),
-                FOREIGN KEY(part_id) REFERENCES parts(id),
-                FOREIGN KEY(substitute_part_id) REFERENCES parts(id)
-            );
-
             CREATE TABLE IF NOT EXISTS reservations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                part_id TEXT NOT NULL,
-                quantity INTEGER NOT NULL CHECK(quantity > 0),
-                status TEXT NOT NULL,
-                actor TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(part_id) REFERENCES parts(id)
-            );
-
-            CREATE TABLE IF NOT EXISTS build_orders (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                sku TEXT NOT NULL,
-                part_id TEXT NOT NULL,
-                quantity INTEGER NOT NULL CHECK(quantity > 0),
-                status TEXT NOT NULL,
-                validation_message TEXT NOT NULL,
-                actor TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(part_id) REFERENCES parts(id)
-            );
-
-            CREATE TABLE IF NOT EXISTS purchase_orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 part_id TEXT NOT NULL,
                 quantity INTEGER NOT NULL CHECK(quantity > 0),
@@ -231,20 +211,10 @@ def init_db() -> None:
             """,
             [
                 ("MCU-100", "Control board", "Aisle 1 / Bin 02", 8, 4),
-                ("MCU-ALT", "Control board substitute", "Aisle 1 / Bin 08", 4, 2),
+                ("MCU-ALT", "Backup control board", "Aisle 1 / Bin 08", 4, 2),
                 ("SENSOR-9", "Temperature sensor", "Aisle 3 / Bin 11", 2, 5),
                 ("CASE-42", "Aluminum enclosure", "Aisle 4 / Bin 01", 12, 4),
                 ("WIRE-RED", "Red harness wire", "Aisle 2 / Bin 05", 50, 10),
-            ],
-        )
-        conn.executemany(
-            """
-            INSERT INTO substitutes(part_id, substitute_part_id, note)
-            VALUES (?, ?, ?)
-            """,
-            [
-                ("MCU-100", "MCU-ALT", "Pin-compatible after firmware flag is enabled"),
-                ("SENSOR-9", "MCU-ALT", "Invalid substitute, included to expose validation"),
             ],
         )
         audit(conn, "system", "seed", "Loaded sample inventory data")
@@ -279,6 +249,53 @@ def inventory() -> dict:
     return {"items": items}
 
 
+@app.post("/api/inventory/buy")
+def buy_stock(payload: InventoryActionRequest) -> dict:
+    with db() as conn:
+        ensure_part(conn, payload.part_id)
+        conn.execute(
+            "UPDATE parts SET on_hand = on_hand + ? WHERE id = ?",
+            (payload.quantity, payload.part_id),
+        )
+        audit(
+            conn,
+            payload.actor,
+            "buy",
+            f"Bought {payload.quantity} units of {payload.part_id}",
+        )
+        return {
+            "status": "bought",
+            "part": inventory_item(conn, payload.part_id),
+        }
+
+
+@app.post("/api/inventory/sell")
+def sell_stock(payload: InventoryActionRequest) -> dict:
+    with db() as conn:
+        part = ensure_part(conn, payload.part_id)
+        available = available_quantity(conn, payload.part_id)
+        if payload.quantity > available:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Only {available} units of {part['id']} are available to sell",
+            )
+
+        conn.execute(
+            "UPDATE parts SET on_hand = on_hand - ? WHERE id = ?",
+            (payload.quantity, payload.part_id),
+        )
+        audit(
+            conn,
+            payload.actor,
+            "sell",
+            f"Sold {payload.quantity} units of {payload.part_id}",
+        )
+        return {
+            "status": "sold",
+            "part": inventory_item(conn, payload.part_id),
+        }
+
+
 @app.post("/api/reservations")
 def reserve_stock(payload: ReserveRequest) -> dict:
     with db() as conn:
@@ -306,110 +323,6 @@ def reserve_stock(payload: ReserveRequest) -> dict:
         return {"reservation_id": cursor.lastrowid, "status": "active"}
 
 
-@app.post("/api/build-orders")
-def create_build_order(payload: BuildOrderRequest) -> dict:
-    with db() as conn:
-        part = ensure_part(conn, payload.part_id)
-        available = available_quantity(conn, payload.part_id)
-        if payload.quantity <= available:
-            status = "ready"
-            message = f"{payload.quantity} units of {part['id']} are available"
-        else:
-            status = "blocked"
-            message = (
-                f"Need {payload.quantity} units of {part['id']}, "
-                f"but only {available} are available"
-            )
-
-        cursor = conn.execute(
-            """
-            INSERT INTO build_orders(sku, part_id, quantity, status, validation_message, actor)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (payload.sku, payload.part_id, payload.quantity, status, message, payload.actor),
-        )
-        audit(conn, payload.actor, "build_order", f"{payload.sku}: {message}")
-        return {
-            "build_order_id": cursor.lastrowid,
-            "status": status,
-            "validation_message": message,
-        }
-
-
-@app.post("/api/build-orders/{build_order_id}/try-substitute")
-def try_substitute(build_order_id: int, payload: SubstituteRequest) -> dict:
-    with db() as conn:
-        order = conn.execute(
-            "SELECT * FROM build_orders WHERE id = ?",
-            (build_order_id,),
-        ).fetchone()
-        if order is None:
-            raise HTTPException(status_code=404, detail="Build order not found")
-
-        ensure_part(conn, payload.substitute_part_id)
-        substitute = conn.execute(
-            """
-            SELECT * FROM substitutes
-            WHERE part_id = ? AND substitute_part_id = ?
-            """,
-            (order["part_id"], payload.substitute_part_id),
-        ).fetchone()
-        if substitute is None:
-            message = f"{payload.substitute_part_id} is not approved for {order['part_id']}"
-            conn.execute(
-                """
-                UPDATE build_orders
-                SET status = 'blocked', validation_message = ?
-                WHERE id = ?
-                """,
-                (message, build_order_id),
-            )
-            audit(conn, payload.actor, "substitute_failed", message)
-            return {"status": "blocked", "validation_message": message}
-
-        available = available_quantity(conn, payload.substitute_part_id)
-        if order["quantity"] > available:
-            message = (
-                f"{payload.substitute_part_id} is approved but only "
-                f"{available} units are available"
-            )
-            status = "blocked"
-        else:
-            message = f"Using {payload.substitute_part_id}: {substitute['note']}"
-            status = "ready"
-
-        conn.execute(
-            """
-            UPDATE build_orders
-            SET part_id = ?, status = ?, validation_message = ?
-            WHERE id = ?
-            """,
-            (payload.substitute_part_id, status, message, build_order_id),
-        )
-        audit(conn, payload.actor, "substitute", f"Build {build_order_id}: {message}")
-        return {"status": status, "validation_message": message}
-
-
-@app.post("/api/purchase-orders")
-def create_purchase_order(payload: PurchaseOrderRequest) -> dict:
-    with db() as conn:
-        ensure_part(conn, payload.part_id)
-        cursor = conn.execute(
-            """
-            INSERT INTO purchase_orders(part_id, quantity, status, actor)
-            VALUES (?, ?, 'draft', ?)
-            """,
-            (payload.part_id, payload.quantity, payload.actor),
-        )
-        audit(
-            conn,
-            payload.actor,
-            "purchase_order",
-            f"Draft PO for {payload.quantity} units of {payload.part_id}",
-        )
-        return {"purchase_order_id": cursor.lastrowid, "status": "draft"}
-
-
 @app.get("/api/state")
 def state() -> dict:
     with db() as conn:
@@ -435,8 +348,6 @@ def state() -> dict:
                 )
             ),
             "reservations": rows(conn.execute("SELECT * FROM reservations ORDER BY id DESC")),
-            "build_orders": rows(conn.execute("SELECT * FROM build_orders ORDER BY id DESC")),
-            "purchase_orders": rows(conn.execute("SELECT * FROM purchase_orders ORDER BY id DESC")),
             "audit_log": rows(conn.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT 25")),
         }
 

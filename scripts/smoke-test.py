@@ -34,10 +34,12 @@ def main() -> None:
     result = {
         "branch_id": branch["id"],
         "branch_url": branch["url"],
+        "snapshots": [snapshot["label"] for snapshot in agent["snapshots"]],
+        "diff_inventory": agent["diff"]["inventory"],
         "diff_counts": agent["diff"]["counts"],
         "main_counts_after_agent": {
             key: len(main_state[key])
-            for key in ["reservations", "build_orders", "purchase_orders", "audit_log"]
+            for key in ["reservations", "audit_log"]
         },
     }
     print(json.dumps(result, indent=2))

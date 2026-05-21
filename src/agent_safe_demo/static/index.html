@@ -4,13 +4,13 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Agent-Safe Toy Inventory</title>
-    <link rel="stylesheet" href="/static/styles.css?v=6" />
+    <link rel="stylesheet" href="/static/styles.css?v=8" />
   </head>
   <body>
     <header class="topbar">
       <div>
         <h1>Agent-Safe Toy Inventory</h1>
-        <p>Inventory, build orders, substitutions, and draft purchase orders.</p>
+        <p>Buy, sell, reserve, branch, diff, commit, or discard inventory state.</p>
       </div>
       <div class="actions">
         <span id="backendMode" class="backend-pill">Backend...</span>
@@ -30,7 +30,7 @@
 
       <section class="panel workflow-panel">
         <div class="panel-header">
-          <h2>Workflow</h2>
+          <h2>Inventory Actions</h2>
           <span id="lastResult" class="result-pill">Ready</span>
         </div>
 
@@ -43,36 +43,12 @@
             Quantity
             <input id="quantityInput" type="number" min="1" value="3" />
           </label>
-          <label>
-            Actor
-            <select id="actorSelect">
-              <option value="user">user</option>
-              <option value="agent">agent</option>
-            </select>
-          </label>
         </div>
 
         <div class="button-row">
+          <button id="buyBtn" class="primary" type="button">Buy</button>
+          <button id="sellBtn" type="button">Sell</button>
           <button id="reserveBtn" type="button">Reserve Stock</button>
-          <button id="buildBtn" type="button">Create Build Order</button>
-          <button id="poBtn" type="button">Draft Purchase Order</button>
-        </div>
-
-        <div class="divider"></div>
-
-        <div class="form-grid">
-          <label>
-            Build Order ID
-            <input id="buildOrderInput" type="number" min="1" placeholder="Created order id" />
-          </label>
-          <label>
-            Substitute
-            <select id="substituteSelect"></select>
-          </label>
-        </div>
-        <div class="button-row">
-          <button id="substituteBtn" type="button">Try Substitute</button>
-          <button id="agentDemoBtn" class="primary" type="button">Run Agent Demo Flow</button>
         </div>
       </section>
 
@@ -122,6 +98,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=6"></script>
+    <script src="/static/app.js?v=8"></script>
   </body>
 </html>
