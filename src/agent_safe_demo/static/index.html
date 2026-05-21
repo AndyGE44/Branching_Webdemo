@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Agent-Safe Toy Inventory</title>
-    <link rel="stylesheet" href="/static/styles.css?v=4" />
+    <link rel="stylesheet" href="/static/styles.css?v=6" />
   </head>
   <body>
     <header class="topbar">
@@ -13,6 +13,7 @@
         <p>Inventory, build orders, substitutions, and draft purchase orders.</p>
       </div>
       <div class="actions">
+        <span id="backendMode" class="backend-pill">Backend...</span>
         <a class="icon-link" href="/docs" title="Open API docs">API</a>
         <button id="resetBtn" class="danger" type="button">Reset</button>
       </div>
@@ -75,13 +76,39 @@
         </div>
       </section>
 
+      <section class="panel status-panel">
+        <div class="panel-header">
+          <div>
+            <h2>Backend & Snapshot Stats</h2>
+            <p id="snapshotMode" class="muted">Runtime branch control</p>
+          </div>
+        </div>
+        <div id="backendStats" class="status-grid"></div>
+      </section>
+
       <section class="panel branch-panel">
         <div class="panel-header">
           <div>
-            <h2>Branches</h2>
-            <p class="muted">Create isolated agent workspaces and compare them against main.</p>
+            <h2>Base Checkpoints</h2>
+            <p class="muted">Frozen starting points for agent branches.</p>
           </div>
-          <button id="createBranchBtn" class="primary" type="button">Create Agent Branch</button>
+          <div class="base-create">
+            <label>
+              Label
+              <input id="baseLabelInput" type="text" maxlength="80" placeholder="main-ready" />
+            </label>
+            <button id="createBaseBtn" class="primary" type="button">Create Base</button>
+          </div>
+        </div>
+        <div id="bases" class="base-list"></div>
+      </section>
+
+      <section class="panel branch-panel">
+        <div class="panel-header">
+          <div>
+            <h2>Agent Branches</h2>
+            <p class="muted">Branches are grouped by the base checkpoint they started from.</p>
+          </div>
         </div>
         <div id="branches" class="branch-list"></div>
       </section>
@@ -95,6 +122,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=4"></script>
+    <script src="/static/app.js?v=6"></script>
   </body>
 </html>

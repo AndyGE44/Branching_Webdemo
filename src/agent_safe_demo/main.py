@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import asynccontextmanager, contextmanager
 import os
@@ -12,7 +13,12 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from agent_safe_demo.branching import BranchError, CheckpointLiteBackend, LocalCopyBackend
+from agent_safe_demo.branching import (
+    BranchError,
+    CheckpointLiteBackend,
+    LocalCopyBackend,
+    StateForkBackend,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parents[1]
@@ -20,7 +26,7 @@ DB_PATH = Path(os.getenv("TOY_INVENTORY_DB_PATH", PROJECT_ROOT / "toy_inventory.
 STATIC_DIR = BASE_DIR / "static"
 BRANCH_ID = os.getenv("TOY_INVENTORY_BRANCH_ID")
 
-def create_branch_backend() -> LocalCopyBackend | CheckpointLiteBackend:
+def create_branch_backend() -> LocalCopyBackend | CheckpointLiteBackend | StateForkBackend:
     backend = os.getenv("TOY_BRANCH_BACKEND", "local-copy")
     if backend == "checkpoint-lite":
         return CheckpointLiteBackend(
@@ -34,6 +40,19 @@ def create_branch_backend() -> LocalCopyBackend | CheckpointLiteBackend:
             host=os.getenv("TOY_BRANCH_HOST", "127.0.0.1"),
             port_start=int(os.getenv("TOY_BRANCH_PORT_START", "8200")),
             use_sudo=os.getenv("TOY_CHECKPOINT_USE_SUDO", "1") != "0",
+        )
+    if backend == "statefork":
+        return StateForkBackend(
+            PROJECT_ROOT,
+            DB_PATH,
+            statefork_root=Path(
+                os.getenv("TOY_STATEFORK_ROOT", PROJECT_ROOT.parent / "StateFork")
+            ),
+            statefork_method=os.getenv("TOY_STATEFORK_METHOD", "ckpt_build"),
+            statefork_cwd=Path(os.getenv("TOY_STATEFORK_CWD", str(PROJECT_ROOT))),
+            statefork_kwargs=json.loads(os.getenv("TOY_STATEFORK_KWARGS", "{}")),
+            host=os.getenv("TOY_BRANCH_HOST", "127.0.0.1"),
+            port_start=int(os.getenv("TOY_BRANCH_PORT_START", "8300")),
         )
     return LocalCopyBackend(PROJECT_ROOT, DB_PATH)
 
@@ -86,6 +105,10 @@ class PurchaseOrderRequest(BaseModel):
     part_id: str
     quantity: int = Field(gt=0)
     actor: str = "agent"
+
+
+class BaseCheckpointRequest(BaseModel):
+    label: str | None = Field(default=None, max_length=80)
 
 
 @contextmanager
@@ -420,14 +443,50 @@ def state() -> dict:
 
 @app.post("/api/reset")
 def reset() -> dict:
+    cleanup = branch_backend.reset()
     if DB_PATH.exists():
         DB_PATH.unlink()
     init_db()
-    return {"status": "reset"}
+    return {"status": "reset", "cleanup": cleanup}
 
 
 def branch_error(error: BranchError) -> HTTPException:
     return HTTPException(status_code=400, detail=str(error))
+
+
+@app.get("/api/backend")
+def backend_status() -> dict:
+    return branch_backend.status()
+
+
+@app.get("/api/bases")
+def list_bases() -> dict:
+    return {"backend": branch_backend.name, "bases": branch_backend.list_bases()}
+
+
+@app.post("/api/bases")
+def create_base(payload: BaseCheckpointRequest | None = None) -> dict:
+    try:
+        label = payload.label if payload else None
+        return {"base": branch_backend.create_base(label=label)}
+    except BranchError as error:
+        raise branch_error(error) from error
+
+
+@app.post("/api/bases/{base_id}/branches")
+def create_branch_from_base(base_id: str) -> dict:
+    try:
+        return {"branch": branch_backend.create_branch(base_id=base_id)}
+    except BranchError as error:
+        raise branch_error(error) from error
+
+
+@app.delete("/api/bases/{base_id}")
+def delete_base(base_id: str) -> dict:
+    try:
+        return branch_backend.delete_base(base_id)
+    except BranchError as error:
+        raise branch_error(error) from error
 
 
 @app.get("/api/branches")

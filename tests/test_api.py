@@ -55,3 +55,84 @@ def test_agent_demo_workflow_mutates_state(monkeypatch, tmp_path):
     assert len(state["build_orders"]) == 1
     assert len(state["purchase_orders"]) == 1
     assert len(state["audit_log"]) == 4
+
+
+def test_base_checkpoint_api_shapes_branch_creation(monkeypatch, tmp_path):
+    app = load_app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        base_response = client.post("/api/bases", json={"label": "test-base"})
+        assert base_response.status_code == 200
+        base = base_response.json()["base"]
+
+        bases = client.get("/api/bases")
+        assert bases.status_code == 200
+        assert bases.json()["bases"][0]["id"] == base["id"]
+
+        branch_response = client.post(f"/api/bases/{base['id']}/branches")
+        assert branch_response.status_code == 200
+        branch = branch_response.json()["branch"]
+
+        agent_response = client.post(f"/api/branches/{branch['id']}/run-agent-demo")
+        assert agent_response.status_code == 200
+        snapshots = agent_response.json()["snapshots"]
+
+        branches = client.get("/api/branches")
+        assert branches.status_code == 200
+
+        backend = client.get("/api/backend")
+        assert backend.status_code == 200
+
+        blocked_delete = client.delete(f"/api/bases/{base['id']}")
+        assert blocked_delete.status_code == 400
+
+        client.post(f"/api/branches/{branch['id']}/discard")
+        deleted = client.delete(f"/api/bases/{base['id']}")
+        assert deleted.status_code == 200
+
+    assert base["label"] == "test-base"
+    assert branch["base_id"] == base["id"]
+    assert branch["base_checkpoint_id"] == base["checkpoint_id"]
+    assert branches.json()["branches"][0]["base_id"] == base["id"]
+    assert [snapshot["action"] for snapshot in snapshots] == [
+        "create_build_order",
+        "try_substitute",
+        "draft_purchase_order",
+    ]
+    assert snapshots[0]["parent_id"] == base["checkpoint_id"]
+    assert snapshots[1]["parent_id"] == snapshots[0]["id"]
+    assert len(branches.json()["branches"][0]["snapshots"]) == 3
+    backend_status = backend.json()
+    assert backend_status["backend"] == "local-copy"
+    assert backend_status["method"] == "file-copy"
+    assert backend_status["totals"] == {"bases": 1, "branches": 1, "snapshots": 3}
+    assert backend_status["operations"]["snapshot"]["count"] >= 4
+    assert backend_status["operations"]["restore"]["count"] >= 1
+    assert deleted.json()["status"] == "deleted"
+
+
+def test_reset_clears_bases_and_branches(monkeypatch, tmp_path):
+    app = load_app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        base = client.post("/api/bases", json={"label": "reset-base"}).json()["base"]
+        branch = client.post(f"/api/bases/{base['id']}/branches").json()["branch"]
+
+        before_reset = client.get("/api/branches").json()
+        assert before_reset["branches"][0]["id"] == branch["id"]
+
+        reset = client.post("/api/reset")
+        assert reset.status_code == 200
+
+        bases = client.get("/api/bases")
+        branches = client.get("/api/branches")
+        backend = client.get("/api/backend")
+        state = client.get("/api/state")
+
+    assert reset.json()["cleanup"] == {"branches_deleted": 1, "bases_deleted": 1}
+    assert bases.json()["bases"] == []
+    assert branches.json()["branches"] == []
+    assert backend.json()["totals"] == {"bases": 0, "branches": 0, "snapshots": 0}
+    assert backend.json()["operations"]["snapshot"]["count"] == 0
+    assert backend.json()["operations"]["restore"]["count"] == 0
+    assert len(state.json()["build_orders"]) == 0
+    assert len(state.json()["purchase_orders"]) == 0
+    assert len(state.json()["audit_log"]) == 1
