@@ -324,12 +324,38 @@ setup notes live in `docs/ubuntu-checkpoint-lite.md`.
 Target lifecycle:
 
 ```text
-create branch -> checkpoint-lite init -> checkpoint-lite create <branch>-base
-              -> start branch app URL in the post-checkpoint current layer
+create base   -> checkpoint-lite init -> checkpoint-lite create <base-id>
+create branch -> checkpoint-lite restore <base-id>
+              -> start branch app URL in a restored layer
 run agent     -> HTTP calls against branch URL
 discard       -> checkpoint-lite cleanup branch state
 commit        -> promote branch state to main
+reset         -> delete active branches, bases, sessions, and reset main DB
 ```
+
+## StateFork Backend Quick Reference
+
+This is the experimental adapter for moving from direct checkpoint-lite calls to
+StateFork's Python controller API. It uses the same UI and FastAPI endpoints as
+the checkpoint-lite backend, but selects `StateForkBackend`:
+
+```bash
+export TOY_BRANCH_BACKEND=statefork
+export TOY_STATEFORK_ROOT=/users/alexxjk/StateFork
+export TOY_STATEFORK_CWD=/users/alexxjk/StateFork
+export TOY_STATEFORK_METHOD=ckpt_build
+export CHECKPOINT_SESSIONS_DIR=/tmp/checkpoint-sessions
+export TOY_BRANCH_HOST=127.0.0.1
+export TOY_BRANCH_PORT_START=8300
+export PYTHONPATH=src
+
+sudo -E .venv/bin/uvicorn agent_safe_demo.main:app --host 127.0.0.1 --port 8000
+```
+
+`StateForkBackend` currently calls StateFork's `snapshot`, `restore`,
+`create_env_from_snapshot`, and `cleanup` methods. It is intentionally behind
+the `TOY_BRANCH_BACKEND=statefork` flag while the direct checkpoint-lite backend
+remains the primary shared VM demo path.
 
 ## Repository Layout
 
@@ -361,7 +387,12 @@ dist/
 - `POST /api/build-orders/{id}/try-substitute`
 - `POST /api/purchase-orders`
 - `GET /api/state`
-- `POST /api/reset`
+- `POST /api/reset` clears active branches, base checkpoints, backend sessions,
+  and recreates the main toy database
+- `GET /api/bases`
+- `POST /api/bases`
+- `DELETE /api/bases/{base_id}`
+- `POST /api/bases/{base_id}/branches`
 - `GET /api/branches`
 - `POST /api/branches`
 - `POST /api/branches/{branch_id}/run-agent-demo`
