@@ -294,6 +294,40 @@ function renderDiff(diff) {
   `;
 }
 
+function renderSnapshotTree(branch) {
+  const snapshots = branch.snapshots || [];
+  const baseLabel = branch.base_checkpoint_id || branch.base_id || "base";
+  const snapshotItems = snapshots.length
+    ? snapshots
+        .map(
+          (snapshot, index) => `
+            <li>
+              <span class="snapshot-index">${index + 1}</span>
+              <div>
+                <strong>${escapeHtml(snapshot.label)}</strong>
+                <p>${escapeHtml(snapshot.backend)} · ${escapeHtml(snapshot.id)}</p>
+                <p>parent ${escapeHtml(snapshot.parent_id || baseLabel)}</p>
+              </div>
+            </li>
+          `,
+        )
+        .join("")
+    : `<li class="snapshot-empty"><span></span><p>Run Agent to create step snapshots.</p></li>`;
+
+  return `
+    <section class="snapshot-tree">
+      <div class="snapshot-root">
+        <span></span>
+        <div>
+          <strong>Base checkpoint</strong>
+          <p>${escapeHtml(baseLabel)}</p>
+        </div>
+      </div>
+      <ol>${snapshotItems}</ol>
+    </section>
+  `;
+}
+
 function formatTime(epochSeconds) {
   return new Date(epochSeconds * 1000).toLocaleString();
 }
@@ -362,6 +396,7 @@ function renderBranchCard(branch, diffs = {}) {
         <button data-action="commit" data-id="${escapeHtml(branch.id)}" type="button">Commit</button>
         <button class="danger" data-action="discard" data-id="${escapeHtml(branch.id)}" type="button">Discard</button>
       </div>
+      ${renderSnapshotTree(branch)}
       ${renderDiff(diffs[branch.id])}
     </article>
   `;

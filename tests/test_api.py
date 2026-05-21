@@ -72,6 +72,10 @@ def test_base_checkpoint_api_shapes_branch_creation(monkeypatch, tmp_path):
         assert branch_response.status_code == 200
         branch = branch_response.json()["branch"]
 
+        agent_response = client.post(f"/api/branches/{branch['id']}/run-agent-demo")
+        assert agent_response.status_code == 200
+        snapshots = agent_response.json()["snapshots"]
+
         branches = client.get("/api/branches")
         assert branches.status_code == 200
 
@@ -86,6 +90,14 @@ def test_base_checkpoint_api_shapes_branch_creation(monkeypatch, tmp_path):
     assert branch["base_id"] == base["id"]
     assert branch["base_checkpoint_id"] == base["checkpoint_id"]
     assert branches.json()["branches"][0]["base_id"] == base["id"]
+    assert [snapshot["action"] for snapshot in snapshots] == [
+        "create_build_order",
+        "try_substitute",
+        "draft_purchase_order",
+    ]
+    assert snapshots[0]["parent_id"] == base["checkpoint_id"]
+    assert snapshots[1]["parent_id"] == snapshots[0]["id"]
+    assert len(branches.json()["branches"][0]["snapshots"]) == 3
     assert deleted.json()["status"] == "deleted"
 
 

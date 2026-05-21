@@ -328,6 +328,7 @@ create base   -> checkpoint-lite init -> checkpoint-lite create <base-id>
 create branch -> checkpoint-lite restore <base-id>
               -> start branch app URL in a restored layer
 run agent     -> HTTP calls against branch URL
+              -> create step snapshots after each agent action
 discard       -> checkpoint-lite cleanup branch state
 commit        -> promote branch state to main
 reset         -> delete active branches, bases, sessions, and reset main DB
@@ -353,9 +354,19 @@ sudo -E .venv/bin/uvicorn agent_safe_demo.main:app --host 127.0.0.1 --port 8000
 ```
 
 `StateForkBackend` currently calls StateFork's `snapshot`, `restore`,
-`create_env_from_snapshot`, and `cleanup` methods. It is intentionally behind
-the `TOY_BRANCH_BACKEND=statefork` flag while the direct checkpoint-lite backend
-remains the primary shared VM demo path.
+`create_env_from_snapshot`, and `cleanup` methods. During `Run Agent`, it takes
+a new StateFork snapshot after each agent action and returns those nodes to the
+UI as a small tree under the branch card:
+
+```text
+base checkpoint
+└── create blocked build order
+    └── try substitute part
+        └── draft purchase order
+```
+
+It is intentionally behind the `TOY_BRANCH_BACKEND=statefork` flag while the
+direct checkpoint-lite backend remains the primary shared VM demo path.
 
 ## Repository Layout
 

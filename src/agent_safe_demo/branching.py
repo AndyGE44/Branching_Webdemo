@@ -55,6 +55,26 @@ class BaseHandle:
 
 
 @dataclass
+class SnapshotHandle:
+    id: str
+    backend: str
+    label: str
+    action: str
+    parent_id: str | None
+    created_at: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "backend": self.backend,
+            "label": self.label,
+            "action": self.action,
+            "parent_id": self.parent_id,
+            "created_at": self.created_at,
+        }
+
+
+@dataclass
 class BranchHandle:
     id: str
     backend: str
@@ -67,6 +87,7 @@ class BranchHandle:
     work_dir: Path | None = None
     status: str = "running"
     created_at: float = field(default_factory=time.time)
+    snapshots: list[SnapshotHandle] = field(default_factory=list)
     process: subprocess.Popen | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -82,6 +103,7 @@ class BranchHandle:
             "work_dir": str(self.work_dir) if self.work_dir else None,
             "status": self.status,
             "created_at": self.created_at,
+            "snapshots": [snapshot.to_dict() for snapshot in self.snapshots],
             "pid": self.process.pid if self.process else None,
         }
 
@@ -219,15 +241,30 @@ class LocalCopyBackend:
                 "actor": "agent",
             },
         )
+        build_snapshot = self._record_branch_snapshot(
+            branch,
+            "create_build_order",
+            "Create blocked build order",
+        )
         substitute = self._post_json(
             branch.url,
             f"/api/build-orders/{order['build_order_id']}/try-substitute",
             {"substitute_part_id": "MCU-ALT", "actor": "agent"},
         )
+        substitute_snapshot = self._record_branch_snapshot(
+            branch,
+            "try_substitute",
+            "Try substitute part",
+        )
         purchase_order = self._post_json(
             branch.url,
             "/api/purchase-orders",
             {"part_id": "SENSOR-9", "quantity": 6, "actor": "agent"},
+        )
+        purchase_snapshot = self._record_branch_snapshot(
+            branch,
+            "draft_purchase_order",
+            "Draft purchase order",
         )
         return {
             "branch": branch.to_dict(),
@@ -236,6 +273,7 @@ class LocalCopyBackend:
                 "substitute": substitute,
                 "purchase_order": purchase_order,
             },
+            "snapshots": [build_snapshot, substitute_snapshot, purchase_snapshot],
             "diff": self.diff(branch_id),
         }
 
@@ -322,6 +360,23 @@ class LocalCopyBackend:
             raise BranchError(f"Unknown branch: {branch_id}")
         self._refresh_status(branch)
         return branch
+
+    def _record_branch_snapshot(
+        self,
+        branch: BranchHandle,
+        action: str,
+        label: str,
+    ) -> dict[str, Any]:
+        parent_id = branch.snapshots[-1].id if branch.snapshots else branch.base_checkpoint_id
+        snapshot = SnapshotHandle(
+            id=f"logical-{uuid.uuid4().hex[:8]}",
+            backend="local-copy",
+            label=label,
+            action=action,
+            parent_id=parent_id,
+        )
+        branch.snapshots.append(snapshot)
+        return snapshot.to_dict()
 
     def _require_base(self, base_id: str) -> BaseHandle:
         base = self.bases.get(base_id)
@@ -566,15 +621,30 @@ class CheckpointLiteBackend:
                 "actor": "agent",
             },
         )
+        build_snapshot = self._record_branch_snapshot(
+            branch,
+            "create_build_order",
+            "Create blocked build order",
+        )
         substitute = self._post_json(
             branch.url,
             f"/api/build-orders/{order['build_order_id']}/try-substitute",
             {"substitute_part_id": "MCU-ALT", "actor": "agent"},
         )
+        substitute_snapshot = self._record_branch_snapshot(
+            branch,
+            "try_substitute",
+            "Try substitute part",
+        )
         purchase_order = self._post_json(
             branch.url,
             "/api/purchase-orders",
             {"part_id": "SENSOR-9", "quantity": 6, "actor": "agent"},
+        )
+        purchase_snapshot = self._record_branch_snapshot(
+            branch,
+            "draft_purchase_order",
+            "Draft purchase order",
         )
         return {
             "branch": branch.to_dict(),
@@ -583,6 +653,7 @@ class CheckpointLiteBackend:
                 "substitute": substitute,
                 "purchase_order": purchase_order,
             },
+            "snapshots": [build_snapshot, substitute_snapshot, purchase_snapshot],
             "diff": self.diff(branch_id),
         }
 
@@ -743,6 +814,27 @@ class CheckpointLiteBackend:
             raise BranchError(f"Unknown branch: {branch_id}")
         self._refresh_status(branch)
         return branch
+
+    def _record_branch_snapshot(
+        self,
+        branch: BranchHandle,
+        action: str,
+        label: str,
+    ) -> dict[str, Any]:
+        if not branch.session_id:
+            raise BranchError(f"Branch {branch.id} does not have a checkpoint-lite session")
+        parent_id = branch.snapshots[-1].id if branch.snapshots else branch.base_checkpoint_id
+        snapshot_id = f"{branch.id}-{len(branch.snapshots) + 1}-{action}"
+        self._checkpoint_lite_create(branch.session_id, snapshot_id)
+        snapshot = SnapshotHandle(
+            id=snapshot_id,
+            backend="checkpoint-lite",
+            label=label,
+            action=action,
+            parent_id=parent_id,
+        )
+        branch.snapshots.append(snapshot)
+        return snapshot.to_dict()
 
     def _require_base(self, base_id: str) -> BaseHandle:
         base = self.bases.get(base_id)
@@ -981,6 +1073,31 @@ class StateForkBackend(CheckpointLiteBackend):
         self.branch_environments.pop(branch_id, None)
         self.branches.pop(branch_id, None)
         return {"status": "discarded", "branch_id": branch_id}
+
+    def _record_branch_snapshot(
+        self,
+        branch: BranchHandle,
+        action: str,
+        label: str,
+    ) -> dict[str, Any]:
+        if not branch.base_id:
+            raise BranchError(f"Branch {branch.id} does not have a base")
+        manager = self.base_managers.get(branch.base_id)
+        if manager is None:
+            raise BranchError(f"Base {branch.base_id} does not have a StateFork manager")
+        snapshot_id = self._call_statefork(manager.snapshot)
+        if not snapshot_id:
+            raise BranchError(f"StateFork snapshot failed after {action}")
+        parent_id = branch.snapshots[-1].id if branch.snapshots else branch.base_checkpoint_id
+        snapshot = SnapshotHandle(
+            id=snapshot_id,
+            backend="statefork",
+            label=label,
+            action=action,
+            parent_id=parent_id,
+        )
+        branch.snapshots.append(snapshot)
+        return snapshot.to_dict()
 
     def reset(self) -> dict[str, Any]:
         branch_count = len(self.branches)

@@ -510,6 +510,69 @@ tr:last-child td {
   gap: 10px;
 }
 
+.snapshot-tree {
+  display: grid;
+  gap: 8px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.snapshot-root,
+.snapshot-tree li {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+}
+
+.snapshot-root span,
+.snapshot-index {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--soft);
+  color: var(--accent-dark);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.snapshot-root span::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.snapshot-tree ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.snapshot-tree strong {
+  display: block;
+  font-size: 12px;
+}
+
+.snapshot-tree p {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.snapshot-empty {
+  color: var(--muted);
+}
+
 .branch-diff {
   display: grid;
   grid-template-columns: minmax(260px, 0.6fr) minmax(260px, 0.4fr);
