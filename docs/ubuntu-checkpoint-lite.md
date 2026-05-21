@@ -72,7 +72,7 @@ curl -s -X POST http://127.0.0.1:8000/api/branches
 Then use the UI:
 
 ```text
-Create Agent Branch -> Run Agent -> Diff -> Discard
+Create Agent Branch -> Sell in branch -> Diff -> Discard
 ```
 
 ## 5. Start With Checkpoint-Lite Backend
@@ -96,7 +96,7 @@ PYTHONPATH=src uvicorn agent_safe_demo.main:app --host 0.0.0.0 --port 8000
 Open the main app again and use:
 
 ```text
-Create Agent Branch -> Open Branch -> Run Agent -> Diff -> Discard
+Create Agent Branch -> Open Branch -> Sell in branch -> Diff -> Discard
 ```
 
 Expected first result:

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator
 from urllib import request
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 
 class BranchError(RuntimeError):
@@ -78,6 +78,27 @@ def build_status(
         "operations": summarize_operations(operations),
         "details": details or {},
     }
+
+
+def branch_action_path(action: str) -> str:
+    paths = {
+        "buy": "/api/inventory/buy",
+        "sell": "/api/inventory/sell",
+        "reserve": "/api/reservations",
+    }
+    try:
+        return paths[action]
+    except KeyError as error:
+        raise BranchError(f"Unknown branch action: {action}") from error
+
+
+def branch_action_label(action: str, payload: dict[str, Any]) -> str:
+    verb = {
+        "buy": "Buy",
+        "sell": "Sell",
+        "reserve": "Reserve",
+    }.get(action, action.title())
+    return f"{verb} {payload['quantity']} {payload['part_id']}"
 
 
 @dataclass
@@ -294,54 +315,27 @@ class LocalCopyBackend:
             self._refresh_status(branch)
         return [branch.to_dict() for branch in self.branches.values()]
 
-    def run_agent_demo(self, branch_id: str) -> dict[str, Any]:
+    def apply_action(self, branch_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         branch = self._require_branch(branch_id)
         if branch.status != "running":
             raise BranchError(f"Branch {branch_id} is not running")
 
-        order = self._post_json(
+        action = payload["action"]
+        action_payload = {
+            "part_id": payload["part_id"],
+            "quantity": payload["quantity"],
+            "actor": payload.get("actor", "agent"),
+        }
+        result = self._post_json(
             branch.url,
-            "/api/build-orders",
-            {
-                "sku": "AGENT-BRANCH-EXPLORATION",
-                "part_id": "SENSOR-9",
-                "quantity": 5,
-                "actor": "agent",
-            },
+            branch_action_path(action),
+            action_payload,
         )
-        build_snapshot = self._record_branch_snapshot(
-            branch,
-            "create_build_order",
-            "Create blocked build order",
-        )
-        substitute = self._post_json(
-            branch.url,
-            f"/api/build-orders/{order['build_order_id']}/try-substitute",
-            {"substitute_part_id": "MCU-ALT", "actor": "agent"},
-        )
-        substitute_snapshot = self._record_branch_snapshot(
-            branch,
-            "try_substitute",
-            "Try substitute part",
-        )
-        purchase_order = self._post_json(
-            branch.url,
-            "/api/purchase-orders",
-            {"part_id": "SENSOR-9", "quantity": 6, "actor": "agent"},
-        )
-        purchase_snapshot = self._record_branch_snapshot(
-            branch,
-            "draft_purchase_order",
-            "Draft purchase order",
-        )
+        snapshot = self._record_branch_snapshot(branch, action, branch_action_label(action, payload))
         return {
             "branch": branch.to_dict(),
-            "actions": {
-                "build_order": order,
-                "substitute": substitute,
-                "purchase_order": purchase_order,
-            },
-            "snapshots": [build_snapshot, substitute_snapshot, purchase_snapshot],
+            "action": result,
+            "snapshot": snapshot,
             "diff": self.diff(branch_id),
         }
 
@@ -478,8 +472,16 @@ class LocalCopyBackend:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with request.urlopen(req, timeout=5) as response:
-            return json.loads(response.read().decode("utf-8"))
+        try:
+            with request.urlopen(req, timeout=5) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except HTTPError as error:
+            body = error.read().decode("utf-8")
+            try:
+                detail = json.loads(body).get("detail", body)
+            except json.JSONDecodeError:
+                detail = body or error.reason
+            raise BranchError(str(detail)) from error
 
     def _read_summary(self, db_path: Path) -> dict[str, Any]:
         with sqlite3.connect(db_path) as conn:
@@ -503,7 +505,7 @@ class LocalCopyBackend:
             }
             counts = {
                 table: int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-                for table in ["reservations", "build_orders", "purchase_orders", "audit_log"]
+                for table in ["reservations", "audit_log"]
             }
         return {"inventory": inventory, "counts": counts}
 
@@ -517,12 +519,14 @@ class LocalCopyBackend:
             main_item = main.get(part_id)
             if not main_item:
                 continue
+            on_hand_delta = branch_item["on_hand"] - main_item["on_hand"]
             available_delta = branch_item["available"] - main_item["available"]
             reserved_delta = branch_item["reserved"] - main_item["reserved"]
-            if available_delta or reserved_delta:
+            if on_hand_delta or available_delta or reserved_delta:
                 changes.append(
                     {
                         "part_id": part_id,
+                        "on_hand_delta": on_hand_delta,
                         "available_delta": available_delta,
                         "reserved_delta": reserved_delta,
                     }
@@ -693,54 +697,27 @@ class CheckpointLiteBackend:
             self._refresh_status(branch)
         return [branch.to_dict() for branch in self.branches.values()]
 
-    def run_agent_demo(self, branch_id: str) -> dict[str, Any]:
+    def apply_action(self, branch_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         branch = self._require_branch(branch_id)
         if branch.status != "running":
             raise BranchError(f"Branch {branch_id} is not running")
 
-        order = self._post_json(
+        action = payload["action"]
+        action_payload = {
+            "part_id": payload["part_id"],
+            "quantity": payload["quantity"],
+            "actor": payload.get("actor", "agent"),
+        }
+        result = self._post_json(
             branch.url,
-            "/api/build-orders",
-            {
-                "sku": "AGENT-CKPT-EXPLORATION",
-                "part_id": "SENSOR-9",
-                "quantity": 5,
-                "actor": "agent",
-            },
+            branch_action_path(action),
+            action_payload,
         )
-        build_snapshot = self._record_branch_snapshot(
-            branch,
-            "create_build_order",
-            "Create blocked build order",
-        )
-        substitute = self._post_json(
-            branch.url,
-            f"/api/build-orders/{order['build_order_id']}/try-substitute",
-            {"substitute_part_id": "MCU-ALT", "actor": "agent"},
-        )
-        substitute_snapshot = self._record_branch_snapshot(
-            branch,
-            "try_substitute",
-            "Try substitute part",
-        )
-        purchase_order = self._post_json(
-            branch.url,
-            "/api/purchase-orders",
-            {"part_id": "SENSOR-9", "quantity": 6, "actor": "agent"},
-        )
-        purchase_snapshot = self._record_branch_snapshot(
-            branch,
-            "draft_purchase_order",
-            "Draft purchase order",
-        )
+        snapshot = self._record_branch_snapshot(branch, action, branch_action_label(action, payload))
         return {
             "branch": branch.to_dict(),
-            "actions": {
-                "build_order": order,
-                "substitute": substitute,
-                "purchase_order": purchase_order,
-            },
-            "snapshots": [build_snapshot, substitute_snapshot, purchase_snapshot],
+            "action": result,
+            "snapshot": snapshot,
             "diff": self.diff(branch_id),
         }
 
@@ -957,8 +934,16 @@ class CheckpointLiteBackend:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with request.urlopen(req, timeout=5) as response:
-            return json.loads(response.read().decode("utf-8"))
+        try:
+            with request.urlopen(req, timeout=5) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except HTTPError as error:
+            body = error.read().decode("utf-8")
+            try:
+                detail = json.loads(body).get("detail", body)
+            except json.JSONDecodeError:
+                detail = body or error.reason
+            raise BranchError(str(detail)) from error
 
     def _read_summary(self, db_path: Path) -> dict[str, Any]:
         with sqlite3.connect(db_path) as conn:
@@ -982,7 +967,7 @@ class CheckpointLiteBackend:
             }
             counts = {
                 table: int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-                for table in ["reservations", "build_orders", "purchase_orders", "audit_log"]
+                for table in ["reservations", "audit_log"]
             }
         return {"inventory": inventory, "counts": counts}
 
@@ -996,12 +981,14 @@ class CheckpointLiteBackend:
             main_item = main.get(part_id)
             if not main_item:
                 continue
+            on_hand_delta = branch_item["on_hand"] - main_item["on_hand"]
             available_delta = branch_item["available"] - main_item["available"]
             reserved_delta = branch_item["reserved"] - main_item["reserved"]
-            if available_delta or reserved_delta:
+            if on_hand_delta or available_delta or reserved_delta:
                 changes.append(
                     {
                         "part_id": part_id,
+                        "on_hand_delta": on_hand_delta,
                         "available_delta": available_delta,
                         "reserved_delta": reserved_delta,
                     }

@@ -27,17 +27,26 @@ def post(path: str, payload: dict | None = None) -> dict:
 def main() -> None:
     post("/api/reset")
     branch = post("/api/branches")["branch"]
-    agent = post(f"/api/branches/{branch['id']}/run-agent-demo")
+    action = post(
+        f"/api/branches/{branch['id']}/actions",
+        {
+            "action": "sell",
+            "part_id": "CASE-42",
+            "quantity": 3,
+            "actor": "agent",
+        },
+    )
     main_state = get("/api/state")
     post(f"/api/branches/{branch['id']}/discard")
 
     result = {
         "branch_id": branch["id"],
         "branch_url": branch["url"],
-        "diff_counts": agent["diff"]["counts"],
+        "diff_inventory": action["diff"]["inventory"],
+        "diff_counts": action["diff"]["counts"],
         "main_counts_after_agent": {
             key: len(main_state[key])
-            for key in ["reservations", "build_orders", "purchase_orders", "audit_log"]
+            for key in ["reservations", "audit_log"]
         },
     }
     print(json.dumps(result, indent=2))
