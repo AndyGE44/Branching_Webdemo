@@ -46,7 +46,7 @@ def test_inventory_actions_mutate_state(monkeypatch, tmp_path):
 
         reserve = client.post(
             "/api/reservations",
-            json={"part_id": "SENSOR-9", "quantity": 2, "actor": "agent"},
+            json={"part_id": "SENSOR-9", "quantity": 2, "actor": "user"},
         )
         assert reserve.status_code == 200
 
@@ -80,18 +80,10 @@ def test_base_checkpoint_api_shapes_branch_creation(monkeypatch, tmp_path):
         assert branch_response.status_code == 200
         branch = branch_response.json()["branch"]
 
-        action_response = client.post(
-            f"/api/branches/{branch['id']}/actions",
-            json={
-                "action": "sell",
-                "part_id": "CASE-42",
-                "quantity": 3,
-                "actor": "agent",
-            },
-        )
-        assert action_response.status_code == 200
-        snapshot = action_response.json()["snapshot"]
-        diff = action_response.json()["diff"]
+        agent_response = client.post(f"/api/branches/{branch['id']}/run-agent-demo")
+        assert agent_response.status_code == 200
+        snapshots = agent_response.json()["snapshots"]
+        diff = agent_response.json()["diff"]
 
         branches = client.get("/api/branches")
         assert branches.status_code == 200
@@ -110,23 +102,41 @@ def test_base_checkpoint_api_shapes_branch_creation(monkeypatch, tmp_path):
     assert branch["base_id"] == base["id"]
     assert branch["base_checkpoint_id"] == base["checkpoint_id"]
     assert branches.json()["branches"][0]["base_id"] == base["id"]
-    assert snapshot["action"] == "sell"
-    assert snapshot["label"] == "Sell 3 CASE-42"
-    assert snapshot["parent_id"] == base["checkpoint_id"]
+    assert [snapshot["action"] for snapshot in snapshots] == ["sell", "buy", "reserve"]
+    assert [snapshot["label"] for snapshot in snapshots] == [
+        "Sell 3 CASE-42",
+        "Buy 5 SENSOR-9",
+        "Reserve 2 MCU-100",
+    ]
+    assert snapshots[0]["parent_id"] == base["checkpoint_id"]
+    assert snapshots[1]["parent_id"] == snapshots[0]["id"]
+    assert snapshots[2]["parent_id"] == snapshots[1]["id"]
     assert diff["inventory"] == [
         {
             "part_id": "CASE-42",
             "on_hand_delta": -3,
             "available_delta": -3,
             "reserved_delta": 0,
-        }
+        },
+        {
+            "part_id": "MCU-100",
+            "on_hand_delta": 0,
+            "available_delta": -2,
+            "reserved_delta": 2,
+        },
+        {
+            "part_id": "SENSOR-9",
+            "on_hand_delta": 5,
+            "available_delta": 5,
+            "reserved_delta": 0,
+        },
     ]
-    assert len(branches.json()["branches"][0]["snapshots"]) == 1
+    assert len(branches.json()["branches"][0]["snapshots"]) == 3
     backend_status = backend.json()
     assert backend_status["backend"] == "local-copy"
     assert backend_status["method"] == "file-copy"
-    assert backend_status["totals"] == {"bases": 1, "branches": 1, "snapshots": 1}
-    assert backend_status["operations"]["snapshot"]["count"] >= 2
+    assert backend_status["totals"] == {"bases": 1, "branches": 1, "snapshots": 3}
+    assert backend_status["operations"]["snapshot"]["count"] >= 4
     assert backend_status["operations"]["restore"]["count"] >= 1
     assert deleted.json()["status"] == "deleted"
 

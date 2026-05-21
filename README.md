@@ -105,7 +105,7 @@ http://127.0.0.1:18000
 Try this flow:
 
 ```text
-Create Agent Branch -> Sell in branch -> Diff -> Commit or Discard
+Create Agent Branch -> Run Agent -> Diff -> Commit or Discard
 ```
 
 The header should show `statefork / statefork:ckpt_build`. The
@@ -173,8 +173,10 @@ Expected result:
 
 ```text
 CASE-42 on_hand delta: -3
+SENSOR-9 on_hand delta: +5
+MCU-100 reserved delta: +2
 audit_log delta: +1
-main state after branch action: unchanged
+main state after agent run: unchanged
 ```
 
 ### 7. Cleanup
@@ -350,14 +352,16 @@ sudo -E .venv/bin/uvicorn agent_safe_demo.main:app --host 127.0.0.1 --port 8000
 ```
 
 `StateForkBackend` currently calls StateFork's `snapshot`, `restore`,
-`create_env_from_snapshot`, and `cleanup` methods. During branch Buy, Sell, and
-Reserve actions, it takes a new StateFork snapshot and returns those nodes to
-the UI as a small tree under the branch card:
+`create_env_from_snapshot`, and `cleanup` methods. During `Run Agent`, it runs
+a small planned inventory script in the branch, takes a new StateFork snapshot
+after each step, and returns those nodes to the UI as a small tree under the
+branch card:
 
 ```text
 base checkpoint
 └── sell 3 CASE-42
     └── buy 5 SENSOR-9
+        └── reserve 2 MCU-100
 ```
 
 Target lifecycle:
@@ -367,8 +371,8 @@ create base   -> StateFork snapshot
 create branch -> StateFork restore <base-id>
               -> StateFork create_env_from_snapshot <base-id>
               -> start branch app URL in the forked environment
-branch action -> HTTP Buy/Sell/Reserve call against branch URL
-              -> create a step snapshot after the action
+run agent     -> planned HTTP Sell/Buy/Reserve calls against branch URL
+              -> create step snapshots after each agent action
 status        -> /api/backend reports statefork:<method> and snapshot/restore stats
 discard       -> terminate branch app and cleanup StateFork environment
 commit        -> promote branch state to main
@@ -408,8 +412,8 @@ Direct checkpoint-lite lifecycle:
 create base   -> checkpoint-lite init -> checkpoint-lite create <base-id>
 create branch -> checkpoint-lite restore <base-id>
               -> start branch app URL in a restored layer
-branch action -> HTTP Buy/Sell/Reserve call against branch URL
-              -> create a step snapshot after the action
+run agent     -> planned HTTP Sell/Buy/Reserve calls against branch URL
+              -> create step snapshots after each agent action
 status        -> /api/backend reports checkpoint-lite-cli and snapshot/restore stats
 discard       -> checkpoint-lite cleanup branch state
 commit        -> promote branch state to main
@@ -454,7 +458,7 @@ dist/
 - `POST /api/bases/{base_id}/branches`
 - `GET /api/branches`
 - `POST /api/branches`
-- `POST /api/branches/{branch_id}/actions`
+- `POST /api/branches/{branch_id}/run-agent-demo`
 - `GET /api/branches/{branch_id}/diff`
 - `POST /api/branches/{branch_id}/commit`
 - `POST /api/branches/{branch_id}/discard`

@@ -101,6 +101,13 @@ def branch_action_label(action: str, payload: dict[str, Any]) -> str:
     return f"{verb} {payload['quantity']} {payload['part_id']}"
 
 
+AGENT_DEMO_ACTIONS = [
+    {"action": "sell", "part_id": "CASE-42", "quantity": 3, "actor": "agent"},
+    {"action": "buy", "part_id": "SENSOR-9", "quantity": 5, "actor": "agent"},
+    {"action": "reserve", "part_id": "MCU-100", "quantity": 2, "actor": "agent"},
+]
+
+
 @dataclass
 class BaseHandle:
     id: str
@@ -336,6 +343,21 @@ class LocalCopyBackend:
             "branch": branch.to_dict(),
             "action": result,
             "snapshot": snapshot,
+            "diff": self.diff(branch_id),
+        }
+
+    def run_agent_demo(self, branch_id: str) -> dict[str, Any]:
+        actions = []
+        snapshots = []
+        for payload in AGENT_DEMO_ACTIONS:
+            result = self.apply_action(branch_id, payload)
+            actions.append(result["action"])
+            snapshots.append(result["snapshot"])
+        branch = self._require_branch(branch_id)
+        return {
+            "branch": branch.to_dict(),
+            "actions": actions,
+            "snapshots": snapshots,
             "diff": self.diff(branch_id),
         }
 
@@ -718,6 +740,21 @@ class CheckpointLiteBackend:
             "branch": branch.to_dict(),
             "action": result,
             "snapshot": snapshot,
+            "diff": self.diff(branch_id),
+        }
+
+    def run_agent_demo(self, branch_id: str) -> dict[str, Any]:
+        actions = []
+        snapshots = []
+        for payload in AGENT_DEMO_ACTIONS:
+            result = self.apply_action(branch_id, payload)
+            actions.append(result["action"])
+            snapshots.append(result["snapshot"])
+        branch = self._require_branch(branch_id)
+        return {
+            "branch": branch.to_dict(),
+            "actions": actions,
+            "snapshots": snapshots,
             "diff": self.diff(branch_id),
         }
 

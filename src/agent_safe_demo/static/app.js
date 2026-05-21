@@ -3,7 +3,6 @@ const stateView = document.querySelector("#stateView");
 const resultPill = document.querySelector("#lastResult");
 const partSelect = document.querySelector("#partSelect");
 const quantityInput = document.querySelector("#quantityInput");
-const actorSelect = document.querySelector("#actorSelect");
 const basesEl = document.querySelector("#bases");
 const baseLabelInput = document.querySelector("#baseLabelInput");
 const branchesEl = document.querySelector("#branches");
@@ -131,14 +130,7 @@ function selectedInventoryPayload() {
   return {
     part_id: partSelect.value,
     quantity: Number(quantityInput.value),
-    actor: actorSelect.value,
-  };
-}
-
-function selectedBranchPayload(action) {
-  return {
-    action,
-    ...selectedInventoryPayload(),
+    actor: "user",
   };
 }
 
@@ -271,7 +263,7 @@ function renderState(state) {
 
 function renderDiff(diff) {
   if (!diff) {
-    return `<p class="empty">Use Buy, Sell, or Reserve in this branch to see a diff.</p>`;
+    return `<p class="empty">Run the agent to create a planned branch diff.</p>`;
   }
   const hasCountChanges = Object.values(diff.counts).some((count) => count.delta !== 0);
   const hasInventoryChanges = diff.inventory.length > 0;
@@ -421,9 +413,7 @@ function renderBranchCard(branch, diffs = {}) {
       </div>
       <div class="branch-actions">
         <a class="icon-link" href="${escapeHtml(branch.url)}" target="_blank" rel="noreferrer">Open Branch</a>
-        <button data-action="branch-buy" data-id="${escapeHtml(branch.id)}" class="primary" type="button">Buy</button>
-        <button data-action="branch-sell" data-id="${escapeHtml(branch.id)}" type="button">Sell</button>
-        <button data-action="branch-reserve" data-id="${escapeHtml(branch.id)}" type="button">Reserve</button>
+        <button data-action="run-agent" data-id="${escapeHtml(branch.id)}" class="primary" type="button">Run Agent</button>
         <button data-action="refresh-diff" data-id="${escapeHtml(branch.id)}" type="button">Diff</button>
         <button data-action="commit" data-id="${escapeHtml(branch.id)}" type="button">Commit</button>
         <button class="danger" data-action="discard" data-id="${escapeHtml(branch.id)}" type="button">Discard</button>
@@ -596,15 +586,13 @@ branchesEl.addEventListener("click", async (event) => {
   const branchId = button.dataset.id;
   const action = button.dataset.action;
   try {
-    if (["branch-buy", "branch-sell", "branch-reserve"].includes(action)) {
-      const branchAction = action.replace("branch-", "");
-      showResult(`${branchAction} in branch...`);
-      const data = await request(`/api/branches/${branchId}/actions`, {
+    if (action === "run-agent") {
+      showResult("Agent running...");
+      const data = await request(`/api/branches/${branchId}/run-agent-demo`, {
         method: "POST",
-        body: JSON.stringify(selectedBranchPayload(branchAction)),
       });
       await refreshBranches({ [branchId]: data.diff });
-      showResult(`${branchAction} saved`);
+      showResult("Agent plan done");
       return;
     }
     if (action === "refresh-diff") {

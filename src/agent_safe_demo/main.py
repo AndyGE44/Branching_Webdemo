@@ -5,7 +5,7 @@ import sqlite3
 from contextlib import asynccontextmanager, contextmanager
 import os
 from pathlib import Path
-from typing import AsyncIterator, Iterator, Literal
+from typing import AsyncIterator, Iterator
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -93,10 +93,6 @@ class InventoryActionRequest(BaseModel):
     part_id: str
     quantity: int = Field(gt=0)
     actor: str = "user"
-
-
-class BranchActionRequest(InventoryActionRequest):
-    action: Literal["buy", "sell", "reserve"]
 
 
 class BaseCheckpointRequest(BaseModel):
@@ -417,10 +413,10 @@ def create_branch() -> dict:
         raise branch_error(error) from error
 
 
-@app.post("/api/branches/{branch_id}/actions")
-def apply_branch_action(branch_id: str, payload: BranchActionRequest) -> dict:
+@app.post("/api/branches/{branch_id}/run-agent-demo")
+def run_branch_agent_demo(branch_id: str) -> dict:
     try:
-        return branch_backend.apply_action(branch_id, payload.model_dump())
+        return branch_backend.run_agent_demo(branch_id)
     except BranchError as error:
         raise branch_error(error) from error
 
