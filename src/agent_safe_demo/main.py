@@ -24,9 +24,9 @@ from agent_safe_demo.branching import (
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parents[1]
-DB_PATH = Path(os.getenv("TOY_INVENTORY_DB_PATH", PROJECT_ROOT / "toy_inventory.db"))
+DB_PATH = Path(os.getenv("TOY_MAILBOX_DB_PATH", PROJECT_ROOT / "toy_mailbox.db"))
 STATIC_DIR = BASE_DIR / "static"
-BRANCH_ID = os.getenv("TOY_INVENTORY_BRANCH_ID")
+BRANCH_ID = os.getenv("TOY_MAILBOX_BRANCH_ID")
 DEMO_AUTH_USER = os.getenv("TOY_DEMO_AUTH_USER", "demo")
 DEMO_AUTH_PASSWORD = os.getenv("TOY_DEMO_AUTH_PASSWORD")
 DEMO_AUTH_REALM = os.getenv("TOY_DEMO_AUTH_REALM", "Agent-Safe Demo")

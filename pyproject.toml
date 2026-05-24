@@ -3,9 +3,9 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agent-safe-toy-inventory"
+name = "agent-safe-toy-mailbox"
 version = "0.1.0"
-description = "FastAPI toy inventory app for agent-safe branch workflow experiments."
+description = "FastAPI mailbox app for agent-safe branch workflow experiments."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

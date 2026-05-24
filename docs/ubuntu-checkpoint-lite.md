@@ -1,7 +1,7 @@
 # Ubuntu / EC2 Checkpoint-Lite Setup
 
-This guide moves the toy inventory branch demo from the local-copy backend to
-the first checkpoint-lite backend on an Ubuntu VM or EC2 instance.
+This guide moves the mailbox branch demo from the local-copy backend to the
+first checkpoint-lite backend on an Ubuntu VM or EC2 instance.
 
 ## 1. System Requirements
 
@@ -104,7 +104,7 @@ Expected first result:
 - Main app remains on port `8000`.
 - Branch apps start on `8200+`.
 - Branch state writes to the checkpoint-lite overlay workdir.
-- Main `toy_inventory.db` is not modified until `Commit`.
+- Main `toy_mailbox.db` is not modified until `Commit`.
 
 If checkpoint-lite fails with `mount command failed: exit status 32`, verify
 the session directory. Some CloudLab images have a checkpoint-lite config that
@@ -120,7 +120,7 @@ creates an explicit named base checkpoint for every branch:
 create branch -> sudo checkpoint-lite init <project-root> --quiet
               -> sudo checkpoint-lite create <session> <branch>-base -1
               -> start branch uvicorn in the overlay workdir
-              -> set TOY_INVENTORY_DB_PATH=<overlay>/toy_inventory.db
+              -> set TOY_MAILBOX_DB_PATH=<overlay>/toy_mailbox.db
 
 run agent     -> HTTP calls against the branch URL
 diff          -> SQLite summary diff between main DB and branch DB

@@ -6,9 +6,9 @@ from fastapi.testclient import TestClient
 
 def load_app(monkeypatch, tmp_path, auth_password=None):
     db_path = tmp_path / "toy_mailbox.db"
-    monkeypatch.setenv("TOY_INVENTORY_DB_PATH", str(db_path))
+    monkeypatch.setenv("TOY_MAILBOX_DB_PATH", str(db_path))
     monkeypatch.setenv("TOY_BRANCH_BACKEND", "local-copy")
-    monkeypatch.delenv("TOY_INVENTORY_BRANCH_ID", raising=False)
+    monkeypatch.delenv("TOY_MAILBOX_BRANCH_ID", raising=False)
     if auth_password is None:
         monkeypatch.delenv("TOY_DEMO_AUTH_PASSWORD", raising=False)
     else:

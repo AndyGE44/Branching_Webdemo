@@ -526,7 +526,7 @@ agent_safe_demo/
 Generated runtime data is ignored by git:
 
 ```text
-toy_inventory.db
+toy_mailbox.db
 .branches/
 build/
 dist/
@@ -559,7 +559,7 @@ The generated OpenAPI docs are available at `/docs`.
 
 This mode is only for fast local development on macOS or non-Linux machines.
 It does not use checkpoint-lite. Branches are simulated by copying
-`toy_inventory.db` into `.branches/<branch_id>/`.
+`toy_mailbox.db` into `.branches/<branch_id>/`.
 
 ```bash
 python3 -m venv .venv

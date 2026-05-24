@@ -236,7 +236,7 @@ class LocalCopyBackend:
         base_id = f"base-{uuid.uuid4().hex[:8]}"
         base_dir = self.bases_dir / base_id
         base_dir.mkdir(parents=True)
-        base_db = base_dir / "toy_inventory.db"
+        base_db = base_dir / "toy_mailbox.db"
         shutil.copy2(self.main_db_path, base_db)
         record_operation(self.operation_stats, "snapshot", started_at)
 
@@ -274,15 +274,15 @@ class LocalCopyBackend:
         branch_id = f"br-{uuid.uuid4().hex[:8]}"
         branch_dir = self.branches_dir / branch_id
         branch_dir.mkdir(parents=True)
-        branch_db = branch_dir / "toy_inventory.db"
+        branch_db = branch_dir / "toy_mailbox.db"
         if base.db_path is None:
             raise BranchError(f"Base {base.id} does not have a database snapshot")
         shutil.copy2(base.db_path, branch_db)
 
         port = self._next_port()
         env = os.environ.copy()
-        env["TOY_INVENTORY_DB_PATH"] = str(branch_db)
-        env["TOY_INVENTORY_BRANCH_ID"] = branch_id
+        env["TOY_MAILBOX_DB_PATH"] = str(branch_db)
+        env["TOY_MAILBOX_BRANCH_ID"] = branch_id
         env["PYTHONPATH"] = pythonpath_for(self.project_root)
 
         process = subprocess.Popen(
@@ -664,8 +664,8 @@ class CheckpointLiteBackend:
         port = self._next_port()
 
         env = os.environ.copy()
-        env["TOY_INVENTORY_DB_PATH"] = str(branch_db)
-        env["TOY_INVENTORY_BRANCH_ID"] = branch_id
+        env["TOY_MAILBOX_DB_PATH"] = str(branch_db)
+        env["TOY_MAILBOX_BRANCH_ID"] = branch_id
         env["TOY_BRANCH_BACKEND"] = "local-copy"
         env["PYTHONPATH"] = pythonpath_for(Path(work_dir))
 
@@ -684,8 +684,8 @@ class CheckpointLiteBackend:
                 "sudo",
                 "env",
                 f"PYTHONPATH={env['PYTHONPATH']}",
-                f"TOY_INVENTORY_DB_PATH={env['TOY_INVENTORY_DB_PATH']}",
-                f"TOY_INVENTORY_BRANCH_ID={env['TOY_INVENTORY_BRANCH_ID']}",
+                f"TOY_MAILBOX_DB_PATH={env['TOY_MAILBOX_DB_PATH']}",
+                f"TOY_MAILBOX_BRANCH_ID={env['TOY_MAILBOX_BRANCH_ID']}",
                 f"TOY_BRANCH_BACKEND={env['TOY_BRANCH_BACKEND']}",
                 *command,
             ]
@@ -1166,8 +1166,8 @@ class StateForkBackend(CheckpointLiteBackend):
         branch_id = f"sf-{uuid.uuid4().hex[:8]}"
         port = self._next_port()
         env = os.environ.copy()
-        env["TOY_INVENTORY_DB_PATH"] = str(branch_db)
-        env["TOY_INVENTORY_BRANCH_ID"] = branch_id
+        env["TOY_MAILBOX_DB_PATH"] = str(branch_db)
+        env["TOY_MAILBOX_BRANCH_ID"] = branch_id
         env["TOY_BRANCH_BACKEND"] = "local-copy"
         env["PYTHONPATH"] = pythonpath_for(work_dir)
 
