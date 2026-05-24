@@ -4,10 +4,15 @@ import sys
 from fastapi.testclient import TestClient
 
 
-def load_app(monkeypatch, tmp_path):
+def load_app(monkeypatch, tmp_path, auth_password=None):
     db_path = tmp_path / "toy_inventory.db"
     monkeypatch.setenv("TOY_INVENTORY_DB_PATH", str(db_path))
     monkeypatch.setenv("TOY_BRANCH_BACKEND", "local-copy")
+    monkeypatch.delenv("TOY_INVENTORY_BRANCH_ID", raising=False)
+    if auth_password is None:
+        monkeypatch.delenv("TOY_DEMO_AUTH_PASSWORD", raising=False)
+    else:
+        monkeypatch.setenv("TOY_DEMO_AUTH_PASSWORD", auth_password)
     sys.modules.pop("agent_safe_demo.main", None)
     module = importlib.import_module("agent_safe_demo.main")
     return module.app
@@ -21,6 +26,19 @@ def test_inventory_seed_data(monkeypatch, tmp_path):
     assert response.status_code == 200
     items = response.json()["items"]
     assert {item["id"] for item in items} >= {"MCU-100", "SENSOR-9", "MCU-ALT"}
+
+
+def test_demo_password_protects_main_app(monkeypatch, tmp_path):
+    app = load_app(monkeypatch, tmp_path, auth_password="secret-demo-password")
+    with TestClient(app) as client:
+        blocked = client.get("/api/inventory")
+        wrong_password = client.get("/api/inventory", auth=("demo", "wrong"))
+        allowed = client.get("/api/inventory", auth=("demo", "secret-demo-password"))
+
+    assert blocked.status_code == 401
+    assert blocked.headers["www-authenticate"] == 'Basic realm="Agent-Safe Demo"'
+    assert wrong_password.status_code == 401
+    assert allowed.status_code == 200
 
 
 def item_by_id(items, part_id):
