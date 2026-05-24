@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import base64
 import json
 import sqlite3
 from contextlib import asynccontextmanager, contextmanager
 import os
 from pathlib import Path
+import secrets
 from typing import AsyncIterator, Iterator
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -25,6 +27,9 @@ PROJECT_ROOT = BASE_DIR.parents[1]
 DB_PATH = Path(os.getenv("TOY_INVENTORY_DB_PATH", PROJECT_ROOT / "toy_inventory.db"))
 STATIC_DIR = BASE_DIR / "static"
 BRANCH_ID = os.getenv("TOY_INVENTORY_BRANCH_ID")
+DEMO_AUTH_USER = os.getenv("TOY_DEMO_AUTH_USER", "demo")
+DEMO_AUTH_PASSWORD = os.getenv("TOY_DEMO_AUTH_PASSWORD")
+DEMO_AUTH_REALM = os.getenv("TOY_DEMO_AUTH_REALM", "Agent-Safe Demo")
 
 def create_branch_backend() -> LocalCopyBackend | CheckpointLiteBackend | StateForkBackend:
     backend = os.getenv("TOY_BRANCH_BACKEND", "local-copy")
@@ -81,6 +86,41 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+def demo_auth_enabled() -> bool:
+    return bool(DEMO_AUTH_PASSWORD) and not BRANCH_ID
+
+
+def unauthorized_response() -> JSONResponse:
+    return JSONResponse(
+        {"detail": "Authentication required"},
+        status_code=401,
+        headers={"WWW-Authenticate": f'Basic realm="{DEMO_AUTH_REALM}"'},
+    )
+
+
+def valid_basic_auth(authorization: str | None) -> bool:
+    if not authorization or not authorization.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(authorization.removeprefix("Basic ")).decode()
+    except (UnicodeDecodeError, ValueError):
+        return False
+    username, separator, password = decoded.partition(":")
+    if not separator:
+        return False
+    return secrets.compare_digest(username, DEMO_AUTH_USER) and secrets.compare_digest(
+        password,
+        DEMO_AUTH_PASSWORD or "",
+    )
+
+
+@app.middleware("http")
+async def require_demo_password(request: Request, call_next):
+    if demo_auth_enabled() and not valid_basic_auth(request.headers.get("authorization")):
+        return unauthorized_response()
+    return await call_next(request)
 
 
 class ReserveRequest(BaseModel):

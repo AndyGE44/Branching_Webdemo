@@ -13,6 +13,100 @@ create-env, and cleanup operations. The direct checkpoint-lite backend remains
 available as a lower-level reference path, and the local-copy backend exists
 only for quick frontend/API development on non-Linux machines.
 
+## Public Cloudflare Quick Tunnel Demo
+
+Use this when you want to send someone a temporary public URL for the VM-hosted
+main app. This keeps VM inbound ports closed: `cloudflared` makes an outbound
+connection to Cloudflare and proxies the generated `trycloudflare.com` URL back
+to `127.0.0.1:8000` on the VM.
+
+Quick Tunnel is for short demos only. The URL changes whenever the tunnel is
+restarted, and it does not replace real authentication or a named Cloudflare
+Tunnel for longer-running deployments.
+
+### 1. Prepare `.env` On The VM
+
+The real `.env` file is intentionally ignored by git. Create it on the VM:
+
+```bash
+ssh sf-exp
+cd ~/Web_Demo_For_Checkpointlite
+cp .env.example .env
+```
+
+Edit `.env` and replace `TOY_DEMO_AUTH_PASSWORD` with a real demo password:
+
+```bash
+nano .env
+```
+
+Minimum required value:
+
+```bash
+TOY_DEMO_AUTH_PASSWORD=<shared-demo-password>
+```
+
+`TOY_DEMO_AUTH_USER` defaults to `demo`. The password protects the main app
+with HTTP Basic Auth. Branch apps are still internal VM-only processes on
+`127.0.0.1:8300+`, so the main app can continue to run agent actions against
+them.
+
+### 2. Install `cloudflared` If Needed
+
+```bash
+if ! command -v cloudflared >/dev/null 2>&1; then
+  curl -L --fail --show-error --output /tmp/cloudflared.deb \
+    "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$(dpkg --print-architecture).deb"
+  sudo dpkg -i /tmp/cloudflared.deb
+fi
+cloudflared --version
+```
+
+### 3. Start The Password-Protected Main App
+
+```bash
+cd ~/Web_Demo_For_Checkpointlite
+git pull
+
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -e ".[dev]"
+pytest -q
+
+tmux new -d -s agent-main './scripts/run-public-main.sh'
+```
+
+Check that unauthenticated requests are blocked and authenticated requests work:
+
+```bash
+curl -i http://127.0.0.1:8000/api/backend
+curl -u demo:<shared-demo-password> http://127.0.0.1:8000/api/backend
+```
+
+### 4. Start The Public Quick Tunnel
+
+```bash
+tmux new -d -s cf-main './scripts/run-cloudflare-quick-tunnel.sh'
+tmux capture-pane -pt cf-main -S -80
+```
+
+Copy the printed `https://...trycloudflare.com` URL and share it with the demo
+username and password.
+
+### 5. Stop Public Access
+
+Stop only the public URL:
+
+```bash
+tmux kill-session -t cf-main
+```
+
+Stop the app too:
+
+```bash
+tmux kill-session -t agent-main
+```
+
 ## Shared VM Demo With SSH Port Forwarding
 
 This private repo is currently tested on the shared Ubuntu VM reachable as:
