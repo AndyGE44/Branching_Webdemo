@@ -73,6 +73,29 @@ Phase 1 changed the visible app from inventory to mailbox:
   lifecycle, and reset.
 - Local and VM checks passed.
 
+## What Phase 2 Has Started
+
+Mailbox user mutations now exist on the main app state:
+
+- `POST /api/messages/{message_id}/label`
+- `POST /api/messages/{message_id}/move`
+- `POST /api/messages/{message_id}/archive`
+- `POST /api/messages/{message_id}/read`
+- `POST /api/drafts`
+
+The web UI now exposes simple user controls in `Message Detail`:
+
+- add a label
+- move to Inbox/Archive/Spam
+- mark read/unread
+- archive
+- create a draft reply
+
+The StateFork/checkpoint branch lifecycle is intentionally still separate from
+these user controls. Branch cards remain focused on base checkpoints, branch
+creation, commit, and discard until the deterministic email agent plan replaces
+the legacy inventory agent path.
+
 ## Important Compatibility Detail
 
 Some legacy inventory code is still intentionally present in
@@ -135,9 +158,10 @@ docs/ubuntu-checkpoint-lite.md
 
 ## Recommended Next Development Step
 
-Start with Phase 2: mailbox mutation APIs and simple user controls.
+Continue Phase 2 by replacing the legacy branch-agent plan with deterministic
+email actions.
 
-Suggested backend endpoints:
+Completed backend endpoints:
 
 ```text
 POST /api/messages/{message_id}/label
@@ -166,27 +190,8 @@ DraftRequest:
   created_by: str = "user"
 ```
 
-Suggested UI behavior:
-
-- In `Message Detail`, add user actions:
-  - add label
-  - move to Inbox/Archive/Spam
-  - mark read/unread
-  - create draft reply
-- These are user actions on the current app state.
-- Keep branch cards focused on branch lifecycle until the email agent plan is
-  ready.
-
-Suggested Phase 2 tests:
-
-- Labeling a message creates exactly one label row and audit event.
-- Moving a message changes `folder` and audit log.
-- Creating a draft increments `/api/mailbox` draft count.
-- Reset restores seed mailbox, drafts, and audit log.
-
-## Step After That
-
-Phase 3 should replace the legacy inventory agent plan with an email agent plan.
+The next backend step should replace the legacy inventory agent plan with an
+email agent plan.
 
 The current legacy agent plan is in `src/agent_safe_demo/branching.py`:
 

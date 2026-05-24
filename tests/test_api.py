@@ -44,6 +44,90 @@ def test_message_detail_includes_labels(monkeypatch, tmp_path):
     assert set(message["labels"]) == {"customer", "urgent"}
 
 
+def test_label_message_creates_one_label_and_audit_event(monkeypatch, tmp_path):
+    app = load_app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/messages/msg-1001/label",
+            json={"label": "Finance", "actor": "alice"},
+        )
+        duplicate = client.post(
+            "/api/messages/msg-1001/label",
+            json={"label": "finance", "actor": "alice"},
+        )
+        state = client.get("/api/state").json()
+
+    assert response.status_code == 200
+    assert duplicate.status_code == 200
+    assert response.json()["status"] == "labeled"
+    assert duplicate.json()["status"] == "unchanged"
+    message = next(message for message in state["messages"] if message["id"] == "msg-1001")
+    assert message["labels"].count("finance") == 1
+    label_events = [
+        event for event in state["audit_log"]
+        if event["action"] == "label" and "msg-1001" in event["detail"]
+    ]
+    assert len(label_events) == 1
+
+
+def test_move_and_read_message_update_state_and_audit_log(monkeypatch, tmp_path):
+    app = load_app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        move = client.post(
+            "/api/messages/msg-1003/move",
+            json={"folder": "Spam", "actor": "moderator"},
+        )
+        read = client.post(
+            "/api/messages/msg-1003/read",
+            json={"is_read": True, "actor": "moderator"},
+        )
+        state = client.get("/api/state").json()
+
+    assert move.status_code == 200
+    assert read.status_code == 200
+    message = next(message for message in state["messages"] if message["id"] == "msg-1003")
+    assert message["folder"] == "Spam"
+    assert message["is_read"] is True
+    assert any(event["action"] == "move" and "Spam" in event["detail"] for event in state["audit_log"])
+    assert any(event["action"] == "read" and "msg-1003" in event["detail"] for event in state["audit_log"])
+
+
+def test_archive_message_accepts_empty_body(monkeypatch, tmp_path):
+    app = load_app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        response = client.post("/api/messages/msg-1004/archive")
+        state = client.get("/api/state").json()
+
+    assert response.status_code == 200
+    message = next(message for message in state["messages"] if message["id"] == "msg-1004")
+    assert message["folder"] == "Archive"
+    assert any(event["action"] == "archive" and "msg-1004" in event["detail"] for event in state["audit_log"])
+
+
+def test_create_draft_increments_mailbox_draft_count(monkeypatch, tmp_path):
+    app = load_app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        before = client.get("/api/mailbox").json()
+        response = client.post(
+            "/api/drafts",
+            json={
+                "source_message_id": "msg-1002",
+                "to_address": "customer@acme.example",
+                "subject": "Re: Urgent: shipment delay",
+                "body": "Thanks for the heads up. I will send a new ETA shortly.",
+                "created_by": "support",
+            },
+        )
+        after = client.get("/api/mailbox").json()
+        state = client.get("/api/state").json()
+
+    assert response.status_code == 200
+    assert response.json()["draft"]["source_message_id"] == "msg-1002"
+    assert after["drafts"] == before["drafts"] + 1
+    assert any(draft["created_by"] == "support" for draft in state["drafts"])
+    assert any(event["action"] == "draft" for event in state["audit_log"])
+
+
 def test_demo_password_protects_main_app(monkeypatch, tmp_path):
     app = load_app(monkeypatch, tmp_path, auth_password="secret-demo-password")
     with TestClient(app) as client:

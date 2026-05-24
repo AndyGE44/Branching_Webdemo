@@ -135,6 +135,33 @@ class InventoryActionRequest(BaseModel):
     actor: str = "user"
 
 
+class LabelMessageRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=40)
+    actor: str = "user"
+
+
+class MoveMessageRequest(BaseModel):
+    folder: str = Field(min_length=1, max_length=40)
+    actor: str = "user"
+
+
+class ReadMessageRequest(BaseModel):
+    is_read: bool = True
+    actor: str = "user"
+
+
+class ActorRequest(BaseModel):
+    actor: str = "user"
+
+
+class DraftRequest(BaseModel):
+    source_message_id: str | None = None
+    to_address: str = Field(min_length=1, max_length=254)
+    subject: str = Field(min_length=1, max_length=200)
+    body: str = Field(min_length=1)
+    created_by: str = "user"
+
+
 class BaseCheckpointRequest(BaseModel):
     label: str | None = Field(default=None, max_length=80)
 
@@ -160,6 +187,35 @@ def audit(conn: sqlite3.Connection, actor: str, action: str, detail: str) -> Non
         "INSERT INTO audit_log(actor, action, detail) VALUES (?, ?, ?)",
         (actor, action, detail),
     )
+
+
+def normalize_label(label: str) -> str:
+    normalized = label.strip().lower()
+    if not normalized:
+        raise HTTPException(status_code=422, detail="Label cannot be blank")
+    return normalized
+
+
+def normalize_folder(folder: str) -> str:
+    aliases = {
+        "inbox": "Inbox",
+        "archive": "Archive",
+        "spam": "Spam",
+    }
+    normalized = aliases.get(folder.strip().lower())
+    if normalized is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Folder must be one of Inbox, Archive, or Spam",
+        )
+    return normalized
+
+
+def strip_required(value: str, field_name: str) -> str:
+    stripped = value.strip()
+    if not stripped:
+        raise HTTPException(status_code=422, detail=f"{field_name} cannot be blank")
+    return stripped
 
 
 def ensure_part(conn: sqlite3.Connection, part_id: str) -> sqlite3.Row:
@@ -227,6 +283,13 @@ def message_with_labels(conn: sqlite3.Connection, message_id: str) -> dict:
     message["labels"] = [label for label in message["labels"].split(",") if label]
     message["is_read"] = bool(message["is_read"])
     return message
+
+
+def draft_row(conn: sqlite3.Connection, draft_id: int) -> dict:
+    row = conn.execute("SELECT * FROM drafts WHERE id = ?", (draft_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Unknown draft: {draft_id}")
+    return dict(row)
 
 
 def message_rows(conn: sqlite3.Connection) -> list[dict]:
@@ -500,6 +563,140 @@ def messages() -> dict:
 def message_detail(message_id: str) -> dict:
     with db() as conn:
         return {"message": message_with_labels(conn, message_id)}
+
+
+@app.post("/api/messages/{message_id}/label")
+def label_message(message_id: str, payload: LabelMessageRequest) -> dict:
+    label = normalize_label(payload.label)
+    with db() as conn:
+        message_with_labels(conn, message_id)
+        cursor = conn.execute(
+            "INSERT OR IGNORE INTO message_labels(message_id, label) VALUES (?, ?)",
+            (message_id, label),
+        )
+        if cursor.rowcount:
+            conn.execute(
+                "UPDATE messages SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (message_id,),
+            )
+            audit(
+                conn,
+                payload.actor,
+                "label",
+                f"Added label {label} to {message_id}",
+            )
+        return {
+            "status": "labeled" if cursor.rowcount else "unchanged",
+            "message": message_with_labels(conn, message_id),
+        }
+
+
+@app.post("/api/messages/{message_id}/move")
+def move_message(message_id: str, payload: MoveMessageRequest) -> dict:
+    folder = normalize_folder(payload.folder)
+    with db() as conn:
+        message = message_with_labels(conn, message_id)
+        if message["folder"] != folder:
+            conn.execute(
+                """
+                UPDATE messages
+                SET folder = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (folder, message_id),
+            )
+            audit(
+                conn,
+                payload.actor,
+                "move",
+                f"Moved {message_id} from {message['folder']} to {folder}",
+            )
+        return {
+            "status": "moved" if message["folder"] != folder else "unchanged",
+            "message": message_with_labels(conn, message_id),
+        }
+
+
+@app.post("/api/messages/{message_id}/archive")
+def archive_message(message_id: str, payload: ActorRequest | None = None) -> dict:
+    actor = payload.actor if payload else "user"
+    with db() as conn:
+        message = message_with_labels(conn, message_id)
+        if message["folder"] != "Archive":
+            conn.execute(
+                """
+                UPDATE messages
+                SET folder = 'Archive', updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (message_id,),
+            )
+            audit(
+                conn,
+                actor,
+                "archive",
+                f"Archived {message_id} from {message['folder']}",
+            )
+        return {
+            "status": "archived" if message["folder"] != "Archive" else "unchanged",
+            "message": message_with_labels(conn, message_id),
+        }
+
+
+@app.post("/api/messages/{message_id}/read")
+def mark_message_read(message_id: str, payload: ReadMessageRequest) -> dict:
+    with db() as conn:
+        message = message_with_labels(conn, message_id)
+        desired = int(payload.is_read)
+        if int(message["is_read"]) != desired:
+            conn.execute(
+                """
+                UPDATE messages
+                SET is_read = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (desired, message_id),
+            )
+            audit(
+                conn,
+                payload.actor,
+                "read" if payload.is_read else "unread",
+                f"Marked {message_id} {'read' if payload.is_read else 'unread'}",
+            )
+        return {
+            "status": "read" if payload.is_read else "unread",
+            "message": message_with_labels(conn, message_id),
+        }
+
+
+@app.post("/api/drafts")
+def create_draft(payload: DraftRequest) -> dict:
+    to_address = strip_required(payload.to_address, "to_address")
+    subject = strip_required(payload.subject, "subject")
+    body = strip_required(payload.body, "body")
+    with db() as conn:
+        if payload.source_message_id is not None:
+            message_with_labels(conn, payload.source_message_id)
+        cursor = conn.execute(
+            """
+            INSERT INTO drafts(source_message_id, to_address, subject, body, status, created_by)
+            VALUES (?, ?, ?, ?, 'draft', ?)
+            """,
+            (
+                payload.source_message_id,
+                to_address,
+                subject,
+                body,
+                payload.created_by,
+            ),
+        )
+        audit(
+            conn,
+            payload.created_by,
+            "draft",
+            f"Created draft {cursor.lastrowid} for {payload.source_message_id or 'new message'}",
+        )
+        return {"status": "draft", "draft": draft_row(conn, int(cursor.lastrowid))}
 
 
 @app.post("/api/inventory/buy")

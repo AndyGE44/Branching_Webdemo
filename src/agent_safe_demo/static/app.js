@@ -92,6 +92,10 @@ function labelPills(labels) {
   return labels.map((label) => `<span class="label-pill">${escapeHtml(label)}</span>`).join("");
 }
 
+function replySubject(subject) {
+  return String(subject || "").toLowerCase().startsWith("re:") ? subject : `Re: ${subject}`;
+}
+
 function renderMessageList(messages) {
   if (messages.length && !selectedMessageId) {
     selectedMessageId = messages[0].id;
@@ -143,6 +147,55 @@ function renderMessageDetail(message) {
       </div>
       <div class="label-row">${labelPills(message.labels)}</div>
       <p class="message-body">${escapeHtml(message.body)}</p>
+      <section class="message-actions" data-message-id="${escapeHtml(message.id)}">
+        <div class="quick-actions">
+          <form data-action="label-message" class="inline-form">
+            <label>
+              Label
+              <input name="label" type="text" maxlength="40" placeholder="finance" />
+            </label>
+            <button class="primary" type="submit">Add</button>
+          </form>
+          <form data-action="move-message" class="inline-form">
+            <label>
+              Folder
+              <select name="folder">
+                ${["Inbox", "Archive", "Spam"]
+                  .map(
+                    (folder) =>
+                      `<option value="${folder}" ${folder === message.folder ? "selected" : ""}>${folder}</option>`,
+                  )
+                  .join("")}
+              </select>
+            </label>
+            <button type="submit">Move</button>
+          </form>
+          <button data-action="toggle-read" data-read="${message.is_read ? "false" : "true"}" type="button">
+            Mark ${message.is_read ? "Unread" : "Read"}
+          </button>
+          <button data-action="archive-message" type="button">Archive</button>
+        </div>
+
+        <form data-action="create-draft" class="draft-form">
+          <div class="draft-form-row">
+            <label>
+              To
+              <input name="to_address" type="email" value="${escapeHtml(message.from_address)}" />
+            </label>
+            <label>
+              Subject
+              <input name="subject" type="text" maxlength="200" value="${escapeHtml(replySubject(message.subject))}" />
+            </label>
+          </div>
+          <label>
+            Reply
+            <textarea name="body" rows="4" placeholder="Draft a reply..."></textarea>
+          </label>
+          <div class="button-row">
+            <button class="primary" type="submit">Create Draft</button>
+          </div>
+        </form>
+      </section>
     </article>
   `;
 }
@@ -460,6 +513,82 @@ messageListEl.addEventListener("click", (event) => {
   }
   selectedMessageId = button.dataset.messageId;
   refresh().catch((error) => showResult(error.message, false));
+});
+
+messageDetailEl.addEventListener("submit", async (event) => {
+  const form = event.target.closest("form[data-action]");
+  if (!form) {
+    return;
+  }
+  event.preventDefault();
+  const actions = form.closest(".message-actions");
+  const messageId = actions?.dataset.messageId;
+  if (!messageId) {
+    return;
+  }
+  const action = form.dataset.action;
+  const formData = new FormData(form);
+  if (action === "label-message") {
+    await mutate("Label added", () =>
+      request(`/api/messages/${messageId}/label`, {
+        method: "POST",
+        body: JSON.stringify({ label: formData.get("label") }),
+      }),
+    );
+    return;
+  }
+  if (action === "move-message") {
+    await mutate("Message moved", () =>
+      request(`/api/messages/${messageId}/move`, {
+        method: "POST",
+        body: JSON.stringify({ folder: formData.get("folder") }),
+      }),
+    );
+    return;
+  }
+  if (action === "create-draft") {
+    await mutate("Draft created", () =>
+      request("/api/drafts", {
+        method: "POST",
+        body: JSON.stringify({
+          source_message_id: messageId,
+          to_address: formData.get("to_address"),
+          subject: formData.get("subject"),
+          body: formData.get("body"),
+        }),
+      }),
+    );
+  }
+});
+
+messageDetailEl.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-action]");
+  if (!button) {
+    return;
+  }
+  const actions = button.closest(".message-actions");
+  const messageId = actions?.dataset.messageId;
+  if (!messageId) {
+    return;
+  }
+  const action = button.dataset.action;
+  if (action === "toggle-read") {
+    await mutate("Read state updated", () =>
+      request(`/api/messages/${messageId}/read`, {
+        method: "POST",
+        body: JSON.stringify({ is_read: button.dataset.read === "true" }),
+      }),
+    );
+    return;
+  }
+  if (action === "archive-message") {
+    await mutate("Message archived", () =>
+      request(`/api/messages/${messageId}/archive`, {
+        method: "POST",
+        body: JSON.stringify({ actor: "user" }),
+      }),
+    );
+  }
 });
 
 document.querySelector("#createBaseBtn").addEventListener("click", async () => {
