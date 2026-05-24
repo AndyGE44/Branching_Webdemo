@@ -80,31 +80,83 @@ def build_status(
     }
 
 
-def branch_action_path(action: str) -> str:
-    paths = {
-        "buy": "/api/inventory/buy",
-        "sell": "/api/inventory/sell",
-        "reserve": "/api/reservations",
-    }
-    try:
-        return paths[action]
-    except KeyError as error:
-        raise BranchError(f"Unknown branch action: {action}") from error
+def branch_action_request(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    action = payload["action"]
+    actor = payload.get("actor", "agent")
+    if action == "label":
+        return (
+            f"/api/messages/{payload['message_id']}/label",
+            {"label": payload["label"], "actor": actor},
+        )
+    if action == "move":
+        return (
+            f"/api/messages/{payload['message_id']}/move",
+            {"folder": payload["folder"], "actor": actor},
+        )
+    if action == "draft":
+        return (
+            "/api/drafts",
+            {
+                "source_message_id": payload.get("source_message_id"),
+                "to_address": payload["to_address"],
+                "subject": payload["subject"],
+                "body": payload["body"],
+                "created_by": actor,
+            },
+        )
+    if action == "archive":
+        return (
+            f"/api/messages/{payload['message_id']}/archive",
+            {"actor": actor},
+        )
+    raise BranchError(f"Unknown branch action: {action}")
 
 
-def branch_action_label(action: str, payload: dict[str, Any]) -> str:
-    verb = {
-        "buy": "Buy",
-        "sell": "Sell",
-        "reserve": "Reserve",
-    }.get(action, action.title())
-    return f"{verb} {payload['quantity']} {payload['part_id']}"
+def branch_action_label(payload: dict[str, Any]) -> str:
+    if payload.get("snapshot_label"):
+        return str(payload["snapshot_label"])
+    action = payload["action"]
+    if action == "label":
+        return f"label {payload['label']}"
+    if action == "move":
+        return f"move {payload['folder'].lower()}"
+    if action == "draft":
+        return "draft reply"
+    if action == "archive":
+        return "archive message"
+    return action.replace("_", " ")
 
 
 AGENT_DEMO_ACTIONS = [
-    {"action": "sell", "part_id": "CASE-42", "quantity": 3, "actor": "agent"},
-    {"action": "buy", "part_id": "SENSOR-9", "quantity": 5, "actor": "agent"},
-    {"action": "reserve", "part_id": "MCU-100", "quantity": 2, "actor": "agent"},
+    {
+        "action": "label",
+        "message_id": "msg-1001",
+        "label": "finance",
+        "actor": "agent",
+        "snapshot_label": "label finance",
+    },
+    {
+        "action": "move",
+        "message_id": "msg-1003",
+        "folder": "Spam",
+        "actor": "agent",
+        "snapshot_label": "move spam",
+    },
+    {
+        "action": "draft",
+        "source_message_id": "msg-1002",
+        "to_address": "customer@acme.example",
+        "subject": "Re: Urgent: shipment delay",
+        "body": "Thanks for the update. We are checking the shipment and will send a new ETA shortly.",
+        "actor": "agent",
+        "snapshot_label": "draft reply",
+    },
+    {
+        "action": "archive",
+        "message_id": "msg-1004",
+        "actor": "agent",
+        "snapshot_label": "archive report",
+    },
 ]
 
 
@@ -328,17 +380,13 @@ class LocalCopyBackend:
             raise BranchError(f"Branch {branch_id} is not running")
 
         action = payload["action"]
-        action_payload = {
-            "part_id": payload["part_id"],
-            "quantity": payload["quantity"],
-            "actor": payload.get("actor", "agent"),
-        }
+        path, action_payload = branch_action_request(payload)
         result = self._post_json(
             branch.url,
-            branch_action_path(action),
+            path,
             action_payload,
         )
-        snapshot = self._record_branch_snapshot(branch, action, branch_action_label(action, payload))
+        snapshot = self._record_branch_snapshot(branch, action, branch_action_label(payload))
         return {
             "branch": branch.to_dict(),
             "action": result,
@@ -725,17 +773,13 @@ class CheckpointLiteBackend:
             raise BranchError(f"Branch {branch_id} is not running")
 
         action = payload["action"]
-        action_payload = {
-            "part_id": payload["part_id"],
-            "quantity": payload["quantity"],
-            "actor": payload.get("actor", "agent"),
-        }
+        path, action_payload = branch_action_request(payload)
         result = self._post_json(
             branch.url,
-            branch_action_path(action),
+            path,
             action_payload,
         )
-        snapshot = self._record_branch_snapshot(branch, action, branch_action_label(action, payload))
+        snapshot = self._record_branch_snapshot(branch, action, branch_action_label(payload))
         return {
             "branch": branch.to_dict(),
             "action": result,

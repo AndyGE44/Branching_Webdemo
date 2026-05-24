@@ -427,6 +427,7 @@ function renderBranchCard(branch) {
       </div>
       <div class="branch-actions">
         <a class="icon-link" href="${escapeHtml(branch.url)}" target="_blank" rel="noreferrer">Open Branch</a>
+        <button class="primary" data-action="run-agent" data-id="${escapeHtml(branch.id)}" type="button">Run Email Agent</button>
         <button data-action="commit" data-id="${escapeHtml(branch.id)}" type="button">Commit</button>
         <button class="danger" data-action="discard" data-id="${escapeHtml(branch.id)}" type="button">Discard</button>
       </div>
@@ -649,6 +650,13 @@ branchesEl.addEventListener("click", async (event) => {
   const branchId = button.dataset.id;
   const action = button.dataset.action;
   try {
+    if (action === "run-agent") {
+      showResult("Running email agent...");
+      const data = await request(`/api/branches/${branchId}/run-agent-demo`, { method: "POST" });
+      showResult(`Email agent ran ${data.snapshots.length} steps`);
+      await refreshBranches();
+      return;
+    }
     if (action === "commit") {
       await request(`/api/branches/${branchId}/commit`, { method: "POST" });
       showResult("Branch committed");

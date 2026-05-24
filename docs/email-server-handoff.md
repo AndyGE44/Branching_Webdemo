@@ -67,8 +67,8 @@ Phase 1 changed the visible app from inventory to mailbox:
   - backend stats
   - base checkpoints
   - branches
-- The old `Run Agent` and `Diff` buttons are hidden from the Phase 1 UI because
-  they still call the legacy inventory agent plan.
+- The old `Diff` button is hidden from the UI because semantic email diff is
+  not implemented yet.
 - Tests were rewritten around mailbox seed data, password auth, base/branch
   lifecycle, and reset.
 - Local and VM checks passed.
@@ -92,9 +92,27 @@ The web UI now exposes simple user controls in `Message Detail`:
 - create a draft reply
 
 The StateFork/checkpoint branch lifecycle is intentionally still separate from
-these user controls. Branch cards remain focused on base checkpoints, branch
-creation, commit, and discard until the deterministic email agent plan replaces
-the legacy inventory agent path.
+direct user message controls. Branch cards expose base checkpoints, branch
+creation, `Run Email Agent`, commit, and discard.
+
+The branch-agent demo now runs a deterministic mailbox plan:
+
+```text
+1. Label "Invoice for April services" as finance.
+2. Move "Win a free prize today" to Spam.
+3. Draft a reply for "Urgent: shipment delay".
+4. Archive "Weekly CI report".
+```
+
+Each step creates a snapshot node:
+
+```text
+Base checkpoint
+-> label finance
+-> move spam
+-> draft reply
+-> archive report
+```
 
 ## Important Compatibility Detail
 
@@ -103,17 +121,15 @@ Some legacy inventory code is still intentionally present in
 
 Why it remains:
 
-- The branch backend's old deterministic agent path still uses legacy inventory
-  endpoints internally.
-- Phase 1 focused on changing the visible product model to mailbox state without
-  rewriting the entire branch agent/diff layer at the same time.
+- The raw diff implementation still reports legacy inventory-oriented deltas.
+- Some preserved inventory endpoints remain for backward compatibility while
+  the migration continues.
 
 Rule for new work:
 
 - Do not expose legacy inventory endpoints or inventory diffs in the UI.
-- Prefer replacing the legacy agent path with email actions instead of expanding
-  the inventory path.
-- Once the email agent path and semantic diff are implemented, remove or archive
+- Keep expanding the mailbox path instead of the inventory path.
+- Once semantic diff is implemented, remove or archive
   the legacy inventory endpoints.
 
 ## Key Files
@@ -124,7 +140,7 @@ Backend app:
 src/agent_safe_demo/main.py
 ```
 
-Branch backends and current legacy agent plan:
+Branch backends and current email agent plan:
 
 ```text
 src/agent_safe_demo/branching.py
@@ -158,8 +174,9 @@ docs/ubuntu-checkpoint-lite.md
 
 ## Recommended Next Development Step
 
-Continue Phase 2 by replacing the legacy branch-agent plan with deterministic
-email actions.
+Continue the demo improvement by adding non-DB runtime state to the email agent
+so StateFork/checkpoint-lite is visibly preserving and forking live service
+state, not just SQLite rows.
 
 Completed backend endpoints:
 
@@ -190,35 +207,14 @@ DraftRequest:
   created_by: str = "user"
 ```
 
-The next backend step should replace the legacy inventory agent plan with an
-email agent plan.
-
-The current legacy agent plan is in `src/agent_safe_demo/branching.py`:
+The current deterministic email agent plan is in
+`src/agent_safe_demo/branching.py`:
 
 ```text
-branch_action_path()
+branch_action_request()
 branch_action_label()
 AGENT_DEMO_ACTIONS
 run_agent_demo()
-```
-
-Target deterministic email agent plan:
-
-```text
-1. Label "Invoice for April services" as finance.
-2. Move "Win a free prize today" to Spam.
-3. Draft a reply for "Urgent: shipment delay".
-4. Archive "Weekly CI report".
-```
-
-Each step should still create a snapshot node, so the branch card can show:
-
-```text
-Base checkpoint
--> label finance
--> move spam
--> draft reply
--> archive report
 ```
 
 Main mailbox must remain unchanged until commit.
