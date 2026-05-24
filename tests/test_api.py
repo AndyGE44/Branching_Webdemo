@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 
 def load_app(monkeypatch, tmp_path, auth_password=None):
-    db_path = tmp_path / "toy_inventory.db"
+    db_path = tmp_path / "toy_mailbox.db"
     monkeypatch.setenv("TOY_INVENTORY_DB_PATH", str(db_path))
     monkeypatch.setenv("TOY_BRANCH_BACKEND", "local-copy")
     monkeypatch.delenv("TOY_INVENTORY_BRANCH_ID", raising=False)
@@ -18,22 +18,38 @@ def load_app(monkeypatch, tmp_path, auth_password=None):
     return module.app
 
 
-def test_inventory_seed_data(monkeypatch, tmp_path):
+def test_mailbox_seed_data(monkeypatch, tmp_path):
     app = load_app(monkeypatch, tmp_path)
     with TestClient(app) as client:
-        response = client.get("/api/inventory")
+        response = client.get("/api/mailbox")
 
     assert response.status_code == 200
-    items = response.json()["items"]
-    assert {item["id"] for item in items} >= {"MCU-100", "SENSOR-9", "MCU-ALT"}
+    mailbox = response.json()
+    messages = mailbox["messages"]
+    assert {message["id"] for message in messages} >= {"msg-1001", "msg-1002"}
+    assert mailbox["unread"] == 3
+    assert mailbox["drafts"] == 1
+    assert {"folder": "Inbox", "count": 4} in mailbox["folders"]
+
+
+def test_message_detail_includes_labels(monkeypatch, tmp_path):
+    app = load_app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        response = client.get("/api/messages/msg-1002")
+
+    assert response.status_code == 200
+    message = response.json()["message"]
+    assert message["subject"] == "Urgent: shipment delay"
+    assert message["is_read"] is False
+    assert set(message["labels"]) == {"customer", "urgent"}
 
 
 def test_demo_password_protects_main_app(monkeypatch, tmp_path):
     app = load_app(monkeypatch, tmp_path, auth_password="secret-demo-password")
     with TestClient(app) as client:
-        blocked = client.get("/api/inventory")
-        wrong_password = client.get("/api/inventory", auth=("demo", "wrong"))
-        allowed = client.get("/api/inventory", auth=("demo", "secret-demo-password"))
+        blocked = client.get("/api/mailbox")
+        wrong_password = client.get("/api/mailbox", auth=("demo", "wrong"))
+        allowed = client.get("/api/mailbox", auth=("demo", "secret-demo-password"))
 
     assert blocked.status_code == 401
     assert blocked.headers["www-authenticate"] == 'Basic realm="Agent-Safe Demo"'
@@ -41,52 +57,10 @@ def test_demo_password_protects_main_app(monkeypatch, tmp_path):
     assert allowed.status_code == 200
 
 
-def item_by_id(items, part_id):
-    return next(item for item in items if item["id"] == part_id)
-
-
-def test_inventory_actions_mutate_state(monkeypatch, tmp_path):
-    app = load_app(monkeypatch, tmp_path)
-    with TestClient(app) as client:
-        buy = client.post(
-            "/api/inventory/buy",
-            json={"part_id": "SENSOR-9", "quantity": 4, "actor": "user"},
-        )
-        assert buy.status_code == 200
-        assert buy.json()["part"]["on_hand"] == 6
-
-        sell = client.post(
-            "/api/inventory/sell",
-            json={"part_id": "SENSOR-9", "quantity": 3, "actor": "user"},
-        )
-        assert sell.status_code == 200
-        assert sell.json()["part"]["on_hand"] == 3
-
-        reserve = client.post(
-            "/api/reservations",
-            json={"part_id": "SENSOR-9", "quantity": 2, "actor": "user"},
-        )
-        assert reserve.status_code == 200
-
-        blocked_sell = client.post(
-            "/api/inventory/sell",
-            json={"part_id": "SENSOR-9", "quantity": 2, "actor": "user"},
-        )
-        assert blocked_sell.status_code == 409
-
-        state = client.get("/api/state").json()
-        sensor = item_by_id(state["inventory"], "SENSOR-9")
-
-    assert sensor["on_hand"] == 3
-    assert sensor["available"] == 1
-    assert len(state["reservations"]) == 1
-    assert len(state["audit_log"]) == 4
-
-
 def test_base_checkpoint_api_shapes_branch_creation(monkeypatch, tmp_path):
     app = load_app(monkeypatch, tmp_path)
     with TestClient(app) as client:
-        base_response = client.post("/api/bases", json={"label": "test-base"})
+        base_response = client.post("/api/bases", json={"label": "mailbox-base"})
         assert base_response.status_code == 200
         base = base_response.json()["base"]
 
@@ -98,11 +72,6 @@ def test_base_checkpoint_api_shapes_branch_creation(monkeypatch, tmp_path):
         assert branch_response.status_code == 200
         branch = branch_response.json()["branch"]
 
-        agent_response = client.post(f"/api/branches/{branch['id']}/run-agent-demo")
-        assert agent_response.status_code == 200
-        snapshots = agent_response.json()["snapshots"]
-        diff = agent_response.json()["diff"]
-
         branches = client.get("/api/branches")
         assert branches.status_code == 200
 
@@ -112,54 +81,26 @@ def test_base_checkpoint_api_shapes_branch_creation(monkeypatch, tmp_path):
         blocked_delete = client.delete(f"/api/bases/{base['id']}")
         assert blocked_delete.status_code == 400
 
-        client.post(f"/api/branches/{branch['id']}/discard")
+        discarded = client.post(f"/api/branches/{branch['id']}/discard")
+        assert discarded.status_code == 200
         deleted = client.delete(f"/api/bases/{base['id']}")
         assert deleted.status_code == 200
 
-    assert base["label"] == "test-base"
+    assert base["label"] == "mailbox-base"
     assert branch["base_id"] == base["id"]
     assert branch["base_checkpoint_id"] == base["checkpoint_id"]
     assert branches.json()["branches"][0]["base_id"] == base["id"]
-    assert [snapshot["action"] for snapshot in snapshots] == ["sell", "buy", "reserve"]
-    assert [snapshot["label"] for snapshot in snapshots] == [
-        "Sell 3 CASE-42",
-        "Buy 5 SENSOR-9",
-        "Reserve 2 MCU-100",
-    ]
-    assert snapshots[0]["parent_id"] == base["checkpoint_id"]
-    assert snapshots[1]["parent_id"] == snapshots[0]["id"]
-    assert snapshots[2]["parent_id"] == snapshots[1]["id"]
-    assert diff["inventory"] == [
-        {
-            "part_id": "CASE-42",
-            "on_hand_delta": -3,
-            "available_delta": -3,
-            "reserved_delta": 0,
-        },
-        {
-            "part_id": "MCU-100",
-            "on_hand_delta": 0,
-            "available_delta": -2,
-            "reserved_delta": 2,
-        },
-        {
-            "part_id": "SENSOR-9",
-            "on_hand_delta": 5,
-            "available_delta": 5,
-            "reserved_delta": 0,
-        },
-    ]
-    assert len(branches.json()["branches"][0]["snapshots"]) == 3
+    assert branches.json()["branches"][0]["snapshots"] == []
     backend_status = backend.json()
     assert backend_status["backend"] == "local-copy"
     assert backend_status["method"] == "file-copy"
-    assert backend_status["totals"] == {"bases": 1, "branches": 1, "snapshots": 3}
-    assert backend_status["operations"]["snapshot"]["count"] >= 4
+    assert backend_status["totals"] == {"bases": 1, "branches": 1, "snapshots": 0}
+    assert backend_status["operations"]["snapshot"]["count"] >= 1
     assert backend_status["operations"]["restore"]["count"] >= 1
     assert deleted.json()["status"] == "deleted"
 
 
-def test_reset_clears_bases_and_branches(monkeypatch, tmp_path):
+def test_reset_clears_bases_branches_and_mailbox_state(monkeypatch, tmp_path):
     app = load_app(monkeypatch, tmp_path)
     with TestClient(app) as client:
         base = client.post("/api/bases", json={"label": "reset-base"}).json()["base"]
@@ -182,5 +123,6 @@ def test_reset_clears_bases_and_branches(monkeypatch, tmp_path):
     assert backend.json()["totals"] == {"bases": 0, "branches": 0, "snapshots": 0}
     assert backend.json()["operations"]["snapshot"]["count"] == 0
     assert backend.json()["operations"]["restore"]["count"] == 0
-    assert len(state.json()["reservations"]) == 0
+    assert len(state.json()["messages"]) == 5
+    assert len(state.json()["drafts"]) == 1
     assert len(state.json()["audit_log"]) == 1

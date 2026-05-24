@@ -1,17 +1,17 @@
-const inventoryEl = document.querySelector("#inventory");
+const mailboxSummaryEl = document.querySelector("#mailboxSummary");
+const messageListEl = document.querySelector("#messageList");
+const messageDetailEl = document.querySelector("#messageDetail");
 const stateView = document.querySelector("#stateView");
 const resultPill = document.querySelector("#lastResult");
-const partSelect = document.querySelector("#partSelect");
-const quantityInput = document.querySelector("#quantityInput");
 const basesEl = document.querySelector("#bases");
 const baseLabelInput = document.querySelector("#baseLabelInput");
 const branchesEl = document.querySelector("#branches");
 const backendModeEl = document.querySelector("#backendMode");
 const backendStatsEl = document.querySelector("#backendStats");
 const snapshotModeEl = document.querySelector("#snapshotMode");
-const branchDiffs = {};
 let selectedBaseId = null;
 let baseCache = [];
+let selectedMessageId = null;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -74,43 +74,77 @@ function renderBackendStatus(status) {
   ].join("");
 }
 
-function renderInventory(items) {
-  inventoryEl.innerHTML = items
-    .map((item) => {
-      const low = item.available <= item.reorder_point ? "low" : "";
-      return `
-        <article class="item">
-          <div>
-            <h3>${item.id} · ${item.name}</h3>
-            <p>${item.location}</p>
-          </div>
-          <div class="metrics">
-            <div class="metric">
-              <strong>${item.on_hand}</strong>
-              <span>on hand</span>
-            </div>
-            <div class="metric ${low}">
-              <strong>${item.available}</strong>
-              <span>available</span>
-            </div>
-            <div class="metric">
-              <strong>${item.reserved}</strong>
-              <span>reserved</span>
-            </div>
-          </div>
-        </article>
-      `;
-    })
+function renderMailboxSummary(mailbox) {
+  const folderCards = mailbox.folders
+    .map((folder) => statCard(folder.folder, folder.count, "folder"))
     .join("");
+  mailboxSummaryEl.innerHTML = [
+    statCard("Unread", mailbox.unread, "needs review"),
+    statCard("Drafts", mailbox.drafts, "saved replies"),
+    folderCards,
+  ].join("");
+}
 
-  const currentPart = partSelect.value;
-  const options = items
-    .map((item) => `<option value="${item.id}">${item.id}</option>`)
-    .join("");
-  partSelect.innerHTML = options;
-  if (currentPart) {
-    partSelect.value = currentPart;
+function labelPills(labels) {
+  if (!labels.length) {
+    return `<span class="muted inline-muted">No labels</span>`;
   }
+  return labels.map((label) => `<span class="label-pill">${escapeHtml(label)}</span>`).join("");
+}
+
+function renderMessageList(messages) {
+  if (messages.length && !selectedMessageId) {
+    selectedMessageId = messages[0].id;
+  }
+  if (selectedMessageId && !messages.some((message) => message.id === selectedMessageId)) {
+    selectedMessageId = messages[0]?.id || null;
+  }
+
+  messageListEl.innerHTML = messages.length
+    ? messages
+        .map((message) => {
+          const selected = message.id === selectedMessageId ? "selected" : "";
+          const unread = message.is_read ? "" : "unread";
+          return `
+            <button class="message-row ${selected} ${unread}" data-message-id="${escapeHtml(message.id)}" type="button">
+              <div>
+                <strong>${escapeHtml(message.subject)}</strong>
+                <p>${escapeHtml(message.from_address)}</p>
+              </div>
+              <div class="message-meta">
+                ${badge(message.folder)}
+                ${badge(message.priority)}
+              </div>
+            </button>
+          `;
+        })
+        .join("")
+    : `<p class="empty">No messages yet.</p>`;
+}
+
+function renderMessageDetail(message) {
+  if (!message) {
+    messageDetailEl.innerHTML = `<p class="empty">Select a message.</p>`;
+    return;
+  }
+  messageDetailEl.innerHTML = `
+    <article>
+      <div class="message-detail-header">
+        <div>
+          <h3>${escapeHtml(message.subject)}</h3>
+          <p>From ${escapeHtml(message.from_address)}</p>
+          <p>To ${escapeHtml(message.to_address)}</p>
+        </div>
+        <div class="message-meta">
+          ${badge(message.folder)}
+          ${badge(message.priority)}
+          ${message.is_read ? badge("read") : badge("unread")}
+        </div>
+      </div>
+      <div class="label-row">${labelPills(message.labels)}</div>
+      <p class="message-body">${escapeHtml(message.body)}</p>
+    </article>
+  `;
 }
 
 function badge(value) {
@@ -124,14 +158,6 @@ function badge(value) {
     tone = "warn";
   }
   return `<span class="badge ${tone}">${safeValue}</span>`;
-}
-
-function selectedInventoryPayload() {
-  return {
-    part_id: partSelect.value,
-    quantity: Number(quantityInput.value),
-    actor: "user",
-  };
 }
 
 function emptyRow(columns, label = "No records yet") {
@@ -181,54 +207,44 @@ function renderTable(title, items, columns) {
 }
 
 function renderState(state) {
-  const totals = state.inventory.reduce(
-    (summary, item) => {
-      summary.onHand += item.on_hand;
-      summary.available += item.available;
-      summary.reserved += item.reserved;
-      if (item.available <= 0) {
-        summary.stockouts += 1;
-      }
-      return summary;
-    },
-    { onHand: 0, available: 0, reserved: 0, stockouts: 0 },
-  );
+  const folderCount = state.mailbox.folders.length;
+  const unreadCount = state.messages.filter((message) => !message.is_read).length;
 
   stateView.innerHTML = `
     <section class="state-summary">
       <div>
-        <strong>${totals.onHand}</strong>
-        <span>On hand</span>
+        <strong>${state.messages.length}</strong>
+        <span>Messages</span>
       </div>
       <div>
-        <strong>${totals.available}</strong>
-        <span>Available</span>
+        <strong>${unreadCount}</strong>
+        <span>Unread</span>
       </div>
       <div>
-        <strong>${totals.reserved}</strong>
-        <span>Reserved</span>
+        <strong>${folderCount}</strong>
+        <span>Folders</span>
       </div>
       <div>
-        <strong>${totals.stockouts}</strong>
-        <span>Stockouts</span>
+        <strong>${state.drafts.length}</strong>
+        <span>Drafts</span>
       </div>
     </section>
 
     <div class="state-grid">
-      ${renderTable("Inventory", state.inventory, [
-        { label: "Part", value: "id" },
-        { label: "Name", value: "name" },
-        { label: "On Hand", value: "on_hand" },
-        { label: "Available", value: "available" },
-        { label: "Reserved", value: "reserved" },
+      ${renderTable("Messages", state.messages, [
+        { label: "ID", value: "id" },
+        { label: "Folder", value: (row) => badge(row.folder), html: true },
+        { label: "Priority", value: (row) => badge(row.priority), html: true },
+        { label: "Subject", value: "subject" },
+        { label: "From", value: "from_address" },
       ])}
 
-      ${renderTable("Reservations", state.reservations, [
+      ${renderTable("Drafts", state.drafts, [
         { label: "ID", value: "id" },
-        { label: "Part", value: "part_id" },
-        { label: "Qty", value: "quantity" },
+        { label: "To", value: "to_address" },
+        { label: "Subject", value: "subject" },
         { label: "Status", value: (row) => badge(row.status), html: true },
-        { label: "Actor", value: "actor" },
+        { label: "Created By", value: "created_by" },
       ])}
     </div>
 
@@ -258,61 +274,6 @@ function renderState(state) {
         }
       </div>
     </section>
-  `;
-}
-
-function renderDiff(diff) {
-  if (!diff) {
-    return `<p class="empty">Run the agent to create a planned branch diff.</p>`;
-  }
-  const hasCountChanges = Object.values(diff.counts).some((count) => count.delta !== 0);
-  const hasInventoryChanges = diff.inventory.length > 0;
-  const summary = hasCountChanges || hasInventoryChanges
-    ? `Branch has changes relative to main.`
-    : `No branch changes relative to main.`;
-  const countRows = Object.entries(diff.counts)
-    .map(
-      ([name, count]) => `
-        <tr>
-          <td>${escapeHtml(name)}</td>
-          <td>${count.main}</td>
-          <td>${count.branch}</td>
-          <td>${count.delta > 0 ? "+" : ""}${count.delta}</td>
-        </tr>
-      `,
-    )
-    .join("");
-  const inventoryRows = diff.inventory.length
-    ? diff.inventory
-        .map(
-          (item) => `
-            <tr>
-              <td>${escapeHtml(item.part_id)}</td>
-              <td>${item.on_hand_delta > 0 ? "+" : ""}${item.on_hand_delta}</td>
-              <td>${item.available_delta > 0 ? "+" : ""}${item.available_delta}</td>
-              <td>${item.reserved_delta > 0 ? "+" : ""}${item.reserved_delta}</td>
-            </tr>
-          `,
-        )
-        .join("")
-    : emptyRow(4, "No inventory quantity changes");
-
-  return `
-    <p class="diff-summary">${summary}</p>
-    <div class="branch-diff">
-      <table>
-        <thead>
-          <tr><th>Table</th><th>Main</th><th>Branch</th><th>Delta</th></tr>
-        </thead>
-        <tbody>${countRows}</tbody>
-      </table>
-      <table>
-        <thead>
-          <tr><th>Part</th><th>On Hand Δ</th><th>Available Δ</th><th>Reserved Δ</th></tr>
-        </thead>
-        <tbody>${inventoryRows}</tbody>
-      </table>
-    </div>
   `;
 }
 
@@ -397,7 +358,7 @@ function renderBases(bases) {
     : `<p class="empty">No base checkpoints yet.</p>`;
 }
 
-function renderBranchCard(branch, diffs = {}) {
+function renderBranchCard(branch) {
   const checkpointDetails = branch.base_checkpoint_id
     ? `<p>from ${escapeHtml(branch.base_id)} · checkpoint ${escapeHtml(branch.base_checkpoint_id)}</p>`
     : `<p>${escapeHtml(branch.backend)} · port ${escapeHtml(branch.port)}</p>`;
@@ -413,18 +374,15 @@ function renderBranchCard(branch, diffs = {}) {
       </div>
       <div class="branch-actions">
         <a class="icon-link" href="${escapeHtml(branch.url)}" target="_blank" rel="noreferrer">Open Branch</a>
-        <button data-action="run-agent" data-id="${escapeHtml(branch.id)}" class="primary" type="button">Run Agent</button>
-        <button data-action="refresh-diff" data-id="${escapeHtml(branch.id)}" type="button">Diff</button>
         <button data-action="commit" data-id="${escapeHtml(branch.id)}" type="button">Commit</button>
         <button class="danger" data-action="discard" data-id="${escapeHtml(branch.id)}" type="button">Discard</button>
       </div>
       ${renderSnapshotTree(branch)}
-      ${renderDiff(diffs[branch.id])}
     </article>
   `;
 }
 
-function renderBranches(branches, diffs = {}) {
+function renderBranches(branches) {
   if (!branches.length) {
     branchesEl.innerHTML = `<p class="empty">No agent branches yet.</p>`;
     return;
@@ -446,7 +404,7 @@ function renderBranches(branches, diffs = {}) {
             <span>${group.length} branch${group.length === 1 ? "" : "es"}</span>
           </div>
           <div class="branch-group-list">
-            ${group.map((branch) => renderBranchCard(branch, diffs)).join("")}
+            ${group.map((branch) => renderBranchCard(branch)).join("")}
           </div>
         </section>
       `,
@@ -454,8 +412,7 @@ function renderBranches(branches, diffs = {}) {
     .join("");
 }
 
-async function refreshBranches(diffs = {}) {
-  Object.assign(branchDiffs, diffs);
+async function refreshBranches() {
   const [backendData, baseData, branchData] = await Promise.all([
     request("/api/backend"),
     request("/api/bases"),
@@ -464,22 +421,17 @@ async function refreshBranches(diffs = {}) {
   renderBackendStatus(backendData);
   baseCache = baseData.bases;
   renderBases(baseCache);
-
-  const liveBranchIds = new Set(branchData.branches.map((branch) => branch.id));
-  for (const branchId of Object.keys(branchDiffs)) {
-    if (!liveBranchIds.has(branchId)) {
-      delete branchDiffs[branchId];
-    }
-  }
-  renderBranches(branchData.branches, branchDiffs);
+  renderBranches(branchData.branches);
 }
 
 async function refresh() {
-  const [inventory, state] = await Promise.all([
-    request("/api/inventory"),
+  const [mailbox, state] = await Promise.all([
+    request("/api/mailbox"),
     request("/api/state"),
   ]);
-  renderInventory(inventory.items);
+  renderMailboxSummary(mailbox);
+  renderMessageList(mailbox.messages);
+  renderMessageDetail(mailbox.messages.find((message) => message.id === selectedMessageId));
   renderState(state);
   await refreshBranches();
 }
@@ -501,31 +453,13 @@ document.querySelector("#resetBtn").addEventListener("click", async () => {
   await mutate("Reset", () => request("/api/reset", { method: "POST" }));
 });
 
-document.querySelector("#buyBtn").addEventListener("click", async () => {
-  await mutate("Bought", () =>
-    request("/api/inventory/buy", {
-      method: "POST",
-      body: JSON.stringify(selectedInventoryPayload()),
-    }),
-  );
-});
-
-document.querySelector("#sellBtn").addEventListener("click", async () => {
-  await mutate("Sold", () =>
-    request("/api/inventory/sell", {
-      method: "POST",
-      body: JSON.stringify(selectedInventoryPayload()),
-    }),
-  );
-});
-
-document.querySelector("#reserveBtn").addEventListener("click", async () => {
-  await mutate("Reserved", () =>
-    request("/api/reservations", {
-      method: "POST",
-      body: JSON.stringify(selectedInventoryPayload()),
-    }),
-  );
+messageListEl.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-message-id]");
+  if (!button) {
+    return;
+  }
+  selectedMessageId = button.dataset.messageId;
+  refresh().catch((error) => showResult(error.message, false));
 });
 
 document.querySelector("#createBaseBtn").addEventListener("click", async () => {
@@ -586,21 +520,6 @@ branchesEl.addEventListener("click", async (event) => {
   const branchId = button.dataset.id;
   const action = button.dataset.action;
   try {
-    if (action === "run-agent") {
-      showResult("Agent running...");
-      const data = await request(`/api/branches/${branchId}/run-agent-demo`, {
-        method: "POST",
-      });
-      await refreshBranches({ [branchId]: data.diff });
-      showResult("Agent plan done");
-      return;
-    }
-    if (action === "refresh-diff") {
-      const diff = await request(`/api/branches/${branchId}/diff`);
-      await refreshBranches({ [branchId]: diff });
-      showResult("Diff refreshed");
-      return;
-    }
     if (action === "commit") {
       await request(`/api/branches/${branchId}/commit`, { method: "POST" });
       showResult("Branch committed");

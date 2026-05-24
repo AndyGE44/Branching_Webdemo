@@ -72,8 +72,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="Agent-Safe Toy Inventory",
-    description="A tiny inventory workflow for branching-state web service demos.",
+    title="Agent-Safe Toy Mailbox",
+    description="A tiny mailbox workflow for branching-state web service demos.",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -208,6 +208,54 @@ def inventory_item(conn: sqlite3.Connection, part_id: str) -> dict:
     return dict(row)
 
 
+def message_with_labels(conn: sqlite3.Connection, message_id: str) -> dict:
+    row = conn.execute(
+        """
+        SELECT
+            m.*,
+            COALESCE(GROUP_CONCAT(ml.label), '') AS labels
+        FROM messages m
+        LEFT JOIN message_labels ml ON ml.message_id = m.id
+        WHERE m.id = ?
+        GROUP BY m.id
+        """,
+        (message_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Unknown message: {message_id}")
+    message = dict(row)
+    message["labels"] = [label for label in message["labels"].split(",") if label]
+    message["is_read"] = bool(message["is_read"])
+    return message
+
+
+def message_rows(conn: sqlite3.Connection) -> list[dict]:
+    messages = rows(
+        conn.execute(
+            """
+            SELECT
+                m.*,
+                COALESCE(GROUP_CONCAT(ml.label), '') AS labels
+            FROM messages m
+            LEFT JOIN message_labels ml ON ml.message_id = m.id
+            GROUP BY m.id
+            ORDER BY
+                CASE m.priority
+                    WHEN 'urgent' THEN 0
+                    WHEN 'high' THEN 1
+                    WHEN 'normal' THEN 2
+                    ELSE 3
+                END,
+                m.created_at DESC
+            """
+        )
+    )
+    for message in messages:
+        message["labels"] = [label for label in message["labels"].split(",") if label]
+        message["is_read"] = bool(message["is_read"])
+    return messages
+
+
 def init_db() -> None:
     with db() as conn:
         conn.executescript(
@@ -230,6 +278,38 @@ def init_db() -> None:
                 FOREIGN KEY(part_id) REFERENCES parts(id)
             );
 
+            CREATE TABLE IF NOT EXISTS messages (
+                id TEXT PRIMARY KEY,
+                from_address TEXT NOT NULL,
+                to_address TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                body TEXT NOT NULL,
+                folder TEXT NOT NULL,
+                is_read INTEGER NOT NULL CHECK(is_read IN (0, 1)),
+                priority TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS message_labels (
+                message_id TEXT NOT NULL,
+                label TEXT NOT NULL,
+                PRIMARY KEY(message_id, label),
+                FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS drafts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_message_id TEXT,
+                to_address TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                body TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(source_message_id) REFERENCES messages(id)
+            );
+
             CREATE TABLE IF NOT EXISTS audit_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 actor TEXT NOT NULL,
@@ -240,24 +320,108 @@ def init_db() -> None:
             """
         )
 
-        count = conn.execute("SELECT COUNT(*) AS count FROM parts").fetchone()["count"]
-        if count:
-            return
+        part_count = conn.execute("SELECT COUNT(*) AS count FROM parts").fetchone()["count"]
+        if not part_count:
+            conn.executemany(
+                """
+                INSERT INTO parts(id, name, location, on_hand, reorder_point)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    ("MCU-100", "Control board", "Aisle 1 / Bin 02", 8, 4),
+                    ("MCU-ALT", "Backup control board", "Aisle 1 / Bin 08", 4, 2),
+                    ("SENSOR-9", "Temperature sensor", "Aisle 3 / Bin 11", 2, 5),
+                    ("CASE-42", "Aluminum enclosure", "Aisle 4 / Bin 01", 12, 4),
+                    ("WIRE-RED", "Red harness wire", "Aisle 2 / Bin 05", 50, 10),
+                ],
+            )
 
-        conn.executemany(
-            """
-            INSERT INTO parts(id, name, location, on_hand, reorder_point)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            [
-                ("MCU-100", "Control board", "Aisle 1 / Bin 02", 8, 4),
-                ("MCU-ALT", "Backup control board", "Aisle 1 / Bin 08", 4, 2),
-                ("SENSOR-9", "Temperature sensor", "Aisle 3 / Bin 11", 2, 5),
-                ("CASE-42", "Aluminum enclosure", "Aisle 4 / Bin 01", 12, 4),
-                ("WIRE-RED", "Red harness wire", "Aisle 2 / Bin 05", 50, 10),
-            ],
-        )
-        audit(conn, "system", "seed", "Loaded sample inventory data")
+        message_count = conn.execute("SELECT COUNT(*) AS count FROM messages").fetchone()["count"]
+        if not message_count:
+            conn.executemany(
+                """
+                INSERT INTO messages(
+                    id, from_address, to_address, subject, body, folder, is_read, priority
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        "msg-1001",
+                        "billing@northwind.example",
+                        "ops@example.com",
+                        "Invoice for April services",
+                        "Attached is the April service invoice. Please confirm receipt.",
+                        "Inbox",
+                        0,
+                        "high",
+                    ),
+                    (
+                        "msg-1002",
+                        "customer@acme.example",
+                        "support@example.com",
+                        "Urgent: shipment delay",
+                        "Our replacement sensors have not arrived. Can you send an updated ETA?",
+                        "Inbox",
+                        0,
+                        "urgent",
+                    ),
+                    (
+                        "msg-1003",
+                        "prizes@promo.example",
+                        "ops@example.com",
+                        "Win a free prize today",
+                        "Click this suspicious link to claim an unrealistic prize.",
+                        "Inbox",
+                        0,
+                        "low",
+                    ),
+                    (
+                        "msg-1004",
+                        "ci@example.com",
+                        "dev@example.com",
+                        "Weekly CI report",
+                        "All scheduled builds passed. One flaky integration test was retried.",
+                        "Inbox",
+                        1,
+                        "normal",
+                    ),
+                    (
+                        "msg-1005",
+                        "teammate@example.com",
+                        "ops@example.com",
+                        "Re: launch checklist",
+                        "I archived the old checklist and left comments on the new one.",
+                        "Archive",
+                        1,
+                        "normal",
+                    ),
+                ],
+            )
+            conn.executemany(
+                "INSERT INTO message_labels(message_id, label) VALUES (?, ?)",
+                [
+                    ("msg-1001", "billing"),
+                    ("msg-1002", "customer"),
+                    ("msg-1002", "urgent"),
+                    ("msg-1004", "engineering"),
+                ],
+            )
+            conn.execute(
+                """
+                INSERT INTO drafts(source_message_id, to_address, subject, body, status, created_by)
+                VALUES (?, ?, ?, ?, 'draft', 'user')
+                """,
+                (
+                    "msg-1005",
+                    "teammate@example.com",
+                    "Re: launch checklist",
+                    "Thanks. I will review the new checklist before the next demo.",
+                ),
+            )
+
+        if not conn.execute("SELECT COUNT(*) AS count FROM audit_log").fetchone()["count"]:
+            audit(conn, "system", "seed", "Loaded sample mailbox data")
 
 
 @app.get("/")
@@ -287,6 +451,55 @@ def inventory() -> dict:
             )
         )
     return {"items": items}
+
+
+@app.get("/api/mailbox")
+def mailbox() -> dict:
+    with db() as conn:
+        folders = rows(
+            conn.execute(
+                """
+                SELECT folder, COUNT(*) AS count
+                FROM messages
+                GROUP BY folder
+                ORDER BY folder
+                """
+            )
+        )
+        labels = rows(
+            conn.execute(
+                """
+                SELECT label, COUNT(*) AS count
+                FROM message_labels
+                GROUP BY label
+                ORDER BY label
+                """
+            )
+        )
+        unread = conn.execute(
+            "SELECT COUNT(*) AS count FROM messages WHERE is_read = 0"
+        ).fetchone()["count"]
+        drafts_count = conn.execute("SELECT COUNT(*) AS count FROM drafts").fetchone()["count"]
+        messages = message_rows(conn)
+    return {
+        "folders": folders,
+        "labels": labels,
+        "unread": unread,
+        "drafts": drafts_count,
+        "messages": messages,
+    }
+
+
+@app.get("/api/messages")
+def messages() -> dict:
+    with db() as conn:
+        return {"messages": message_rows(conn)}
+
+
+@app.get("/api/messages/{message_id}")
+def message_detail(message_id: str) -> dict:
+    with db() as conn:
+        return {"message": message_with_labels(conn, message_id)}
 
 
 @app.post("/api/inventory/buy")
@@ -371,6 +584,30 @@ def state() -> dict:
                 "branch_id": BRANCH_ID,
                 "db_path": str(DB_PATH),
             },
+            "mailbox": {
+                "folders": rows(
+                    conn.execute(
+                        """
+                        SELECT folder, COUNT(*) AS count
+                        FROM messages
+                        GROUP BY folder
+                        ORDER BY folder
+                        """
+                    )
+                ),
+                "labels": rows(
+                    conn.execute(
+                        """
+                        SELECT label, COUNT(*) AS count
+                        FROM message_labels
+                        GROUP BY label
+                        ORDER BY label
+                        """
+                    )
+                ),
+            },
+            "messages": message_rows(conn),
+            "drafts": rows(conn.execute("SELECT * FROM drafts ORDER BY id DESC")),
             "inventory": rows(
                 conn.execute(
                     """

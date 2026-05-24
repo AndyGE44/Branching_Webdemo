@@ -3,14 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Agent-Safe Toy Inventory</title>
-    <link rel="stylesheet" href="/static/styles.css?v=8" />
+    <title>Agent-Safe Toy Mailbox</title>
+    <link rel="stylesheet" href="/static/styles.css?v=9" />
   </head>
   <body>
     <header class="topbar">
       <div>
-        <h1>Agent-Safe Toy Inventory</h1>
-        <p>Buy, sell, reserve, branch, diff, commit, or discard inventory state.</p>
+        <h1>Agent-Safe Toy Mailbox</h1>
+        <p>Review mailbox state, create safe branches, and inspect branch state.</p>
       </div>
       <div class="actions">
         <span id="backendMode" class="backend-pill">Backend...</span>
@@ -20,36 +20,21 @@
     </header>
 
     <main class="layout">
-      <section class="panel inventory-panel">
+      <section class="panel mailbox-panel">
         <div class="panel-header">
-          <h2>Inventory</h2>
+          <h2>Mailbox</h2>
           <button id="refreshBtn" type="button">Refresh</button>
         </div>
-        <div id="inventory" class="inventory-grid"></div>
+        <div id="mailboxSummary" class="mailbox-summary"></div>
+        <div id="messageList" class="message-list"></div>
       </section>
 
-      <section class="panel workflow-panel">
+      <section class="panel message-panel">
         <div class="panel-header">
-          <h2>Inventory Actions</h2>
+          <h2>Message Detail</h2>
           <span id="lastResult" class="result-pill">Ready</span>
         </div>
-
-        <div class="form-grid">
-          <label>
-            Part
-            <select id="partSelect"></select>
-          </label>
-          <label>
-            Quantity
-            <input id="quantityInput" type="number" min="1" value="3" />
-          </label>
-        </div>
-
-        <div class="button-row">
-          <button id="buyBtn" class="primary" type="button">Buy</button>
-          <button id="sellBtn" type="button">Sell</button>
-          <button id="reserveBtn" type="button">Reserve Stock</button>
-        </div>
+        <div id="messageDetail" class="message-detail"></div>
       </section>
 
       <section class="panel status-panel">
@@ -98,6 +83,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=8"></script>
+    <script src="/static/app.js?v=9"></script>
   </body>
 </html>

@@ -1,11 +1,16 @@
-# Agent-Safe Toy Inventory
+# Agent-Safe Toy Mailbox
 
 A FastAPI web demo for showing how StateFork and checkpoint-lite can give a
-normal web service an agent-safe branch workflow:
+normal email-style web service an agent-safe branch workflow:
 
 ```text
-main state -> create StateFork branch -> agent explores -> diff -> discard/commit
+main mailbox state -> create StateFork base -> create branch -> discard/commit
 ```
+
+This branch is Phase 1 of the email server migration. The UI now uses mailbox,
+message, label, and draft primitives. The StateFork/checkpoint-lite branch
+lifecycle is still intact, while email-specific agent actions and semantic diff
+will land in later phases.
 
 The preferred demo path is the shared Ubuntu VM with `StateForkBackend`
 enabled. StateFork uses its controller API to call snapshot, restore,
@@ -48,8 +53,8 @@ TOY_DEMO_AUTH_PASSWORD=<shared-demo-password>
 
 `TOY_DEMO_AUTH_USER` defaults to `demo`. The password protects the main app
 with HTTP Basic Auth. Branch apps are still internal VM-only processes on
-`127.0.0.1:8300+`, so the main app can continue to run agent actions against
-them.
+`127.0.0.1:8300+`, so the main app can manage branch environments without
+opening those branch ports publicly.
 
 ### 2. Install `cloudflared` If Needed
 
@@ -199,7 +204,7 @@ http://127.0.0.1:18000
 Try this flow:
 
 ```text
-Create Agent Branch -> Run Agent -> Diff -> Commit or Discard
+Create Base -> Create Branch -> Open Branch -> Commit or Discard
 ```
 
 The header should show `statefork / statefork:ckpt_build`. The
@@ -263,7 +268,8 @@ cd ~/Web_Demo_For_Checkpointlite
 python scripts/smoke-test.py
 ```
 
-Expected result:
+This smoke test still covers the legacy inventory agent path that will be
+replaced by the email agent flow in a later phase. Expected result:
 
 ```text
 CASE-42 on_hand delta: -3
@@ -446,17 +452,9 @@ sudo -E .venv/bin/uvicorn agent_safe_demo.main:app --host 127.0.0.1 --port 8000
 ```
 
 `StateForkBackend` currently calls StateFork's `snapshot`, `restore`,
-`create_env_from_snapshot`, and `cleanup` methods. During `Run Agent`, it runs
-a small planned inventory script in the branch, takes a new StateFork snapshot
-after each step, and returns those nodes to the UI as a small tree under the
-branch card:
-
-```text
-base checkpoint
-└── sell 3 CASE-42
-    └── buy 5 SENSOR-9
-        └── reserve 2 MCU-100
-```
+`create_env_from_snapshot`, and `cleanup` methods. The current Phase 1 mailbox
+UI shows base checkpoints and branch environments. The legacy inventory agent
+endpoint still exists internally while the email agent flow is being migrated.
 
 Target lifecycle:
 
@@ -465,8 +463,7 @@ create base   -> StateFork snapshot
 create branch -> StateFork restore <base-id>
               -> StateFork create_env_from_snapshot <base-id>
               -> start branch app URL in the forked environment
-run agent     -> planned HTTP Sell/Buy/Reserve calls against branch URL
-              -> create step snapshots after each agent action
+run agent     -> legacy inventory endpoint; email agent flow coming later
 status        -> /api/backend reports statefork:<method> and snapshot/restore stats
 discard       -> terminate branch app and cleanup StateFork environment
 commit        -> promote branch state to main
@@ -506,8 +503,7 @@ Direct checkpoint-lite lifecycle:
 create base   -> checkpoint-lite init -> checkpoint-lite create <base-id>
 create branch -> checkpoint-lite restore <base-id>
               -> start branch app URL in a restored layer
-run agent     -> planned HTTP Sell/Buy/Reserve calls against branch URL
-              -> create step snapshots after each agent action
+run agent     -> legacy inventory endpoint; email agent flow coming later
 status        -> /api/backend reports checkpoint-lite-cli and snapshot/restore stats
 discard       -> checkpoint-lite cleanup branch state
 commit        -> promote branch state to main
@@ -538,10 +534,9 @@ dist/
 
 ## Useful Endpoints
 
-- `GET /api/inventory`
-- `POST /api/inventory/buy`
-- `POST /api/inventory/sell`
-- `POST /api/reservations`
+- `GET /api/mailbox`
+- `GET /api/messages`
+- `GET /api/messages/{message_id}`
 - `GET /api/state`
 - `POST /api/reset` clears active branches, base checkpoints, backend sessions,
   and recreates the main toy database
@@ -552,10 +547,11 @@ dist/
 - `POST /api/bases/{base_id}/branches`
 - `GET /api/branches`
 - `POST /api/branches`
-- `POST /api/branches/{branch_id}/run-agent-demo`
-- `GET /api/branches/{branch_id}/diff`
 - `POST /api/branches/{branch_id}/commit`
 - `POST /api/branches/{branch_id}/discard`
+
+Legacy inventory endpoints and the old demo-agent diff endpoint still exist for
+compatibility while the email agent implementation is being built.
 
 The generated OpenAPI docs are available at `/docs`.
 
