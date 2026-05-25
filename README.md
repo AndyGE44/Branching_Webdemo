@@ -87,11 +87,22 @@ curl -u demo:<shared-demo-password> http://127.0.0.1:8000/api/backend
 
 ```bash
 tmux new -d -s cf-main './scripts/run-cloudflare-quick-tunnel.sh'
-tmux capture-pane -pt cf-main -S -80
+sleep 8
+tmux capture-pane -pt cf-main -S -120
 ```
 
 Copy the printed `https://...trycloudflare.com` URL and share it with the demo
 username and password.
+
+If the URL is not visible yet, run the capture command again after a few
+seconds. You can also attach to the tunnel session and watch the logs live:
+
+```bash
+tmux attach -t cf-main
+```
+
+After you see the URL, detach without stopping the tunnel by pressing
+`Ctrl-b`, then `d`.
 
 ### 5. Stop Public Access
 
