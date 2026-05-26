@@ -452,12 +452,16 @@ sudo -E .venv/bin/uvicorn agent_safe_demo.main:app --host 127.0.0.1 --port 8000
 
 `StateForkBackend` currently calls StateFork's `snapshot`, `restore`,
 `create_env_from_snapshot`, and `cleanup` methods. The current Phase 1 mailbox
-UI shows base checkpoints and branch environments. The legacy inventory agent
-endpoint still exists internally while the email agent flow is being migrated.
+UI shows base checkpoints, branch environments, and the deterministic email
+agent flow.
 
 StateFork is intentionally treated as a single-active-branch backend in this
 prototype. The app rejects a second running StateFork branch until the existing
 branch is committed or discarded.
+
+Commit also checks that the main mailbox still matches the branch's base
+checkpoint. If a user changes the main mailbox after creating the base, the app
+rejects commit and asks you to discard the stale branch or create a new base.
 
 Target lifecycle:
 
@@ -466,10 +470,10 @@ create base   -> StateFork snapshot
 create branch -> StateFork restore <base-id>
               -> StateFork create_env_from_snapshot <base-id>
               -> start branch app URL in the forked environment
-run agent     -> legacy inventory endpoint; email agent flow coming later
+run agent     -> deterministic email agent actions inside the branch
 status        -> /api/backend reports statefork:<method> and snapshot/restore stats
 discard       -> terminate branch app and cleanup StateFork environment
-commit        -> promote branch state to main
+commit        -> promote branch state to main only if main still matches the base
 reset         -> delete active branches, bases, sessions, and reset main DB
 ```
 
@@ -509,10 +513,10 @@ Direct checkpoint-lite lifecycle:
 create base   -> checkpoint-lite init -> checkpoint-lite create <base-id>
 create branch -> checkpoint-lite restore <base-id>
               -> start branch app URL in a restored layer
-run agent     -> legacy inventory endpoint; email agent flow coming later
+run agent     -> deterministic email agent actions inside the branch
 status        -> /api/backend reports checkpoint-lite-cli and snapshot/restore stats
 discard       -> checkpoint-lite cleanup branch state
-commit        -> promote branch state to main
+commit        -> promote branch state to main only if main still matches the base
 reset         -> delete active branches, bases, sessions, and reset main DB
 ```
 

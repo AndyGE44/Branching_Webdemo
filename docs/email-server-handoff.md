@@ -217,7 +217,9 @@ AGENT_DEMO_ACTIONS
 run_agent_demo()
 ```
 
-Main mailbox must remain unchanged until commit.
+Main mailbox must remain unchanged until commit. The backend now checks this:
+if main changed after the branch base was created, commit is rejected instead
+of silently promoting a stale branch.
 
 ## Later Phase: Semantic Diff
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import socket
@@ -18,6 +19,34 @@ from urllib.error import HTTPError, URLError
 
 class BranchError(RuntimeError):
     pass
+
+
+def sqlite_fingerprint(db_path: Path) -> str:
+    hasher = hashlib.sha256()
+    with sqlite3.connect(db_path) as conn:
+        for line in conn.iterdump():
+            hasher.update(line.encode("utf-8"))
+            hasher.update(b"\n")
+    return hasher.hexdigest()
+
+
+def ensure_main_matches_branch_base(
+    *,
+    main_db_path: Path,
+    bases: dict[str, "BaseHandle"],
+    branch: "BranchHandle",
+) -> None:
+    if not branch.base_id:
+        return
+    base = bases.get(branch.base_id)
+    if base is None or base.main_fingerprint is None:
+        return
+    current_fingerprint = sqlite_fingerprint(main_db_path)
+    if current_fingerprint != base.main_fingerprint:
+        raise BranchError(
+            "Main state changed after this branch base was created. "
+            "Discard this branch or create a new base before committing."
+        )
 
 
 def pythonpath_for(root: Path) -> str:
@@ -170,6 +199,7 @@ class BaseHandle:
     db_path: Path | None = None
     work_dir: Path | None = None
     status: str = "ready"
+    main_fingerprint: str | None = None
     created_at: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict[str, Any]:
@@ -182,6 +212,7 @@ class BaseHandle:
             "db_path": str(self.db_path) if self.db_path else None,
             "work_dir": str(self.work_dir) if self.work_dir else None,
             "status": self.status,
+            "main_fingerprint": self.main_fingerprint,
             "created_at": self.created_at,
         }
 
@@ -299,6 +330,7 @@ class LocalCopyBackend:
             checkpoint_id=base_id,
             db_path=base_db,
             work_dir=base_dir,
+            main_fingerprint=sqlite_fingerprint(self.main_db_path),
         )
         self.bases[base_id] = base
         return base.to_dict()
@@ -428,6 +460,11 @@ class LocalCopyBackend:
 
     def commit(self, branch_id: str) -> dict[str, Any]:
         branch = self._require_branch(branch_id)
+        ensure_main_matches_branch_base(
+            main_db_path=self.main_db_path,
+            bases=self.bases,
+            branch=branch,
+        )
         self._backup_sqlite(branch.db_path, self.main_db_path)
         branch.status = "committed"
         self._terminate(branch)
@@ -678,6 +715,7 @@ class CheckpointLiteBackend:
             session_id=session_id,
             db_path=Path(work_dir) / self.main_db_path.name,
             work_dir=Path(work_dir),
+            main_fingerprint=sqlite_fingerprint(self.main_db_path),
         )
         self.bases[base_id] = base
         return base.to_dict()
@@ -836,6 +874,11 @@ class CheckpointLiteBackend:
 
     def commit(self, branch_id: str) -> dict[str, Any]:
         branch = self._require_branch(branch_id)
+        ensure_main_matches_branch_base(
+            main_db_path=self.main_db_path,
+            bases=self.bases,
+            branch=branch,
+        )
         self._backup_sqlite(branch.db_path, self.main_db_path)
         branch.status = "committed"
         self._terminate(branch)
@@ -1176,6 +1219,7 @@ class StateForkBackend(CheckpointLiteBackend):
             session_id=getattr(manager, "current_snapshot", snapshot_id),
             db_path=work_dir / self.main_db_path.name,
             work_dir=work_dir,
+            main_fingerprint=sqlite_fingerprint(self.main_db_path),
         )
         self.bases[base_id] = base
         self.base_managers[base_id] = manager

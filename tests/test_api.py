@@ -239,6 +239,62 @@ def test_branch_agent_demo_runs_email_plan_without_changing_main(monkeypatch, tm
     assert len(main_state["drafts"]) == 1
 
 
+def test_commit_promotes_branch_when_main_still_matches_base(monkeypatch, tmp_path):
+    app = load_app(monkeypatch, tmp_path)
+    branch = None
+    with TestClient(app) as client:
+        base = client.post("/api/bases", json={"label": "commit-base"}).json()["base"]
+        branch = client.post(f"/api/bases/{base['id']}/branches").json()["branch"]
+        agent = client.post(f"/api/branches/{branch['id']}/run-agent-demo")
+        commit = client.post(f"/api/branches/{branch['id']}/commit")
+        main_state = client.get("/api/state").json()
+        branches = client.get("/api/branches").json()["branches"]
+
+    assert agent.status_code == 200
+    assert commit.status_code == 200
+    assert commit.json()["status"] == "committed"
+    assert branches == []
+
+    main_messages = {message["id"]: message for message in main_state["messages"]}
+    assert "finance" in main_messages["msg-1001"]["labels"]
+    assert main_messages["msg-1003"]["folder"] == "Spam"
+    assert main_messages["msg-1004"]["folder"] == "Archive"
+    assert any(
+        draft["source_message_id"] == "msg-1002" and draft["created_by"] == "agent"
+        for draft in main_state["drafts"]
+    )
+
+
+def test_commit_rejects_branch_when_main_changed_after_base(monkeypatch, tmp_path):
+    app = load_app(monkeypatch, tmp_path)
+    branch = None
+    with TestClient(app) as client:
+        base = client.post("/api/bases", json={"label": "stale-base"}).json()["base"]
+        branch = client.post(f"/api/bases/{base['id']}/branches").json()["branch"]
+
+        user_change = client.post(
+            "/api/messages/msg-1001/label",
+            json={"label": "user-work", "actor": "user"},
+        )
+        agent = client.post(f"/api/branches/{branch['id']}/run-agent-demo")
+        commit = client.post(f"/api/branches/{branch['id']}/commit")
+        main_state = client.get("/api/state").json()
+        branches = client.get("/api/branches").json()["branches"]
+        client.post(f"/api/branches/{branch['id']}/discard")
+
+    assert user_change.status_code == 200
+    assert agent.status_code == 200
+    assert commit.status_code == 400
+    assert "Main state changed after this branch base was created" in commit.json()["detail"]
+    assert [active["id"] for active in branches] == [branch["id"]]
+
+    main_messages = {message["id"]: message for message in main_state["messages"]}
+    assert "user-work" in main_messages["msg-1001"]["labels"]
+    assert "finance" not in main_messages["msg-1001"]["labels"]
+    assert main_messages["msg-1003"]["folder"] == "Inbox"
+    assert main_messages["msg-1004"]["folder"] == "Inbox"
+
+
 @pytest.mark.parametrize(
     ("backend_cls", "backend_name"),
     [
