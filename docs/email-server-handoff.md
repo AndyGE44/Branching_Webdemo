@@ -95,7 +95,8 @@ The web UI now exposes simple user controls in `Message Detail`:
 
 The StateFork/checkpoint branch lifecycle is intentionally still separate from
 direct user message controls. Branch cards expose base checkpoints, branch
-creation, `Run Email Agent`, commit, and discard.
+creation, `Run Email Agent`, manual `Save Snapshot`, per-snapshot `Restore`,
+commit, and discard.
 
 The branch-agent demo now runs a deterministic mailbox plan:
 
@@ -107,16 +108,17 @@ The branch-agent demo now runs a deterministic mailbox plan:
 5. Archive "Weekly CI report".
 ```
 
-Each step creates a snapshot node:
+Agent steps now mark the branch as unsaved/dirty. They no longer create
+automatic snapshot nodes. Users explicitly save checkpoint nodes:
 
 ```text
 Base checkpoint
--> label finance
--> move spam
--> draft reply
--> receive escalation
--> archive report
+-> before agent
+-> after agent
 ```
+
+Restoring a snapshot checks dirty state first. If the branch has unsaved
+changes, the UI asks whether to save a snapshot, discard the changes, or cancel.
 
 ## Important Compatibility Detail
 
@@ -189,7 +191,11 @@ POST /api/messages/{message_id}/label
 POST /api/messages/{message_id}/move
 POST /api/messages/{message_id}/archive
 POST /api/messages/{message_id}/read
+POST /api/messages
 POST /api/drafts
+GET /api/branches/{branch_id}/dirty
+POST /api/branches/{branch_id}/snapshots
+POST /api/branches/{branch_id}/restore
 ```
 
 Recommended request models:

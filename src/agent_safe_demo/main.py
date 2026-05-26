@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from agent_safe_demo.branching import (
     BranchError,
     CheckpointLiteBackend,
+    DirtyBranchError,
     LocalCopyBackend,
     StateForkBackend,
 )
@@ -176,6 +177,15 @@ class DraftRequest(BaseModel):
 
 class BaseCheckpointRequest(BaseModel):
     label: str | None = Field(default=None, max_length=80)
+
+
+class BranchSnapshotRequest(BaseModel):
+    label: str | None = Field(default=None, max_length=80)
+
+
+class BranchRestoreRequest(BaseModel):
+    snapshot_id: str
+    force: bool = False
 
 
 @contextmanager
@@ -902,6 +912,8 @@ def reset() -> dict:
 
 
 def branch_error(error: BranchError) -> HTTPException:
+    if isinstance(error, DirtyBranchError):
+        return HTTPException(status_code=409, detail=str(error))
     return HTTPException(status_code=400, detail=str(error))
 
 
@@ -957,6 +969,38 @@ def create_branch() -> dict:
 def run_branch_agent_demo(branch_id: str) -> dict:
     try:
         return branch_backend.run_agent_demo(branch_id)
+    except BranchError as error:
+        raise branch_error(error) from error
+
+
+@app.get("/api/branches/{branch_id}/dirty")
+def branch_dirty(branch_id: str) -> dict:
+    try:
+        return branch_backend.dirty(branch_id)
+    except BranchError as error:
+        raise branch_error(error) from error
+
+
+@app.post("/api/branches/{branch_id}/snapshots")
+def save_branch_snapshot(
+    branch_id: str,
+    payload: BranchSnapshotRequest | None = None,
+) -> dict:
+    try:
+        label = payload.label if payload else None
+        return branch_backend.save_snapshot(branch_id, label=label)
+    except BranchError as error:
+        raise branch_error(error) from error
+
+
+@app.post("/api/branches/{branch_id}/restore")
+def restore_branch_snapshot(branch_id: str, payload: BranchRestoreRequest) -> dict:
+    try:
+        return branch_backend.restore_snapshot(
+            branch_id,
+            snapshot_id=payload.snapshot_id,
+            force=payload.force,
+        )
     except BranchError as error:
         raise branch_error(error) from error
 

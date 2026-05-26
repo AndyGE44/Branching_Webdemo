@@ -703,6 +703,14 @@ tr:last-child td {
   flex-wrap: wrap;
 }
 
+.snapshot-save-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 320px) auto;
+  gap: 10px;
+  align-items: end;
+  justify-content: start;
+}
+
 .branch-group {
   display: grid;
   gap: 10px;
@@ -789,6 +797,13 @@ tr:last-child td {
   overflow-wrap: anywhere;
 }
 
+.snapshot-tree button {
+  min-height: 30px;
+  margin-top: 7px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
 .snapshot-empty {
   color: var(--muted);
 }
@@ -807,6 +822,7 @@ tr:last-child td {
   .base-card-main,
   .branch-card-main,
   .draft-preview-header,
+  .snapshot-save-row,
   .draft-form-row {
     grid-template-columns: 1fr;
   }

@@ -246,14 +246,8 @@ def test_branch_agent_demo_runs_email_plan_without_changing_main(monkeypatch, tm
 
     assert agent.status_code == 200
     payload = agent.json()
-    assert [snapshot["label"] for snapshot in payload["snapshots"]] == [
-        "label finance",
-        "move spam",
-        "draft reply",
-        "receive escalation",
-        "archive report",
-    ]
-    assert payload["branch"]["snapshots"][-1]["parent_id"] == payload["snapshots"][-2]["id"]
+    assert payload["snapshots"] == []
+    assert payload["branch"]["dirty"] is True
 
     branch_messages = {message["id"]: message for message in branch_state["messages"]}
     assert "finance" in branch_messages["msg-1001"]["labels"]
@@ -274,6 +268,48 @@ def test_branch_agent_demo_runs_email_plan_without_changing_main(monkeypatch, tm
     assert main_messages["msg-1004"]["folder"] == "Inbox"
     assert "msg-agent-2001" not in main_messages
     assert len(main_state["drafts"]) == 1
+
+
+def test_manual_snapshot_restore_requires_dirty_choice(monkeypatch, tmp_path):
+    app = load_app(monkeypatch, tmp_path)
+    branch = None
+    with TestClient(app) as client:
+        base = client.post("/api/bases", json={"label": "restore-base"}).json()["base"]
+        branch = client.post(f"/api/bases/{base['id']}/branches").json()["branch"]
+        try:
+            clean_snapshot = client.post(
+                f"/api/branches/{branch['id']}/snapshots",
+                json={"label": "clean mailbox"},
+            ).json()["snapshot"]
+            agent = client.post(f"/api/branches/{branch['id']}/run-agent-demo")
+            dirty = client.get(f"/api/branches/{branch['id']}/dirty")
+            blocked_restore = client.post(
+                f"/api/branches/{branch['id']}/restore",
+                json={"snapshot_id": clean_snapshot["id"]},
+            )
+            restored = client.post(
+                f"/api/branches/{branch['id']}/restore",
+                json={"snapshot_id": clean_snapshot["id"], "force": True},
+            )
+            branch_state = get_json(f"{branch['url']}/api/state")
+            backend = client.get("/api/backend").json()
+        finally:
+            client.post(f"/api/branches/{branch['id']}/discard")
+
+    assert agent.status_code == 200
+    assert dirty.json()["dirty"] is True
+    assert blocked_restore.status_code == 409
+    assert restored.status_code == 200
+    assert restored.json()["branch"]["dirty"] is False
+    assert restored.json()["branch"]["current_snapshot_id"] == clean_snapshot["id"]
+    assert backend["totals"]["snapshots"] == 1
+
+    branch_messages = {message["id"]: message for message in branch_state["messages"]}
+    assert "finance" not in branch_messages["msg-1001"]["labels"]
+    assert branch_messages["msg-1003"]["folder"] == "Inbox"
+    assert branch_messages["msg-1004"]["folder"] == "Inbox"
+    assert "msg-agent-2001" not in branch_messages
+    assert len(branch_state["drafts"]) == 1
 
 
 def test_commit_promotes_branch_when_main_still_matches_base(monkeypatch, tmp_path):

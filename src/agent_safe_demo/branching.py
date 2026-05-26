@@ -21,6 +21,10 @@ class BranchError(RuntimeError):
     pass
 
 
+class DirtyBranchError(BranchError):
+    pass
+
+
 def sqlite_fingerprint(db_path: Path) -> str:
     hasher = hashlib.sha256()
     with sqlite3.connect(db_path) as conn:
@@ -254,6 +258,8 @@ class SnapshotHandle:
     label: str
     action: str
     parent_id: str | None
+    db_path: Path | None = None
+    fingerprint: str | None = None
     created_at: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict[str, Any]:
@@ -263,6 +269,7 @@ class SnapshotHandle:
             "label": self.label,
             "action": self.action,
             "parent_id": self.parent_id,
+            "fingerprint": self.fingerprint,
             "created_at": self.created_at,
         }
 
@@ -281,6 +288,9 @@ class BranchHandle:
     status: str = "running"
     created_at: float = field(default_factory=time.time)
     snapshots: list[SnapshotHandle] = field(default_factory=list)
+    current_snapshot_id: str | None = None
+    last_saved_fingerprint: str | None = None
+    dirty: bool = False
     process: subprocess.Popen | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -297,6 +307,8 @@ class BranchHandle:
             "status": self.status,
             "created_at": self.created_at,
             "snapshots": [snapshot.to_dict() for snapshot in self.snapshots],
+            "current_snapshot_id": self.current_snapshot_id,
+            "dirty": self.dirty,
             "pid": self.process.pid if self.process else None,
         }
 
@@ -394,26 +406,10 @@ class LocalCopyBackend:
         shutil.copy2(base.db_path, branch_db)
 
         port = self._next_port()
-        env = os.environ.copy()
-        env["TOY_MAILBOX_DB_PATH"] = str(branch_db)
-        env["TOY_MAILBOX_BRANCH_ID"] = branch_id
-        env["PYTHONPATH"] = pythonpath_for(self.project_root)
-
-        process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "uvicorn",
-                "agent_safe_demo.main:app",
-                "--host",
-                self.host,
-                "--port",
-                str(port),
-            ],
-            cwd=self.project_root,
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        process = self._start_branch_process(
+            branch_id=branch_id,
+            db_path=branch_db,
+            port=port,
         )
 
         handle = BranchHandle(
@@ -424,6 +420,8 @@ class LocalCopyBackend:
             url=f"http://{self.host}:{port}",
             base_id=base.id,
             base_checkpoint_id=base.checkpoint_id,
+            current_snapshot_id=base.checkpoint_id,
+            last_saved_fingerprint=sqlite_fingerprint(branch_db),
             process=process,
         )
         self.branches[branch_id] = handle
@@ -448,28 +446,62 @@ class LocalCopyBackend:
             path,
             action_payload,
         )
-        snapshot = self._record_branch_snapshot(branch, action, branch_action_label(payload))
+        branch.dirty = True
         return {
             "branch": branch.to_dict(),
             "action": result,
-            "snapshot": snapshot,
+            "snapshot": None,
             "diff": self.diff(branch_id),
         }
 
     def run_agent_demo(self, branch_id: str) -> dict[str, Any]:
         actions = []
-        snapshots = []
         for payload in AGENT_DEMO_ACTIONS:
             result = self.apply_action(branch_id, payload)
             actions.append(result["action"])
-            snapshots.append(result["snapshot"])
         branch = self._require_branch(branch_id)
         return {
             "branch": branch.to_dict(),
             "actions": actions,
-            "snapshots": snapshots,
+            "snapshots": [snapshot.to_dict() for snapshot in branch.snapshots],
             "diff": self.diff(branch_id),
         }
+
+    def save_snapshot(self, branch_id: str, label: str | None = None) -> dict[str, Any]:
+        branch = self._require_branch(branch_id)
+        if branch.status != "running":
+            raise BranchError(f"Branch {branch_id} is not running")
+        snapshot = self._record_branch_snapshot(
+            branch,
+            "manual",
+            label or f"Snapshot {len(branch.snapshots) + 1}",
+        )
+        return {"branch": branch.to_dict(), "snapshot": snapshot}
+
+    def dirty(self, branch_id: str) -> dict[str, Any]:
+        branch = self._require_branch(branch_id)
+        return {
+            "branch_id": branch_id,
+            "dirty": self._branch_is_dirty(branch),
+            "current_snapshot_id": branch.current_snapshot_id,
+        }
+
+    def restore_snapshot(
+        self,
+        branch_id: str,
+        snapshot_id: str,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        branch = self._require_branch(branch_id)
+        if branch.status != "running":
+            raise BranchError(f"Branch {branch_id} is not running")
+        if self._branch_is_dirty(branch) and not force:
+            raise DirtyBranchError(
+                "Branch has unsaved changes. Save a snapshot or discard changes before restoring."
+            )
+        snapshot = self._require_snapshot(branch, snapshot_id)
+        self._restore_branch_snapshot(branch, snapshot)
+        return {"branch": branch.to_dict(), "snapshot": snapshot.to_dict(), "status": "restored"}
 
     def diff(self, branch_id: str) -> dict[str, Any]:
         branch = self._require_branch(branch_id)
@@ -553,6 +585,8 @@ class LocalCopyBackend:
             return
         if branch.process and branch.process.poll() is not None:
             branch.status = "exited"
+            return
+        self._branch_is_dirty(branch)
 
     def _require_branch(self, branch_id: str) -> BranchHandle:
         branch = self.branches.get(branch_id)
@@ -568,17 +602,57 @@ class LocalCopyBackend:
         label: str,
     ) -> dict[str, Any]:
         started_at = time.time()
-        parent_id = branch.snapshots[-1].id if branch.snapshots else branch.base_checkpoint_id
+        parent_id = branch.current_snapshot_id or branch.base_checkpoint_id
+        snapshot_id = f"snap-{uuid.uuid4().hex[:8]}"
+        snapshot_dir = branch.db_path.parent / "snapshots"
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        snapshot_db = snapshot_dir / f"{snapshot_id}.db"
+        self._backup_sqlite(branch.db_path, snapshot_db)
+        fingerprint = sqlite_fingerprint(snapshot_db)
         snapshot = SnapshotHandle(
-            id=f"logical-{uuid.uuid4().hex[:8]}",
+            id=snapshot_id,
             backend="local-copy",
             label=label,
             action=action,
             parent_id=parent_id,
+            db_path=snapshot_db,
+            fingerprint=fingerprint,
         )
         branch.snapshots.append(snapshot)
+        branch.current_snapshot_id = snapshot.id
+        branch.last_saved_fingerprint = fingerprint
+        branch.dirty = False
         record_operation(self.operation_stats, "snapshot", started_at)
         return snapshot.to_dict()
+
+    def _restore_branch_snapshot(self, branch: BranchHandle, snapshot: SnapshotHandle) -> None:
+        if snapshot.db_path is None or not snapshot.db_path.exists():
+            raise BranchError(f"Snapshot data is missing: {snapshot.id}")
+        started_at = time.time()
+        self._terminate(branch)
+        self._backup_sqlite(snapshot.db_path, branch.db_path)
+        branch.process = self._start_branch_process(
+            branch_id=branch.id,
+            db_path=branch.db_path,
+            port=branch.port,
+        )
+        branch.status = "running"
+        branch.current_snapshot_id = snapshot.id
+        branch.last_saved_fingerprint = snapshot.fingerprint or sqlite_fingerprint(branch.db_path)
+        branch.dirty = False
+        self._wait_until_ready(branch)
+        record_operation(self.operation_stats, "restore", started_at)
+
+    def _require_snapshot(self, branch: BranchHandle, snapshot_id: str) -> SnapshotHandle:
+        for snapshot in branch.snapshots:
+            if snapshot.id == snapshot_id:
+                return snapshot
+        raise BranchError(f"Unknown snapshot for {branch.id}: {snapshot_id}")
+
+    def _branch_is_dirty(self, branch: BranchHandle) -> bool:
+        if branch.last_saved_fingerprint and branch.db_path.exists():
+            branch.dirty = sqlite_fingerprint(branch.db_path) != branch.last_saved_fingerprint
+        return branch.dirty
 
     def _require_base(self, base_id: str) -> BaseHandle:
         base = self.bases.get(base_id)
@@ -598,6 +672,35 @@ class LocalCopyBackend:
             except subprocess.TimeoutExpired:
                 branch.process.kill()
                 branch.process.wait(timeout=5)
+
+    def _start_branch_process(
+        self,
+        *,
+        branch_id: str,
+        db_path: Path,
+        port: int,
+    ) -> subprocess.Popen:
+        env = os.environ.copy()
+        env["TOY_MAILBOX_DB_PATH"] = str(db_path)
+        env["TOY_MAILBOX_BRANCH_ID"] = branch_id
+        env["PYTHONPATH"] = pythonpath_for(self.project_root)
+
+        return subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "agent_safe_demo.main:app",
+                "--host",
+                self.host,
+                "--port",
+                str(port),
+            ],
+            cwd=self.project_root,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
     def _post_json(self, base_url: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         import json
@@ -780,39 +883,11 @@ class CheckpointLiteBackend:
         branch_db = Path(work_dir) / self.main_db_path.name
         port = self._next_port()
 
-        env = os.environ.copy()
-        env["TOY_MAILBOX_DB_PATH"] = str(branch_db)
-        env["TOY_MAILBOX_BRANCH_ID"] = branch_id
-        env["TOY_BRANCH_BACKEND"] = "local-copy"
-        env["PYTHONPATH"] = pythonpath_for(Path(work_dir))
-
-        command = [
-            sys.executable,
-            "-m",
-            "uvicorn",
-            "agent_safe_demo.main:app",
-            "--host",
-            self.host,
-            "--port",
-            str(port),
-        ]
-        if self.use_sudo and os.geteuid() != 0:
-            command = [
-                "sudo",
-                "env",
-                f"PYTHONPATH={env['PYTHONPATH']}",
-                f"TOY_MAILBOX_DB_PATH={env['TOY_MAILBOX_DB_PATH']}",
-                f"TOY_MAILBOX_BRANCH_ID={env['TOY_MAILBOX_BRANCH_ID']}",
-                f"TOY_BRANCH_BACKEND={env['TOY_BRANCH_BACKEND']}",
-                *command,
-            ]
-
-        process = subprocess.Popen(
-            command,
+        process = self._start_branch_process(
+            branch_id=branch_id,
+            db_path=branch_db,
+            port=port,
             cwd=work_dir,
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
         )
         branch = BranchHandle(
             id=branch_id,
@@ -824,6 +899,8 @@ class CheckpointLiteBackend:
             session_id=session_id,
             base_checkpoint_id=base.checkpoint_id,
             work_dir=Path(work_dir),
+            current_snapshot_id=base.checkpoint_id,
+            last_saved_fingerprint=sqlite_fingerprint(branch_db),
             process=process,
         )
         self.branches[branch_id] = branch
@@ -862,28 +939,62 @@ class CheckpointLiteBackend:
             path,
             action_payload,
         )
-        snapshot = self._record_branch_snapshot(branch, action, branch_action_label(payload))
+        branch.dirty = True
         return {
             "branch": branch.to_dict(),
             "action": result,
-            "snapshot": snapshot,
+            "snapshot": None,
             "diff": self.diff(branch_id),
         }
 
     def run_agent_demo(self, branch_id: str) -> dict[str, Any]:
         actions = []
-        snapshots = []
         for payload in AGENT_DEMO_ACTIONS:
             result = self.apply_action(branch_id, payload)
             actions.append(result["action"])
-            snapshots.append(result["snapshot"])
         branch = self._require_branch(branch_id)
         return {
             "branch": branch.to_dict(),
             "actions": actions,
-            "snapshots": snapshots,
+            "snapshots": [snapshot.to_dict() for snapshot in branch.snapshots],
             "diff": self.diff(branch_id),
         }
+
+    def save_snapshot(self, branch_id: str, label: str | None = None) -> dict[str, Any]:
+        branch = self._require_branch(branch_id)
+        if branch.status != "running":
+            raise BranchError(f"Branch {branch_id} is not running")
+        snapshot = self._record_branch_snapshot(
+            branch,
+            "manual",
+            label or f"Snapshot {len(branch.snapshots) + 1}",
+        )
+        return {"branch": branch.to_dict(), "snapshot": snapshot}
+
+    def dirty(self, branch_id: str) -> dict[str, Any]:
+        branch = self._require_branch(branch_id)
+        return {
+            "branch_id": branch_id,
+            "dirty": self._branch_is_dirty(branch),
+            "current_snapshot_id": branch.current_snapshot_id,
+        }
+
+    def restore_snapshot(
+        self,
+        branch_id: str,
+        snapshot_id: str,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        branch = self._require_branch(branch_id)
+        if branch.status != "running":
+            raise BranchError(f"Branch {branch_id} is not running")
+        if self._branch_is_dirty(branch) and not force:
+            raise DirtyBranchError(
+                "Branch has unsaved changes. Save a snapshot or discard changes before restoring."
+            )
+        snapshot = self._require_snapshot(branch, snapshot_id)
+        self._restore_branch_snapshot(branch, snapshot)
+        return {"branch": branch.to_dict(), "snapshot": snapshot.to_dict(), "status": "restored"}
 
     def diff(self, branch_id: str) -> dict[str, Any]:
         branch = self._require_branch(branch_id)
@@ -1045,6 +1156,8 @@ class CheckpointLiteBackend:
             return
         if branch.process and branch.process.poll() is not None:
             branch.status = "exited"
+            return
+        self._branch_is_dirty(branch)
 
     def _require_branch(self, branch_id: str) -> BranchHandle:
         branch = self.branches.get(branch_id)
@@ -1061,18 +1174,53 @@ class CheckpointLiteBackend:
     ) -> dict[str, Any]:
         if not branch.session_id:
             raise BranchError(f"Branch {branch.id} does not have a checkpoint-lite session")
-        parent_id = branch.snapshots[-1].id if branch.snapshots else branch.base_checkpoint_id
+        parent_id = branch.current_snapshot_id or branch.base_checkpoint_id
         snapshot_id = f"{branch.id}-{len(branch.snapshots) + 1}-{action}"
         self._checkpoint_lite_create(branch.session_id, snapshot_id)
+        fingerprint = sqlite_fingerprint(branch.db_path)
         snapshot = SnapshotHandle(
             id=snapshot_id,
             backend="checkpoint-lite",
             label=label,
             action=action,
             parent_id=parent_id,
+            fingerprint=fingerprint,
         )
         branch.snapshots.append(snapshot)
+        branch.current_snapshot_id = snapshot.id
+        branch.last_saved_fingerprint = fingerprint
+        branch.dirty = False
         return snapshot.to_dict()
+
+    def _restore_branch_snapshot(self, branch: BranchHandle, snapshot: SnapshotHandle) -> None:
+        if not branch.session_id:
+            raise BranchError(f"Branch {branch.id} does not have a checkpoint-lite session")
+        if branch.work_dir is None:
+            raise BranchError(f"Branch {branch.id} does not have a work directory")
+        self._terminate(branch)
+        self._checkpoint_lite_restore(branch.session_id, snapshot.id)
+        branch.process = self._start_branch_process(
+            branch_id=branch.id,
+            db_path=branch.db_path,
+            port=branch.port,
+            cwd=branch.work_dir,
+        )
+        branch.status = "running"
+        branch.current_snapshot_id = snapshot.id
+        branch.last_saved_fingerprint = snapshot.fingerprint or sqlite_fingerprint(branch.db_path)
+        branch.dirty = False
+        self._wait_until_ready(branch)
+
+    def _require_snapshot(self, branch: BranchHandle, snapshot_id: str) -> SnapshotHandle:
+        for snapshot in branch.snapshots:
+            if snapshot.id == snapshot_id:
+                return snapshot
+        raise BranchError(f"Unknown snapshot for {branch.id}: {snapshot_id}")
+
+    def _branch_is_dirty(self, branch: BranchHandle) -> bool:
+        if branch.last_saved_fingerprint and branch.db_path.exists():
+            branch.dirty = sqlite_fingerprint(branch.db_path) != branch.last_saved_fingerprint
+        return branch.dirty
 
     def _require_base(self, base_id: str) -> BaseHandle:
         base = self.bases.get(base_id)
@@ -1092,6 +1240,49 @@ class CheckpointLiteBackend:
             except subprocess.TimeoutExpired:
                 branch.process.kill()
                 branch.process.wait(timeout=5)
+
+    def _start_branch_process(
+        self,
+        *,
+        branch_id: str,
+        db_path: Path,
+        port: int,
+        cwd: Path,
+    ) -> subprocess.Popen:
+        env = os.environ.copy()
+        env["TOY_MAILBOX_DB_PATH"] = str(db_path)
+        env["TOY_MAILBOX_BRANCH_ID"] = branch_id
+        env["TOY_BRANCH_BACKEND"] = "local-copy"
+        env["PYTHONPATH"] = pythonpath_for(Path(cwd))
+
+        command = [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "agent_safe_demo.main:app",
+            "--host",
+            self.host,
+            "--port",
+            str(port),
+        ]
+        if self.use_sudo and os.geteuid() != 0:
+            command = [
+                "sudo",
+                "env",
+                f"PYTHONPATH={env['PYTHONPATH']}",
+                f"TOY_MAILBOX_DB_PATH={env['TOY_MAILBOX_DB_PATH']}",
+                f"TOY_MAILBOX_BRANCH_ID={env['TOY_MAILBOX_BRANCH_ID']}",
+                f"TOY_BRANCH_BACKEND={env['TOY_BRANCH_BACKEND']}",
+                *command,
+            ]
+
+        return subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
     def _post_json(self, base_url: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         import json
@@ -1331,6 +1522,8 @@ class StateForkBackend(CheckpointLiteBackend):
             session_id=str(environment_name),
             base_checkpoint_id=base.checkpoint_id,
             work_dir=work_dir,
+            current_snapshot_id=base.checkpoint_id,
+            last_saved_fingerprint=sqlite_fingerprint(branch_db),
             process=process,
         )
         self.branches[branch_id] = branch
@@ -1362,16 +1555,46 @@ class StateForkBackend(CheckpointLiteBackend):
         if not snapshot_id:
             raise BranchError(f"StateFork snapshot failed after {action}")
         record_operation(self.operation_stats, "snapshot", started_at)
-        parent_id = branch.snapshots[-1].id if branch.snapshots else branch.base_checkpoint_id
+        parent_id = branch.current_snapshot_id or branch.base_checkpoint_id
         snapshot = SnapshotHandle(
             id=snapshot_id,
             backend="statefork",
             label=label,
             action=action,
             parent_id=parent_id,
+            fingerprint=sqlite_fingerprint(branch.db_path),
         )
         branch.snapshots.append(snapshot)
+        branch.current_snapshot_id = snapshot.id
+        branch.last_saved_fingerprint = snapshot.fingerprint
+        branch.dirty = False
         return snapshot.to_dict()
+
+    def _restore_branch_snapshot(self, branch: BranchHandle, snapshot: SnapshotHandle) -> None:
+        if not branch.base_id:
+            raise BranchError(f"Branch {branch.id} does not have a base")
+        if branch.work_dir is None:
+            raise BranchError(f"Branch {branch.id} does not have a work directory")
+        manager = self.base_managers.get(branch.base_id)
+        if manager is None:
+            raise BranchError(f"Base {branch.base_id} does not have a StateFork manager")
+        self._terminate(branch)
+        started_at = time.time()
+        ok = self._call_statefork(lambda: manager.restore(snapshot.id))
+        if not ok:
+            raise BranchError(f"StateFork restore failed for snapshot {snapshot.id}")
+        record_operation(self.operation_stats, "restore", started_at)
+        branch.process = self._start_branch_process(
+            branch_id=branch.id,
+            db_path=branch.db_path,
+            port=branch.port,
+            cwd=branch.work_dir,
+        )
+        branch.status = "running"
+        branch.current_snapshot_id = snapshot.id
+        branch.last_saved_fingerprint = snapshot.fingerprint or sqlite_fingerprint(branch.db_path)
+        branch.dirty = False
+        self._wait_until_ready(branch)
 
     def reset(self) -> dict[str, Any]:
         branch_count = len(self.branches)

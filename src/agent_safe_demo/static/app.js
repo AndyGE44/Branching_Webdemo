@@ -207,7 +207,7 @@ function badge(value) {
   if (["ready", "active", "draft"].includes(normalized)) {
     tone = "ok";
   }
-  if (["blocked", "failed"].includes(normalized)) {
+  if (["blocked", "failed", "dirty", "unsaved"].includes(normalized)) {
     tone = "warn";
   }
   return `<span class="badge ${tone}">${safeValue}</span>`;
@@ -378,6 +378,7 @@ function renderSnapshotTree(branch) {
                 <strong>${escapeHtml(snapshot.label)}</strong>
                 <p>${escapeHtml(snapshot.backend)} · ${escapeHtml(snapshot.id)}</p>
                 <p>parent ${escapeHtml(snapshot.parent_id || baseLabel)}</p>
+                <button data-action="restore-snapshot" data-id="${escapeHtml(branch.id)}" data-snapshot-id="${escapeHtml(snapshot.id)}" type="button">Restore</button>
               </div>
             </li>
           `,
@@ -450,6 +451,7 @@ function renderBranchCard(branch) {
   const checkpointDetails = branch.base_checkpoint_id
     ? `<p>from ${escapeHtml(branch.base_id)} · checkpoint ${escapeHtml(branch.base_checkpoint_id)}</p>`
     : `<p>${escapeHtml(branch.backend)} · port ${escapeHtml(branch.port)}</p>`;
+  const dirtyBadge = branch.dirty ? badge("unsaved") : badge("saved");
   return `
     <article class="branch-card" data-branch-id="${escapeHtml(branch.id)}">
       <div class="branch-card-main">
@@ -458,13 +460,23 @@ function renderBranchCard(branch) {
           ${checkpointDetails}
           <p>${escapeHtml(branch.backend)} · port ${escapeHtml(branch.port)}</p>
         </div>
-        ${badge(branch.status)}
+        <div class="message-meta">
+          ${dirtyBadge}
+          ${badge(branch.status)}
+        </div>
       </div>
       <div class="branch-actions">
         <a class="icon-link" href="${escapeHtml(branch.url)}" target="_blank" rel="noreferrer">Open Branch</a>
         <button class="primary" data-action="run-agent" data-id="${escapeHtml(branch.id)}" type="button">Run Email Agent</button>
         <button data-action="commit" data-id="${escapeHtml(branch.id)}" type="button">Commit</button>
         <button class="danger" data-action="discard" data-id="${escapeHtml(branch.id)}" type="button">Discard</button>
+      </div>
+      <div class="snapshot-save-row">
+        <label>
+          Snapshot Label
+          <input data-snapshot-label="${escapeHtml(branch.id)}" type="text" maxlength="80" placeholder="before agent" />
+        </label>
+        <button data-action="save-snapshot" data-id="${escapeHtml(branch.id)}" type="button">Save Snapshot</button>
       </div>
       ${renderSnapshotTree(branch)}
     </article>
@@ -688,7 +700,55 @@ branchesEl.addEventListener("click", async (event) => {
     if (action === "run-agent") {
       showResult("Running email agent...");
       const data = await request(`/api/branches/${branchId}/run-agent-demo`, { method: "POST" });
-      showResult(`Email agent ran ${data.snapshots.length} steps`);
+      showResult(`Email agent ran ${data.actions.length} actions`);
+      await refreshBranches();
+      return;
+    }
+    if (action === "save-snapshot") {
+      const card = button.closest(".branch-card");
+      const input = card?.querySelector("input[data-snapshot-label]");
+      const label = input?.value.trim() || null;
+      const data = await request(`/api/branches/${branchId}/snapshots`, {
+        method: "POST",
+        body: JSON.stringify({ label }),
+      });
+      if (input) {
+        input.value = "";
+      }
+      showResult(`Snapshot ${data.snapshot.label} saved`);
+      await refreshBranches();
+      return;
+    }
+    if (action === "restore-snapshot") {
+      const snapshotId = button.dataset.snapshotId;
+      const dirty = await request(`/api/branches/${branchId}/dirty`);
+      let force = false;
+      if (dirty.dirty) {
+        const saveFirst = window.confirm("This branch has unsaved changes. Save them before restoring?");
+        if (saveFirst) {
+          const label = window.prompt("Snapshot label", "autosave before restore");
+          if (label === null) {
+            showResult("Restore canceled");
+            return;
+          }
+          await request(`/api/branches/${branchId}/snapshots`, {
+            method: "POST",
+            body: JSON.stringify({ label: label.trim() || "autosave before restore" }),
+          });
+        } else {
+          const discard = window.confirm("Discard unsaved changes and restore the selected snapshot?");
+          if (!discard) {
+            showResult("Restore canceled");
+            return;
+          }
+          force = true;
+        }
+      }
+      await request(`/api/branches/${branchId}/restore`, {
+        method: "POST",
+        body: JSON.stringify({ snapshot_id: snapshotId, force }),
+      });
+      showResult("Snapshot restored");
       await refreshBranches();
       return;
     }

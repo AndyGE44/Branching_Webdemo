@@ -33,7 +33,16 @@ def post(path: str, payload: dict | None = None) -> dict:
 def main() -> None:
     post("/api/reset")
     branch = post("/api/branches")["branch"]
+    before_snapshot = post(
+        f"/api/branches/{branch['id']}/snapshots",
+        {"label": "before agent"},
+    )["snapshot"]
     agent = post(f"/api/branches/{branch['id']}/run-agent-demo")
+    dirty_after_agent = get(f"/api/branches/{branch['id']}/dirty")
+    after_snapshot = post(
+        f"/api/branches/{branch['id']}/snapshots",
+        {"label": "after agent"},
+    )["snapshot"]
     branch_state = get_url(f"{branch['url']}/api/state")
     main_state = get("/api/state")
     post(f"/api/branches/{branch['id']}/discard")
@@ -58,7 +67,9 @@ def main() -> None:
     result = {
         "branch_id": branch["id"],
         "branch_url": branch["url"],
-        "snapshots": [snapshot["label"] for snapshot in agent["snapshots"]],
+        "manual_snapshots": [before_snapshot["label"], after_snapshot["label"]],
+        "agent_returned_snapshots": [snapshot["label"] for snapshot in agent["snapshots"]],
+        "dirty_after_agent": dirty_after_agent["dirty"],
         "agent_action_statuses": [action["status"] for action in agent["actions"]],
         "branch_mailbox_after_agent": {
             "msg-1001": branch_messages["msg-1001"],

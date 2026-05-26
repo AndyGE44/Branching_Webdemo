@@ -117,17 +117,18 @@ Example planned agent run:
 1. Label billing-related email as "finance"
 2. Move obvious spam email to Spam
 3. Draft a reply to an urgent customer email
-4. Archive one low-priority notification
+4. Receive one escalation email into Inbox
+5. Archive one low-priority notification
 ```
 
-Each step should create a StateFork snapshot:
+Agent steps should not automatically create StateFork snapshots. The branch
+should become dirty after agent/user actions, and the user should explicitly
+save checkpoint nodes:
 
 ```text
 Base checkpoint
-└── label finance email
-    └── move spam email
-        └── draft customer reply
-            └── archive notification
+└── before agent
+    └── after agent
 ```
 
 The key rule: the agent operates only inside the branch service.
@@ -141,7 +142,7 @@ Recommended UI flow:
 2. Create Base.
 3. Create Branch.
 4. Run Agent.
-5. Review snapshot tree.
+5. Save Snapshot or restore a previous snapshot.
 6. Review diff.
 7. Open branch mailbox if needed.
 8. Commit or Discard.
@@ -346,12 +347,13 @@ Exit criteria:
 ### Phase 3: Branch Agent Plan
 
 - Replace inventory agent plan with email agent plan.
-- Create snapshot after each agent step.
-- Render snapshot tree with email-specific labels.
+- Mark branch dirty after agent actions.
+- Let users manually save and restore snapshot nodes.
 
 Exit criteria:
 
-- Branch agent run creates 3-4 snapshots.
+- Branch agent run changes branch state without creating automatic snapshots.
+- User can save and restore branch snapshots.
 - Main mailbox is unchanged.
 - Branch mailbox reflects agent actions.
 
@@ -426,4 +428,3 @@ Create an email-server-demo branch from main.
 Replace inventory domain tables and UI with mailbox/message/draft primitives.
 Keep StateFork backend APIs unchanged.
 ```
-
