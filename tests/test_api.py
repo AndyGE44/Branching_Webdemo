@@ -1,7 +1,16 @@
 import importlib
 import sys
+from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
+
+from agent_safe_demo.branching import (
+    BranchError,
+    BranchHandle,
+    CheckpointLiteBackend,
+    StateForkBackend,
+)
 
 
 def load_app(monkeypatch, tmp_path, auth_password=None):
@@ -157,6 +166,31 @@ def test_base_checkpoint_api_shapes_branch_creation(monkeypatch, tmp_path):
     assert backend_status["operations"]["snapshot"]["count"] >= 4
     assert backend_status["operations"]["restore"]["count"] >= 1
     assert deleted.json()["status"] == "deleted"
+
+
+@pytest.mark.parametrize(
+    ("backend_cls", "backend_name"),
+    [
+        (CheckpointLiteBackend, "checkpoint-lite"),
+        (StateForkBackend, "statefork"),
+    ],
+)
+def test_checkpoint_backends_reject_concurrent_active_branch(backend_cls, backend_name):
+    backend = object.__new__(backend_cls)
+    backend.name = backend_name
+    backend.branches = {
+        "active-branch": BranchHandle(
+            id="active-branch",
+            backend=backend_name,
+            db_path=Path("branch.db"),
+            port=8300,
+            url="http://127.0.0.1:8300",
+            status="running",
+        )
+    }
+
+    with pytest.raises(BranchError, match="one active branch at a time"):
+        backend_cls.create_branch(backend, base_id="base-1")
 
 
 def test_reset_clears_bases_and_branches(monkeypatch, tmp_path):

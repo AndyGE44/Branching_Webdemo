@@ -67,7 +67,7 @@ function renderBackendStatus(status) {
   backendStatsEl.innerHTML = [
     statCard("Backend", status.backend, status.method),
     statCard("Bases", totals.bases ?? 0, "frozen starting points"),
-    statCard("Branches", totals.branches ?? 0, "active agent sandboxes"),
+    statCard("Branches", totals.branches ?? 0, "active branch count"),
     statCard("Tree snapshots", totals.snapshots ?? 0, "visible branch nodes"),
     statCard("Snapshot calls", snapshotOps.count ?? 0, `avg ${formatMs(snapshotOps.mean_ms)}`),
     statCard("Restore/fork calls", restoreOps.count ?? 0, `avg ${formatMs(restoreOps.mean_ms)}`),
