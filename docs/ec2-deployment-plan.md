@@ -51,8 +51,6 @@ ssh \
   -o ExitOnForwardFailure=yes \
   -L 18000:127.0.0.1:8000 \
   -L 18300:127.0.0.1:8300 \
-  -L 18301:127.0.0.1:8301 \
-  -L 18302:127.0.0.1:8302 \
   ubuntu@<ec2-public-dns>
 ```
 
@@ -237,8 +235,11 @@ Internet -> HTTPS reverse proxy -> 127.0.0.1:8000 main app
 Branch URL problem:
 
 ```text
-Branch services currently run on 127.0.0.1:8300+
+The active branch service currently runs on 127.0.0.1:8300.
 ```
+
+The current StateFork/checkpoint-lite prototype supports one active branch at a
+time. Commit or discard the existing branch before creating another.
 
 For a real public demo, branch access should become one of:
 
@@ -299,4 +300,3 @@ EC2 is acceptable as the next deployment environment only after:
   - reset cleanup
 - SSH-tunneled UI works from your laptop.
 - Cleanup leaves no branch Uvicorn processes or stale mounts.
-

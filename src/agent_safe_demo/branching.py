@@ -699,6 +699,7 @@ class CheckpointLiteBackend:
         return {"status": "deleted", "base_id": base_id}
 
     def create_branch(self, base_id: str | None = None) -> dict[str, Any]:
+        self._ensure_single_active_branch()
         base = self._require_base(base_id) if base_id else self._create_auto_base()
         if base.session_id is None or base.work_dir is None:
             raise BranchError(f"Base {base.id} does not have checkpoint-lite session data")
@@ -766,6 +767,20 @@ class CheckpointLiteBackend:
         for branch in self.branches.values():
             self._refresh_status(branch)
         return [branch.to_dict() for branch in self.branches.values()]
+
+    def _ensure_single_active_branch(self) -> None:
+        for branch in self.branches.values():
+            self._refresh_status(branch)
+        active_branches = [
+            branch.id
+            for branch in self.branches.values()
+            if branch.status == "running"
+        ]
+        if active_branches:
+            raise BranchError(
+                f"{self.name} backend supports one active branch at a time. "
+                f"Commit or discard the existing branch first: {', '.join(active_branches)}"
+            )
 
     def apply_action(self, branch_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         branch = self._require_branch(branch_id)
@@ -1184,6 +1199,7 @@ class StateForkBackend(CheckpointLiteBackend):
         return {"status": "deleted", "base_id": base_id}
 
     def create_branch(self, base_id: str | None = None) -> dict[str, Any]:
+        self._ensure_single_active_branch()
         base = self._require_base(base_id) if base_id else self._create_auto_base()
         manager = self.base_managers.get(base.id)
         if manager is None:

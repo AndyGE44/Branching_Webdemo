@@ -313,10 +313,11 @@ ssh \
   -o ExitOnForwardFailure=yes \
   -L 18000:127.0.0.1:8000 \
   -L 18300:127.0.0.1:8300 \
-  -L 18301:127.0.0.1:8301 \
-  -L 18302:127.0.0.1:8302 \
   sf-exp
 ```
+
+The StateFork/checkpoint-lite backends are single-active-branch in this
+prototype. Commit or discard the existing branch before creating another.
 
 Open locally:
 

@@ -56,9 +56,9 @@ From your browser, open:
 http://<vm-ip>:8000
 ```
 
-On EC2, the security group must allow inbound TCP `8000`. For branch URLs from
-your laptop, also allow the branch port range you choose, for example
-`8200-8250`.
+On EC2, the security group must allow inbound TCP `8000`. For this prototype,
+use a single branch port such as `8200` only if you intentionally expose branch
+URLs. Prefer SSH forwarding or a reverse proxy for demos.
 
 ## 4. Smoke Test Local-Copy Branching On Ubuntu
 
@@ -102,9 +102,10 @@ Create Agent Branch -> Open Branch -> Run Agent -> Diff -> Discard
 Expected first result:
 
 - Main app remains on port `8000`.
-- Branch apps start on `8200+`.
+- The active branch app starts on `8200`.
 - Branch state writes to the checkpoint-lite overlay workdir.
 - Main `toy_mailbox.db` is not modified until `Commit`.
+- Creating a second checkpoint-lite branch while one is running is rejected.
 
 If checkpoint-lite fails with `mount command failed: exit status 32`, verify
 the session directory. Some CloudLab images have a checkpoint-lite config that
@@ -133,6 +134,8 @@ multi-process CRIU restore in the same step.
 
 ## 7. Known Limitations
 
+- The current checkpoint-lite and StateFork backends support one active branch at
+  a time. Commit or discard the existing branch before creating another.
 - The first backend uses `checkpoint-lite init` and `create`; it does not yet
   restore multiple active branches from one shared base session.
 - Commit is SQLite promotion, not a general filesystem merge.

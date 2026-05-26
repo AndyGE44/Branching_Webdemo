@@ -52,9 +52,9 @@ TOY_DEMO_AUTH_PASSWORD=<shared-demo-password>
 ```
 
 `TOY_DEMO_AUTH_USER` defaults to `demo`. The password protects the main app
-with HTTP Basic Auth. Branch apps are still internal VM-only processes on
-`127.0.0.1:8300+`, so the main app can manage branch environments without
-opening those branch ports publicly.
+with HTTP Basic Auth. The active branch app is still an internal VM-only process
+on `127.0.0.1:8300`, so the main app can manage branch environments without
+opening the branch port publicly.
 
 ### 2. Install `cloudflared` If Needed
 
@@ -132,8 +132,6 @@ ssh \
   -o ExitOnForwardFailure=yes \
   -L 18000:127.0.0.1:8000 \
   -L 18300:127.0.0.1:8300 \
-  -L 18301:127.0.0.1:8301 \
-  -L 18302:127.0.0.1:8302 \
   sf-exp
 ```
 
@@ -141,13 +139,15 @@ Port meanings:
 
 - `18000`: forwards your laptop's `127.0.0.1:18000` to the VM main FastAPI app
   on `127.0.0.1:8000`
-- `18300+`: forwards your laptop's `127.0.0.1:18300+` to the VM StateFork
-  branch apps on `127.0.0.1:8300+`
+- `18300`: forwards your laptop's `127.0.0.1:18300` to the VM StateFork
+  branch app on `127.0.0.1:8300`
 
-If you create more than three branches at once, add more forwarded ports, for
-example `-L 18303:127.0.0.1:8303`.
+The current StateFork and checkpoint-lite backends support one active branch at
+a time. Commit or discard the existing branch before creating another branch.
+The local-copy backend may run multiple branches because it is only a development
+simulation.
 
-Using `18000` and `18300+` avoids colliding with a local copy of this demo that
+Using `18000` and `18300` avoids colliding with a local copy of this demo that
 may already be running on your laptop. The `ExitOnForwardFailure=yes` option
 makes SSH fail immediately if a requested local port is already occupied, instead
 of silently leaving you connected to the wrong server.
@@ -225,8 +225,7 @@ http://127.0.0.1:18300
 ```
 
 The app may still display the VM-side branch URL `http://127.0.0.1:8300`.
-Manually replace local port `8300` with `18300` in your browser. Branch `8301`
-maps to local `18301`, branch `8302` maps to local `18302`, and so on.
+Manually replace local port `8300` with `18300` in your browser.
 
 ### 5. Avoid Accidentally Opening A Local Demo
 
@@ -250,7 +249,7 @@ You are seeing the preferred StateFork VM version when:
 
 - The header shows `statefork / statefork:ckpt_build`.
 - Branch IDs start with `sf-`.
-- Branch apps use VM ports `8300+`, viewed locally through `18300+`.
+- The branch app uses VM port `8300`, viewed locally through `18300`.
 
 You are probably seeing the local development version when:
 
@@ -456,6 +455,10 @@ sudo -E .venv/bin/uvicorn agent_safe_demo.main:app --host 127.0.0.1 --port 8000
 UI shows base checkpoints and branch environments. The legacy inventory agent
 endpoint still exists internally while the email agent flow is being migrated.
 
+StateFork is intentionally treated as a single-active-branch backend in this
+prototype. The app rejects a second running StateFork branch until the existing
+branch is committed or discarded.
+
 Target lifecycle:
 
 ```text
@@ -496,6 +499,9 @@ uvicorn agent_safe_demo.main:app --host 0.0.0.0 --port 8000
 
 The `CheckpointLiteBackend` is in `src/agent_safe_demo/branching.py`. More VM
 setup notes live in `docs/ubuntu-checkpoint-lite.md`.
+
+The direct checkpoint-lite backend is also single-active-branch in this
+prototype. It does not claim concurrent branching support.
 
 Direct checkpoint-lite lifecycle:
 
