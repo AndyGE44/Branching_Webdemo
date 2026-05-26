@@ -363,6 +363,53 @@ button:hover,
   gap: 10px;
 }
 
+.draft-content-card {
+  grid-column: 1 / -1;
+}
+
+.draft-content-list {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.draft-preview {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.draft-preview-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.draft-preview strong {
+  display: block;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.draft-preview p {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.draft-preview-body {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #ffffff;
+  color: var(--ink) !important;
+  line-height: 1.45;
+}
+
 .status-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -759,6 +806,7 @@ tr:last-child td {
   .audit-event,
   .base-card-main,
   .branch-card-main,
+  .draft-preview-header,
   .draft-form-row {
     grid-template-columns: 1fr;
   }

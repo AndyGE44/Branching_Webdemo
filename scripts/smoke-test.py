@@ -68,6 +68,7 @@ def main() -> None:
             ],
             "msg-1003": branch_messages["msg-1003"],
             "msg-1004": branch_messages["msg-1004"],
+            "msg-agent-2001": branch_messages["msg-agent-2001"],
         },
         "main_counts_after_agent": {
             "drafts": len(main_state["drafts"]),
@@ -77,6 +78,7 @@ def main() -> None:
             "msg-1001": main_messages["msg-1001"],
             "msg-1003": main_messages["msg-1003"],
             "msg-1004": main_messages["msg-1004"],
+            "has_msg_agent_2001": "msg-agent-2001" in main_messages,
         },
     }
     print(json.dumps(result, indent=2))

@@ -133,6 +133,21 @@ def branch_action_request(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]
                 "created_by": actor,
             },
         )
+    if action == "receive":
+        return (
+            "/api/messages",
+            {
+                "id": payload.get("message_id"),
+                "from_address": payload["from_address"],
+                "to_address": payload["to_address"],
+                "subject": payload["subject"],
+                "body": payload["body"],
+                "folder": payload.get("folder", "Inbox"),
+                "is_read": payload.get("is_read", False),
+                "priority": payload.get("priority", "normal"),
+                "actor": actor,
+            },
+        )
     if action == "archive":
         return (
             f"/api/messages/{payload['message_id']}/archive",
@@ -151,6 +166,8 @@ def branch_action_label(payload: dict[str, Any]) -> str:
         return f"move {payload['folder'].lower()}"
     if action == "draft":
         return "draft reply"
+    if action == "receive":
+        return "receive message"
     if action == "archive":
         return "archive message"
     return action.replace("_", " ")
@@ -179,6 +196,19 @@ AGENT_DEMO_ACTIONS = [
         "body": "Thanks for the update. We are checking the shipment and will send a new ETA shortly.",
         "actor": "agent",
         "snapshot_label": "draft reply",
+    },
+    {
+        "action": "receive",
+        "message_id": "msg-agent-2001",
+        "from_address": "director@example.com",
+        "to_address": "ops@example.com",
+        "subject": "Follow-up: customer escalation",
+        "body": "Please keep the shipment-delay customer updated and post the revised ETA in this thread.",
+        "folder": "Inbox",
+        "is_read": False,
+        "priority": "high",
+        "actor": "agent",
+        "snapshot_label": "receive escalation",
     },
     {
         "action": "archive",

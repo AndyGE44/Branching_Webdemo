@@ -81,6 +81,7 @@ Mailbox user mutations now exist on the main app state:
 - `POST /api/messages/{message_id}/move`
 - `POST /api/messages/{message_id}/archive`
 - `POST /api/messages/{message_id}/read`
+- `POST /api/messages`
 - `POST /api/drafts`
 
 The web UI now exposes simple user controls in `Message Detail`:
@@ -90,6 +91,7 @@ The web UI now exposes simple user controls in `Message Detail`:
 - mark read/unread
 - archive
 - create a draft reply
+- view draft message bodies in `Draft Contents`
 
 The StateFork/checkpoint branch lifecycle is intentionally still separate from
 direct user message controls. Branch cards expose base checkpoints, branch
@@ -101,7 +103,8 @@ The branch-agent demo now runs a deterministic mailbox plan:
 1. Label "Invoice for April services" as finance.
 2. Move "Win a free prize today" to Spam.
 3. Draft a reply for "Urgent: shipment delay".
-4. Archive "Weekly CI report".
+4. Receive "Follow-up: customer escalation" into Inbox.
+5. Archive "Weekly CI report".
 ```
 
 Each step creates a snapshot node:
@@ -111,6 +114,7 @@ Base checkpoint
 -> label finance
 -> move spam
 -> draft reply
+-> receive escalation
 -> archive report
 ```
 

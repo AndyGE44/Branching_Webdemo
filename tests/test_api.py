@@ -144,6 +144,37 @@ def test_create_draft_increments_mailbox_draft_count(monkeypatch, tmp_path):
     assert any(event["action"] == "draft" for event in state["audit_log"])
 
 
+def test_create_message_adds_email_to_mailbox(monkeypatch, tmp_path):
+    app = load_app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/messages",
+            json={
+                "id": "msg-test-2001",
+                "from_address": "director@example.com",
+                "to_address": "ops@example.com",
+                "subject": "Follow-up: customer escalation",
+                "body": "Please keep the customer updated.",
+                "folder": "Inbox",
+                "priority": "high",
+                "actor": "agent",
+            },
+        )
+        mailbox = client.get("/api/mailbox").json()
+        state = client.get("/api/state").json()
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "received"
+    messages = {message["id"]: message for message in mailbox["messages"]}
+    assert messages["msg-test-2001"]["subject"] == "Follow-up: customer escalation"
+    assert messages["msg-test-2001"]["folder"] == "Inbox"
+    assert messages["msg-test-2001"]["is_read"] is False
+    assert any(
+        event["action"] == "receive" and "msg-test-2001" in event["detail"]
+        for event in state["audit_log"]
+    )
+
+
 def test_demo_password_protects_main_app(monkeypatch, tmp_path):
     app = load_app(monkeypatch, tmp_path, auth_password="secret-demo-password")
     with TestClient(app) as client:
@@ -219,6 +250,7 @@ def test_branch_agent_demo_runs_email_plan_without_changing_main(monkeypatch, tm
         "label finance",
         "move spam",
         "draft reply",
+        "receive escalation",
         "archive report",
     ]
     assert payload["branch"]["snapshots"][-1]["parent_id"] == payload["snapshots"][-2]["id"]
@@ -227,8 +259,12 @@ def test_branch_agent_demo_runs_email_plan_without_changing_main(monkeypatch, tm
     assert "finance" in branch_messages["msg-1001"]["labels"]
     assert branch_messages["msg-1003"]["folder"] == "Spam"
     assert branch_messages["msg-1004"]["folder"] == "Archive"
+    assert branch_messages["msg-agent-2001"]["subject"] == "Follow-up: customer escalation"
+    assert branch_messages["msg-agent-2001"]["folder"] == "Inbox"
     assert any(
-        draft["source_message_id"] == "msg-1002" and draft["created_by"] == "agent"
+        draft["source_message_id"] == "msg-1002"
+        and draft["created_by"] == "agent"
+        and "new ETA shortly" in draft["body"]
         for draft in branch_state["drafts"]
     )
 
@@ -236,6 +272,7 @@ def test_branch_agent_demo_runs_email_plan_without_changing_main(monkeypatch, tm
     assert "finance" not in main_messages["msg-1001"]["labels"]
     assert main_messages["msg-1003"]["folder"] == "Inbox"
     assert main_messages["msg-1004"]["folder"] == "Inbox"
+    assert "msg-agent-2001" not in main_messages
     assert len(main_state["drafts"]) == 1
 
 
@@ -259,8 +296,11 @@ def test_commit_promotes_branch_when_main_still_matches_base(monkeypatch, tmp_pa
     assert "finance" in main_messages["msg-1001"]["labels"]
     assert main_messages["msg-1003"]["folder"] == "Spam"
     assert main_messages["msg-1004"]["folder"] == "Archive"
+    assert main_messages["msg-agent-2001"]["subject"] == "Follow-up: customer escalation"
     assert any(
-        draft["source_message_id"] == "msg-1002" and draft["created_by"] == "agent"
+        draft["source_message_id"] == "msg-1002"
+        and draft["created_by"] == "agent"
+        and "new ETA shortly" in draft["body"]
         for draft in main_state["drafts"]
     )
 
@@ -293,6 +333,7 @@ def test_commit_rejects_branch_when_main_changed_after_base(monkeypatch, tmp_pat
     assert "finance" not in main_messages["msg-1001"]["labels"]
     assert main_messages["msg-1003"]["folder"] == "Inbox"
     assert main_messages["msg-1004"]["folder"] == "Inbox"
+    assert "msg-agent-2001" not in main_messages
 
 
 @pytest.mark.parametrize(

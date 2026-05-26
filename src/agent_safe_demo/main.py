@@ -154,6 +154,18 @@ class ActorRequest(BaseModel):
     actor: str = "user"
 
 
+class CreateMessageRequest(BaseModel):
+    id: str | None = Field(default=None, max_length=80)
+    from_address: str = Field(min_length=1, max_length=254)
+    to_address: str = Field(min_length=1, max_length=254)
+    subject: str = Field(min_length=1, max_length=200)
+    body: str = Field(min_length=1)
+    folder: str = "Inbox"
+    is_read: bool = False
+    priority: str = "normal"
+    actor: str = "user"
+
+
 class DraftRequest(BaseModel):
     source_message_id: str | None = None
     to_address: str = Field(min_length=1, max_length=254)
@@ -216,6 +228,16 @@ def strip_required(value: str, field_name: str) -> str:
     if not stripped:
         raise HTTPException(status_code=422, detail=f"{field_name} cannot be blank")
     return stripped
+
+
+def normalize_priority(priority: str) -> str:
+    normalized = priority.strip().lower()
+    if normalized not in {"urgent", "high", "normal", "low"}:
+        raise HTTPException(
+            status_code=422,
+            detail="Priority must be one of urgent, high, normal, or low",
+        )
+    return normalized
 
 
 def ensure_part(conn: sqlite3.Connection, part_id: str) -> sqlite3.Row:
@@ -563,6 +585,50 @@ def messages() -> dict:
 def message_detail(message_id: str) -> dict:
     with db() as conn:
         return {"message": message_with_labels(conn, message_id)}
+
+
+@app.post("/api/messages")
+def create_message(payload: CreateMessageRequest) -> dict:
+    message_id = (
+        strip_required(payload.id, "id")
+        if payload.id is not None
+        else f"msg-{secrets.token_hex(4)}"
+    )
+    folder = normalize_folder(payload.folder)
+    priority = normalize_priority(payload.priority)
+    from_address = strip_required(payload.from_address, "from_address")
+    to_address = strip_required(payload.to_address, "to_address")
+    subject = strip_required(payload.subject, "subject")
+    body = strip_required(payload.body, "body")
+    with db() as conn:
+        existing = conn.execute("SELECT id FROM messages WHERE id = ?", (message_id,)).fetchone()
+        if existing is not None:
+            raise HTTPException(status_code=409, detail=f"Message already exists: {message_id}")
+        conn.execute(
+            """
+            INSERT INTO messages(
+                id, from_address, to_address, subject, body, folder, is_read, priority
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                message_id,
+                from_address,
+                to_address,
+                subject,
+                body,
+                folder,
+                int(payload.is_read),
+                priority,
+            ),
+        )
+        audit(
+            conn,
+            payload.actor,
+            "receive",
+            f"Received {message_id}: {subject}",
+        )
+        return {"status": "received", "message": message_with_labels(conn, message_id)}
 
 
 @app.post("/api/messages/{message_id}/label")

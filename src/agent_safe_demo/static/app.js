@@ -259,6 +259,39 @@ function renderTable(title, items, columns) {
   `;
 }
 
+function renderDraftContents(drafts) {
+  return `
+    <section class="state-card draft-content-card">
+      <div class="state-card-header">
+        <h3>Draft Contents</h3>
+        <span>${drafts.length}</span>
+      </div>
+      <div class="draft-content-list">
+        ${
+          drafts.length
+            ? drafts
+                .map(
+                  (draft) => `
+                    <article class="draft-preview">
+                      <div class="draft-preview-header">
+                        <div>
+                          <strong>${escapeHtml(draft.subject)}</strong>
+                          <p>To ${escapeHtml(draft.to_address)}</p>
+                        </div>
+                        ${badge(draft.created_by)}
+                      </div>
+                      <p class="draft-preview-body">${escapeHtml(draft.body)}</p>
+                    </article>
+                  `,
+                )
+                .join("")
+            : `<p class="empty">No draft content yet.</p>`
+        }
+      </div>
+    </section>
+  `;
+}
+
 function renderState(state) {
   const folderCount = state.mailbox.folders.length;
   const unreadCount = state.messages.filter((message) => !message.is_read).length;
@@ -300,6 +333,8 @@ function renderState(state) {
         { label: "Created By", value: "created_by" },
       ])}
     </div>
+
+    ${renderDraftContents(state.drafts)}
 
     <section class="state-card audit-card">
       <div class="state-card-header">
