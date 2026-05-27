@@ -87,10 +87,30 @@ function renderBackendStatus(status, branch) {
   const snapshotOps = status.operations?.snapshot || {};
   const restoreOps = status.operations?.restore || {};
   const totals = status.totals || {};
-  backendModeEl.textContent = `${status.backend} / ${status.method}`;
+  const details = status.details || {};
+  const stateforkMode =
+    details.statefork_runtime_mode === "docker-build"
+      ? "Docker build"
+      : details.statefork_runtime_mode === "init"
+        ? "Init overlay"
+        : "";
+  backendModeEl.textContent = stateforkMode
+    ? `${status.backend} / ${status.method} / ${stateforkMode}`
+    : `${status.backend} / ${status.method}`;
   snapshotModeEl.textContent = `${branch.id} at ${branch.url}`;
-  backendStatsEl.innerHTML = [
+  const cards = [
     statCard("Backend", status.backend, status.method),
+  ];
+  if (stateforkMode) {
+    cards.push(
+      statCard(
+        "StateFork Mode",
+        stateforkMode,
+        details.statefork_build ? "Dockerfile enabled" : "Dockerfile disabled",
+      ),
+    );
+  }
+  cards.push(
     statCard("Runtime", branch.status, branch.id),
     statCard("Checkpoints", branch.snapshots?.length ?? 0, "manual save points"),
     statCard("Saved State", branch.current_snapshot_id || "none", branch.dirty ? "unsaved changes" : "clean"),
@@ -98,7 +118,8 @@ function renderBackendStatus(status, branch) {
     statCard("Restore Calls", restoreOps.count ?? 0, `avg ${formatMs(restoreOps.mean_ms)}`),
     statCard("Bases", totals.bases ?? 0, "controller internals"),
     statCard("Branches", totals.branches ?? 0, "runtime processes"),
-  ].join("");
+  );
+  backendStatsEl.innerHTML = cards.join("");
 }
 
 function renderWorkspaceState(branch) {

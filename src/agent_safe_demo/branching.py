@@ -1410,6 +1410,12 @@ class StateForkBackend(CheckpointLiteBackend):
                 "statefork_root": str(self.statefork_root),
                 "statefork_cwd": str(self.statefork_cwd),
                 "statefork_method": self.statefork_method,
+                "statefork_build": bool(self.statefork_kwargs.get("build", False)),
+                "statefork_runtime_mode": (
+                    "docker-build"
+                    if self.statefork_kwargs.get("build", False)
+                    else "init"
+                ),
             },
         )
 

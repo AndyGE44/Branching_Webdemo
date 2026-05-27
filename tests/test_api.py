@@ -542,6 +542,25 @@ def test_statefork_build_base_reuses_initial_snapshot(tmp_path):
     assert backend.base_managers[base["id"]] is manager
 
 
+def test_statefork_status_reports_runtime_mode(tmp_path):
+    backend = object.__new__(StateForkBackend)
+    backend.name = "statefork"
+    backend.statefork_root = tmp_path / "StateFork"
+    backend.statefork_cwd = tmp_path / "StateFork"
+    backend.statefork_method = "ckpt_build"
+    backend.statefork_kwargs = {"build": True}
+    backend.host = "127.0.0.1"
+    backend.port_start = 8300
+    backend.bases = {}
+    backend.branches = {}
+    backend.operation_stats = {"snapshot": [], "restore": []}
+
+    status = StateForkBackend.status(backend)
+
+    assert status["details"]["statefork_build"] is True
+    assert status["details"]["statefork_runtime_mode"] == "docker-build"
+
+
 def test_reset_clears_bases_branches_and_mailbox_state(monkeypatch, tmp_path):
     app = load_controller_app(monkeypatch, tmp_path)
     with TestClient(app) as client:

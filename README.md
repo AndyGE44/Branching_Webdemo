@@ -488,6 +488,9 @@ curl -fsS http://127.0.0.1:8000/api/workspace
 
 Expected signs that Docker build mode is working:
 
+- The top status pill shows `statefork / statefork:ckpt_build / Docker build`.
+- The `Runtime & Checkpoint Stats` panel shows `StateFork Mode` as
+  `Docker build` with hint `Dockerfile enabled`.
 - `GET /api/backend` still reports `statefork / statefork:ckpt_build`.
 - The workspace response includes a runtime URL such as
   `http://127.0.0.1:8300`.
