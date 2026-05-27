@@ -1,5 +1,6 @@
 import importlib
 import json
+import sqlite3
 import sys
 from pathlib import Path
 from urllib import request as urlrequest
@@ -505,6 +506,40 @@ def test_checkpoint_backends_reject_concurrent_active_branch(backend_cls, backen
 
     with pytest.raises(BranchError, match="one active branch at a time"):
         backend_cls.create_branch(backend, base_id="base-1")
+
+
+def test_statefork_build_base_reuses_initial_snapshot(tmp_path):
+    db_path = tmp_path / "toy_mailbox.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE marker (id TEXT PRIMARY KEY)")
+
+    class FakeBuildManager:
+        session_id = "session-build"
+        last_snapshot_id = "initial-build-snapshot"
+        current_snapshot_id = "initial-build-snapshot"
+        work_dir = str(tmp_path)
+
+        def snapshot(self):
+            raise AssertionError("build mode should reuse the manager's initial snapshot")
+
+    manager = FakeBuildManager()
+    backend = object.__new__(StateForkBackend)
+    backend.name = "statefork"
+    backend.project_root = tmp_path
+    backend.main_db_path = db_path
+    backend.statefork_kwargs = {"build": True}
+    backend.bases = {}
+    backend.base_managers = {}
+    backend.branches = {}
+    backend.operation_stats = {"snapshot": [], "restore": []}
+    backend._create_statefork_manager = lambda: manager
+    backend._cleanup_manager = lambda _manager: None
+
+    base = StateForkBackend.create_base(backend, label="docker base")
+
+    assert base["checkpoint_id"] == "initial-build-snapshot"
+    assert base["session_id"] == "session-build"
+    assert backend.base_managers[base["id"]] is manager
 
 
 def test_reset_clears_bases_branches_and_mailbox_state(monkeypatch, tmp_path):

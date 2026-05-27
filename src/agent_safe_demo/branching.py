@@ -1417,9 +1417,11 @@ class StateForkBackend(CheckpointLiteBackend):
         if not self.main_db_path.exists():
             raise BranchError(f"Main database does not exist: {self.main_db_path}")
 
-        manager = self._create_statefork_manager()
         started_at = time.time()
-        snapshot_id = self._call_statefork(manager.snapshot)
+        manager = self._create_statefork_manager()
+        snapshot_id = self._initial_build_snapshot_id(manager)
+        if not snapshot_id:
+            snapshot_id = self._call_statefork(manager.snapshot)
         if not snapshot_id:
             self._cleanup_manager(manager)
             raise BranchError("StateFork snapshot failed")
@@ -1432,7 +1434,7 @@ class StateForkBackend(CheckpointLiteBackend):
             backend="statefork",
             label=label or f"Base {len(self.bases) + 1}",
             checkpoint_id=snapshot_id,
-            session_id=getattr(manager, "current_snapshot", snapshot_id),
+            session_id=getattr(manager, "session_id", snapshot_id),
             db_path=work_dir / self.main_db_path.name,
             work_dir=work_dir,
             main_fingerprint=sqlite_fingerprint(self.main_db_path),
@@ -1621,6 +1623,18 @@ class StateForkBackend(CheckpointLiteBackend):
             **self.statefork_kwargs,
         }
         return self._call_statefork(lambda: create_env_manager(self.statefork_method, **kwargs))
+
+    def _initial_build_snapshot_id(self, manager: Any) -> str | None:
+        if not self.statefork_kwargs.get("build"):
+            return None
+        for attr in ("last_snapshot_id", "current_snapshot_id"):
+            value = getattr(manager, attr, None)
+            if value:
+                return str(value)
+        snapshot_graph = getattr(manager, "snapshot_graph", None)
+        if isinstance(snapshot_graph, dict) and len(snapshot_graph) == 1:
+            return str(next(iter(snapshot_graph)))
+        return None
 
     def _cleanup_session(self, branch_id: str) -> None:
         self.branch_environments.pop(branch_id, None)
