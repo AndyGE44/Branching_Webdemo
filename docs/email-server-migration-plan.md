@@ -133,6 +133,20 @@ Initial checkpoint
 
 The key rule: the agent operates only inside the managed runtime service.
 
+The mailbox runtime should remain a normal web app. Branching APIs belong to a
+separate controller/web-shell surface:
+
+```text
+agent_safe_demo.mailbox_app:app
+  mailbox business APIs only
+
+agent_safe_demo.main:app
+  workspace, snapshot, restore, run-agent APIs
+```
+
+This mirrors Docker-style management: packaging or checkpointing the program
+does not add container-management APIs to the program itself.
+
 ## Demo Flow
 
 Recommended UI flow:
@@ -277,6 +291,8 @@ GET  /api/state
 POST /api/reset
 ```
 
+These APIs are served by the ordinary mailbox runtime.
+
 Branch APIs:
 
 ```text
@@ -291,6 +307,8 @@ GET    /api/branches/{branch_id}/diff
 POST   /api/branches/{branch_id}/commit
 POST   /api/branches/{branch_id}/discard
 ```
+
+These APIs are served by the controller, not by the mailbox runtime.
 
 Workspace APIs:
 
@@ -316,6 +334,10 @@ Agent snapshot tree  -> checkpoint list
 Backend stats        -> keep
 Base/branch panels   -> hide behind workspace controller
 ```
+
+Do not add StateFork imports, branch IDs, or workspace endpoints to the mailbox
+business app. The controller can preview mailbox state by talking to the runtime
+over HTTP.
 
 Recommended first UI:
 

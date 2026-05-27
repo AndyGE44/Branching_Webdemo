@@ -682,7 +682,6 @@ class LocalCopyBackend:
     ) -> subprocess.Popen:
         env = os.environ.copy()
         env["TOY_MAILBOX_DB_PATH"] = str(db_path)
-        env["TOY_MAILBOX_BRANCH_ID"] = branch_id
         env["PYTHONPATH"] = pythonpath_for(self.project_root)
 
         return subprocess.Popen(
@@ -690,7 +689,7 @@ class LocalCopyBackend:
                 sys.executable,
                 "-m",
                 "uvicorn",
-                "agent_safe_demo.main:app",
+                "agent_safe_demo.mailbox_app:app",
                 "--host",
                 self.host,
                 "--port",
@@ -1251,15 +1250,13 @@ class CheckpointLiteBackend:
     ) -> subprocess.Popen:
         env = os.environ.copy()
         env["TOY_MAILBOX_DB_PATH"] = str(db_path)
-        env["TOY_MAILBOX_BRANCH_ID"] = branch_id
-        env["TOY_BRANCH_BACKEND"] = "local-copy"
         env["PYTHONPATH"] = pythonpath_for(Path(cwd))
 
         command = [
             sys.executable,
             "-m",
             "uvicorn",
-            "agent_safe_demo.main:app",
+            "agent_safe_demo.mailbox_app:app",
             "--host",
             self.host,
             "--port",
@@ -1271,8 +1268,6 @@ class CheckpointLiteBackend:
                 "env",
                 f"PYTHONPATH={env['PYTHONPATH']}",
                 f"TOY_MAILBOX_DB_PATH={env['TOY_MAILBOX_DB_PATH']}",
-                f"TOY_MAILBOX_BRANCH_ID={env['TOY_MAILBOX_BRANCH_ID']}",
-                f"TOY_BRANCH_BACKEND={env['TOY_BRANCH_BACKEND']}",
                 *command,
             ]
 
@@ -1492,8 +1487,6 @@ class StateForkBackend(CheckpointLiteBackend):
         port = self._next_port()
         env = os.environ.copy()
         env["TOY_MAILBOX_DB_PATH"] = str(branch_db)
-        env["TOY_MAILBOX_BRANCH_ID"] = branch_id
-        env["TOY_BRANCH_BACKEND"] = "local-copy"
         env["PYTHONPATH"] = pythonpath_for(work_dir)
 
         process = subprocess.Popen(
@@ -1501,7 +1494,7 @@ class StateForkBackend(CheckpointLiteBackend):
                 sys.executable,
                 "-m",
                 "uvicorn",
-                "agent_safe_demo.main:app",
+                "agent_safe_demo.mailbox_app:app",
                 "--host",
                 self.host,
                 "--port",
@@ -1624,7 +1617,7 @@ class StateForkBackend(CheckpointLiteBackend):
 
         kwargs = {
             "dockerfile_dir": str(self.project_root),
-            "build": False,
+            "build": True,
             **self.statefork_kwargs,
         }
         return self._call_statefork(lambda: create_env_manager(self.statefork_method, **kwargs))

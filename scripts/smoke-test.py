@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
+import sys
 from urllib import request
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from agent_safe_demo.mailbox_app import state as local_mailbox_state
 
 
 BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:8000")
@@ -43,7 +50,7 @@ def main() -> None:
         "snapshot"
     ]
     branch_state = get_url(f"{branch['url']}/api/state")
-    main_state = get("/api/state")
+    main_state = local_mailbox_state()
 
     branch_messages = {
         message["id"]: {

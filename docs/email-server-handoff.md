@@ -8,7 +8,7 @@ without losing context.
 Work branch:
 
 ```bash
-email-server-demo
+split-controller-mailbox-app
 ```
 
 Phase 1 runtime rename commit:
@@ -36,7 +36,6 @@ Public/runtime names should use mailbox naming:
 
 ```bash
 TOY_MAILBOX_DB_PATH
-TOY_MAILBOX_BRANCH_ID
 toy_mailbox.db
 agent-safe-toy-mailbox
 ```
@@ -105,6 +104,17 @@ The top-right action area exposes `Run Agent`, `Snapshot`, and workspace reset.
 `Run Agent` is just an automated sequence of mailbox operations inside the
 runtime.
 
+The app has been split into two API surfaces:
+
+- `agent_safe_demo.mailbox_app:app` is the ordinary mailbox business app. It
+  does not import StateFork and does not expose workspace/branch APIs.
+- `agent_safe_demo.main:app` is the StateFork workspace controller. It serves
+  the checkpoint UI and workspace APIs, and launches runtime branches as the
+  plain mailbox app.
+
+This matches the intended StateFork model: the managed web program does not
+know it has been branched.
+
 The branch-agent demo now runs a deterministic mailbox plan:
 
 ```text
@@ -151,6 +161,12 @@ Backend app:
 
 ```text
 src/agent_safe_demo/main.py
+```
+
+Plain mailbox business app:
+
+```text
+src/agent_safe_demo/mailbox_app.py
 ```
 
 Branch backends and current email agent plan:
@@ -358,7 +374,7 @@ Run before committing:
 
 ```bash
 pytest -q
-python -m py_compile src/agent_safe_demo/main.py src/agent_safe_demo/branching.py scripts/smoke-test.py
+python -m py_compile src/agent_safe_demo/main.py src/agent_safe_demo/mailbox_app.py src/agent_safe_demo/branching.py scripts/smoke-test.py
 node --check src/agent_safe_demo/static/app.js
 git diff --check
 ```
@@ -370,7 +386,7 @@ PYTHONPATH=src .venv/bin/uvicorn agent_safe_demo.main:app \
   --host 127.0.0.1 \
   --port 8765
 
-curl -fsS http://127.0.0.1:8765/api/mailbox
+curl -fsS http://127.0.0.1:8765/api/workspace
 ```
 
 Expected seed state:
@@ -388,8 +404,13 @@ Archive count 1
 - The package import path is still `agent_safe_demo`; only the package
   distribution name changed to `agent-safe-toy-mailbox`.
 - The branch backend abstraction is good and should be reused.
-- Legacy base/branch endpoints and `run-agent-demo` still exist for
-  compatibility, but the UI and smoke test now use `/api/workspace`.
+- Legacy base/branch endpoints and `run-agent-demo` still exist on the
+  controller for compatibility, but the UI and smoke test now use
+  `/api/workspace`.
+- Runtime branches launch `agent_safe_demo.mailbox_app:app`; do not add
+  workspace or branch APIs to the mailbox app.
+- The repo now includes a `Dockerfile` so StateFork/checkpoint-lite build mode
+  can create a shell-capable packaged runtime.
 - VM runs may create root-owned database files if started with `sudo`. If the
   app cannot write the default database, clean up generated runtime data:
 
@@ -407,9 +428,9 @@ We are continuing the Agent-Safe Toy Mailbox demo in
 /Users/andyge/Desktop/Research/Search_Agent/agent_safe_demo.
 
 Please read docs/email-server-handoff.md first. We are on branch
-email-server-demo. Mailbox read/mutation APIs, deterministic agent actions,
-manual snapshots/restores, and the managed workspace UI are in progress. Keep
-the user-facing flow checkpoint-first: startup creates the runtime, Snapshot
-saves, Restore returns to any checkpoint, and Run Agent is just an automated
-mailbox actor. Run tests locally, push the branch, and verify on sf-exp.
+split-controller-mailbox-app. The current task is separating the ordinary
+mailbox business app from the StateFork workspace controller. Keep mailbox
+business APIs in `agent_safe_demo.mailbox_app:app`; keep snapshot/restore/run
+agent APIs in `agent_safe_demo.main:app`; runtime branches should launch the
+plain mailbox app. Run tests locally, push the branch, and verify on sf-exp.
 ```

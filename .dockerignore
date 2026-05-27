@@ -1,0 +1,11 @@
+.git
+.branches
+.pytest_cache
+.venv
+.env
+build
+dist
+output
+__pycache__
+*.pyc
+toy_inventory.db

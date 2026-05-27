@@ -13,11 +13,26 @@ snapshots, and restore behaves like returning to a saved game point. The
 StateFork/checkpoint-lite base and branch lifecycle remains underneath that
 workspace controller.
 
+The demo is split into two API surfaces:
+
+- `agent_safe_demo.mailbox_app:app` is the ordinary business app. It only knows
+  about mailbox, message, draft, and state APIs.
+- `agent_safe_demo.main:app` is the StateFork workspace controller. It owns
+  snapshot, restore, runtime startup, and the checkpoint UI.
+
+Runtime branches are launched as `agent_safe_demo.mailbox_app:app`, so the
+managed program does not know it has been branched.
+
 The preferred demo path is the shared Ubuntu VM with `StateForkBackend`
 enabled. StateFork uses its controller API to call snapshot, restore,
 create-env, and cleanup operations. The direct checkpoint-lite backend remains
 available as a lower-level reference path, and the local-copy backend exists
 only for quick frontend/API development on non-Linux machines.
+
+The repo includes a `Dockerfile` for checkpoint-lite/StateFork build mode. The
+build image contains Python, the mailbox package, and a shell-capable runtime,
+which is the intended path for demonstrating that StateFork can manage an
+ordinary packaged web service from the outside.
 
 ## Public Cloudflare Quick Tunnel Demo
 
@@ -544,12 +559,16 @@ dist/
 
 ## Useful Endpoints
 
+Business mailbox app endpoints, served by the managed runtime:
+
 - `GET /api/mailbox`
 - `GET /api/messages`
 - `GET /api/messages/{message_id}`
 - `GET /api/state`
-- `POST /api/reset` clears active branches, base checkpoints, backend sessions,
-  and recreates the main toy database
+- `POST /api/reset`
+
+Workspace controller endpoints, served by the main controller:
+
 - `GET /api/workspace`
 - `GET /api/workspace/dirty`
 - `POST /api/workspace/run-agent`
@@ -567,8 +586,9 @@ dist/
 - `POST /api/branches/{branch_id}/discard`
 
 Base/branch endpoints are still available for compatibility and tests, but the
-preferred UI path uses `/api/workspace`. Legacy inventory endpoints and the old
-diff shape still exist while semantic email review is being built.
+preferred UI path uses `/api/workspace`. The controller intentionally does not
+serve `/api/mailbox`, and the business app intentionally does not serve
+`/api/workspace`.
 
 The generated OpenAPI docs are available at `/docs`.
 
@@ -589,6 +609,12 @@ Open:
 
 ```text
 http://127.0.0.1:8000
+```
+
+The controller starts local runtime copies as:
+
+```text
+agent_safe_demo.mailbox_app:app
 ```
 
 Run tests:

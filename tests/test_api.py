@@ -15,7 +15,7 @@ from agent_safe_demo.branching import (
 )
 
 
-def load_app(monkeypatch, tmp_path, auth_password=None):
+def configure_env(monkeypatch, tmp_path, auth_password=None) -> None:
     db_path = tmp_path / "toy_mailbox.db"
     monkeypatch.setenv("TOY_MAILBOX_DB_PATH", str(db_path))
     monkeypatch.setenv("TOY_BRANCH_BACKEND", "local-copy")
@@ -24,9 +24,26 @@ def load_app(monkeypatch, tmp_path, auth_password=None):
         monkeypatch.delenv("TOY_DEMO_AUTH_PASSWORD", raising=False)
     else:
         monkeypatch.setenv("TOY_DEMO_AUTH_PASSWORD", auth_password)
+
+
+def load_mailbox_app(monkeypatch, tmp_path, auth_password=None):
+    configure_env(monkeypatch, tmp_path, auth_password)
+    sys.modules.pop("agent_safe_demo.mailbox_app", None)
+    module = importlib.import_module("agent_safe_demo.mailbox_app")
+    return module.app
+
+
+def load_controller_app(monkeypatch, tmp_path, auth_password=None):
+    configure_env(monkeypatch, tmp_path, auth_password)
     sys.modules.pop("agent_safe_demo.main", None)
+    sys.modules.pop("agent_safe_demo.mailbox_app", None)
     module = importlib.import_module("agent_safe_demo.main")
     return module.app
+
+
+def mailbox_state() -> dict:
+    module = importlib.import_module("agent_safe_demo.mailbox_app")
+    return module.state()
 
 
 def get_json(url: str) -> dict:
@@ -35,7 +52,7 @@ def get_json(url: str) -> dict:
 
 
 def test_mailbox_seed_data(monkeypatch, tmp_path):
-    app = load_app(monkeypatch, tmp_path)
+    app = load_mailbox_app(monkeypatch, tmp_path)
     with TestClient(app) as client:
         response = client.get("/api/mailbox")
 
@@ -49,7 +66,7 @@ def test_mailbox_seed_data(monkeypatch, tmp_path):
 
 
 def test_message_detail_includes_labels(monkeypatch, tmp_path):
-    app = load_app(monkeypatch, tmp_path)
+    app = load_mailbox_app(monkeypatch, tmp_path)
     with TestClient(app) as client:
         response = client.get("/api/messages/msg-1002")
 
@@ -61,7 +78,7 @@ def test_message_detail_includes_labels(monkeypatch, tmp_path):
 
 
 def test_label_message_creates_one_label_and_audit_event(monkeypatch, tmp_path):
-    app = load_app(monkeypatch, tmp_path)
+    app = load_mailbox_app(monkeypatch, tmp_path)
     with TestClient(app) as client:
         response = client.post(
             "/api/messages/msg-1001/label",
@@ -87,7 +104,7 @@ def test_label_message_creates_one_label_and_audit_event(monkeypatch, tmp_path):
 
 
 def test_move_and_read_message_update_state_and_audit_log(monkeypatch, tmp_path):
-    app = load_app(monkeypatch, tmp_path)
+    app = load_mailbox_app(monkeypatch, tmp_path)
     with TestClient(app) as client:
         move = client.post(
             "/api/messages/msg-1003/move",
@@ -109,7 +126,7 @@ def test_move_and_read_message_update_state_and_audit_log(monkeypatch, tmp_path)
 
 
 def test_archive_message_accepts_empty_body(monkeypatch, tmp_path):
-    app = load_app(monkeypatch, tmp_path)
+    app = load_mailbox_app(monkeypatch, tmp_path)
     with TestClient(app) as client:
         response = client.post("/api/messages/msg-1004/archive")
         state = client.get("/api/state").json()
@@ -121,7 +138,7 @@ def test_archive_message_accepts_empty_body(monkeypatch, tmp_path):
 
 
 def test_create_draft_increments_mailbox_draft_count(monkeypatch, tmp_path):
-    app = load_app(monkeypatch, tmp_path)
+    app = load_mailbox_app(monkeypatch, tmp_path)
     with TestClient(app) as client:
         before = client.get("/api/mailbox").json()
         response = client.post(
@@ -145,7 +162,7 @@ def test_create_draft_increments_mailbox_draft_count(monkeypatch, tmp_path):
 
 
 def test_create_message_adds_email_to_mailbox(monkeypatch, tmp_path):
-    app = load_app(monkeypatch, tmp_path)
+    app = load_mailbox_app(monkeypatch, tmp_path)
     with TestClient(app) as client:
         response = client.post(
             "/api/messages",
@@ -175,12 +192,12 @@ def test_create_message_adds_email_to_mailbox(monkeypatch, tmp_path):
     )
 
 
-def test_demo_password_protects_main_app(monkeypatch, tmp_path):
-    app = load_app(monkeypatch, tmp_path, auth_password="secret-demo-password")
+def test_demo_password_protects_controller_app(monkeypatch, tmp_path):
+    app = load_controller_app(monkeypatch, tmp_path, auth_password="secret-demo-password")
     with TestClient(app) as client:
-        blocked = client.get("/api/mailbox")
-        wrong_password = client.get("/api/mailbox", auth=("demo", "wrong"))
-        allowed = client.get("/api/mailbox", auth=("demo", "secret-demo-password"))
+        blocked = client.get("/api/backend")
+        wrong_password = client.get("/api/backend", auth=("demo", "wrong"))
+        allowed = client.get("/api/backend", auth=("demo", "secret-demo-password"))
 
     assert blocked.status_code == 401
     assert blocked.headers["www-authenticate"] == 'Basic realm="Agent-Safe Demo"'
@@ -188,8 +205,23 @@ def test_demo_password_protects_main_app(monkeypatch, tmp_path):
     assert allowed.status_code == 200
 
 
+def test_business_and_control_apis_are_separate(monkeypatch, tmp_path):
+    mailbox = load_mailbox_app(monkeypatch, tmp_path)
+    controller = load_controller_app(monkeypatch, tmp_path)
+    with TestClient(mailbox) as mailbox_client, TestClient(controller) as controller_client:
+        mailbox_business = mailbox_client.get("/api/mailbox")
+        mailbox_control = mailbox_client.get("/api/workspace")
+        controller_control = controller_client.get("/api/backend")
+        controller_business = controller_client.get("/api/mailbox")
+
+    assert mailbox_business.status_code == 200
+    assert mailbox_control.status_code == 404
+    assert controller_control.status_code == 200
+    assert controller_business.status_code == 404
+
+
 def test_base_checkpoint_api_shapes_branch_creation(monkeypatch, tmp_path):
-    app = load_app(monkeypatch, tmp_path)
+    app = load_controller_app(monkeypatch, tmp_path)
     with TestClient(app) as client:
         base_response = client.post("/api/bases", json={"label": "mailbox-base"})
         assert base_response.status_code == 200
@@ -232,7 +264,7 @@ def test_base_checkpoint_api_shapes_branch_creation(monkeypatch, tmp_path):
 
 
 def test_branch_agent_demo_runs_email_plan_without_changing_main(monkeypatch, tmp_path):
-    app = load_app(monkeypatch, tmp_path)
+    app = load_controller_app(monkeypatch, tmp_path)
     branch = None
     with TestClient(app) as client:
         base = client.post("/api/bases", json={"label": "agent-base"}).json()["base"]
@@ -240,7 +272,7 @@ def test_branch_agent_demo_runs_email_plan_without_changing_main(monkeypatch, tm
         try:
             agent = client.post(f"/api/branches/{branch['id']}/run-agent-demo")
             branch_state = get_json(f"{branch['url']}/api/state")
-            main_state = client.get("/api/state").json()
+            main_state = mailbox_state()
         finally:
             client.post(f"/api/branches/{branch['id']}/discard")
 
@@ -271,7 +303,7 @@ def test_branch_agent_demo_runs_email_plan_without_changing_main(monkeypatch, tm
 
 
 def test_manual_snapshot_restore_requires_dirty_choice(monkeypatch, tmp_path):
-    app = load_app(monkeypatch, tmp_path)
+    app = load_controller_app(monkeypatch, tmp_path)
     branch = None
     with TestClient(app) as client:
         base = client.post("/api/bases", json={"label": "restore-base"}).json()["base"]
@@ -313,7 +345,7 @@ def test_manual_snapshot_restore_requires_dirty_choice(monkeypatch, tmp_path):
 
 
 def test_workspace_starts_in_runtime_with_initial_checkpoint(monkeypatch, tmp_path):
-    app = load_app(monkeypatch, tmp_path)
+    app = load_controller_app(monkeypatch, tmp_path)
     with TestClient(app) as client:
         try:
             response = client.get("/api/workspace")
@@ -338,7 +370,7 @@ def test_workspace_starts_in_runtime_with_initial_checkpoint(monkeypatch, tmp_pa
 
 
 def test_workspace_agent_and_restore_keep_main_as_seed(monkeypatch, tmp_path):
-    app = load_app(monkeypatch, tmp_path)
+    app = load_controller_app(monkeypatch, tmp_path)
     with TestClient(app) as client:
         workspace = client.get("/api/workspace").json()
         branch = workspace["branch"]
@@ -347,7 +379,7 @@ def test_workspace_agent_and_restore_keep_main_as_seed(monkeypatch, tmp_path):
             agent = client.post("/api/workspace/run-agent")
             dirty = client.get("/api/workspace/dirty")
             branch_state = get_json(f"{branch['url']}/api/state")
-            main_state = client.get("/api/state").json()
+            main_state = mailbox_state()
             blocked_restore = client.post(
                 "/api/workspace/restore",
                 json={"snapshot_id": initial_snapshot["id"]},
@@ -389,14 +421,14 @@ def test_workspace_agent_and_restore_keep_main_as_seed(monkeypatch, tmp_path):
 
 
 def test_commit_promotes_branch_when_main_still_matches_base(monkeypatch, tmp_path):
-    app = load_app(monkeypatch, tmp_path)
+    app = load_controller_app(monkeypatch, tmp_path)
     branch = None
     with TestClient(app) as client:
         base = client.post("/api/bases", json={"label": "commit-base"}).json()["base"]
         branch = client.post(f"/api/bases/{base['id']}/branches").json()["branch"]
         agent = client.post(f"/api/branches/{branch['id']}/run-agent-demo")
         commit = client.post(f"/api/branches/{branch['id']}/commit")
-        main_state = client.get("/api/state").json()
+        main_state = mailbox_state()
         branches = client.get("/api/branches").json()["branches"]
 
     assert agent.status_code == 200
@@ -418,19 +450,21 @@ def test_commit_promotes_branch_when_main_still_matches_base(monkeypatch, tmp_pa
 
 
 def test_commit_rejects_branch_when_main_changed_after_base(monkeypatch, tmp_path):
-    app = load_app(monkeypatch, tmp_path)
+    app = load_controller_app(monkeypatch, tmp_path)
     branch = None
     with TestClient(app) as client:
         base = client.post("/api/bases", json={"label": "stale-base"}).json()["base"]
         branch = client.post(f"/api/bases/{base['id']}/branches").json()["branch"]
 
-        user_change = client.post(
-            "/api/messages/msg-1001/label",
-            json={"label": "user-work", "actor": "user"},
-        )
+        mailbox_app = importlib.import_module("agent_safe_demo.mailbox_app").app
+        with TestClient(mailbox_app) as mailbox_client:
+            user_change = mailbox_client.post(
+                "/api/messages/msg-1001/label",
+                json={"label": "user-work", "actor": "user"},
+            )
         agent = client.post(f"/api/branches/{branch['id']}/run-agent-demo")
         commit = client.post(f"/api/branches/{branch['id']}/commit")
-        main_state = client.get("/api/state").json()
+        main_state = mailbox_state()
         branches = client.get("/api/branches").json()["branches"]
         client.post(f"/api/branches/{branch['id']}/discard")
 
@@ -474,7 +508,7 @@ def test_checkpoint_backends_reject_concurrent_active_branch(backend_cls, backen
 
 
 def test_reset_clears_bases_branches_and_mailbox_state(monkeypatch, tmp_path):
-    app = load_app(monkeypatch, tmp_path)
+    app = load_controller_app(monkeypatch, tmp_path)
     with TestClient(app) as client:
         base = client.post("/api/bases", json={"label": "reset-base"}).json()["base"]
         branch = client.post(f"/api/bases/{base['id']}/branches").json()["branch"]
@@ -488,7 +522,7 @@ def test_reset_clears_bases_branches_and_mailbox_state(monkeypatch, tmp_path):
         bases = client.get("/api/bases")
         branches = client.get("/api/branches")
         backend = client.get("/api/backend")
-        state = client.get("/api/state")
+        state = mailbox_state()
 
     assert reset.json()["cleanup"] == {"branches_deleted": 1, "bases_deleted": 1}
     assert bases.json()["bases"] == []
@@ -496,6 +530,6 @@ def test_reset_clears_bases_branches_and_mailbox_state(monkeypatch, tmp_path):
     assert backend.json()["totals"] == {"bases": 0, "branches": 0, "snapshots": 0}
     assert backend.json()["operations"]["snapshot"]["count"] == 0
     assert backend.json()["operations"]["restore"]["count"] == 0
-    assert len(state.json()["messages"]) == 5
-    assert len(state.json()["drafts"]) == 1
-    assert len(state.json()["audit_log"]) == 1
+    assert len(state["messages"]) == 5
+    assert len(state["drafts"]) == 1
+    assert len(state["audit_log"]) == 1
