@@ -118,9 +118,10 @@ requested with:
 TOY_STATEFORK_BUILD=1
 ```
 
-On `sf-exp`, the Docker image builds successfully, but checkpoint-lite build
-mode currently fails at CRIU memory checkpoint creation. The stable smoke test
-therefore continues to use the existing init path by default.
+For build mode, the controller reuses the initial snapshot that StateFork's
+`CheckpointLiteBuildManager` creates during `checkpoint-lite build`. That avoids
+requesting an immediate duplicate memory checkpoint before the runtime branch is
+created.
 
 ## Why This Matches The Intended Design
 
@@ -140,7 +141,7 @@ business API != branching/control API
 Local validation:
 
 ```text
-19 passed
+20 passed
 py_compile passed
 node --check passed
 git diff --check passed
@@ -150,10 +151,11 @@ local smoke test passed
 `sf-exp` validation:
 
 ```text
-19 passed
+20 passed
 StateFork smoke passed
 StateFork restore-to-initial passed
 Docker build passed
+Docker build-mode workspace/smoke/restore passed with TOY_STATEFORK_BUILD=1
 ```
 
 API separation check on `sf-exp`:
