@@ -13,15 +13,16 @@ from agent_safe_demo.mailbox_app import state as local_mailbox_state
 
 
 BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:8000")
+TIMEOUT = float(os.getenv("SMOKE_TIMEOUT", "60"))
 
 
 def get(path: str) -> dict:
-    with request.urlopen(f"{BASE_URL}{path}", timeout=10) as response:
+    with request.urlopen(f"{BASE_URL}{path}", timeout=TIMEOUT) as response:
         return json.loads(response.read())
 
 
 def get_url(url: str) -> dict:
-    with request.urlopen(url, timeout=10) as response:
+    with request.urlopen(url, timeout=TIMEOUT) as response:
         return json.loads(response.read())
 
 
@@ -33,7 +34,7 @@ def post(path: str, payload: dict | None = None) -> dict:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with request.urlopen(req, timeout=10) as response:
+    with request.urlopen(req, timeout=TIMEOUT) as response:
         return json.loads(response.read())
 
 
