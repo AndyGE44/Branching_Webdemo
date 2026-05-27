@@ -1617,7 +1617,7 @@ class StateForkBackend(CheckpointLiteBackend):
 
         kwargs = {
             "dockerfile_dir": str(self.project_root),
-            "build": True,
+            "build": False,
             **self.statefork_kwargs,
         }
         return self._call_statefork(lambda: create_env_manager(self.statefork_method, **kwargs))

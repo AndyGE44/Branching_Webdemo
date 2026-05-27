@@ -34,6 +34,10 @@ build image contains Python, the mailbox package, and a shell-capable runtime,
 which is the intended path for demonstrating that StateFork can manage an
 ordinary packaged web service from the outside.
 
+`StateForkBackend` keeps the current VM-stable init path by default. Set
+`TOY_STATEFORK_BUILD=1` to ask StateFork/checkpoint-lite to use the Dockerfile
+build path.
+
 ## Public Cloudflare Quick Tunnel Demo
 
 Use this when you want to send someone a temporary public URL for the VM-hosted

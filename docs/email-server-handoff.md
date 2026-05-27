@@ -411,6 +411,8 @@ Archive count 1
   workspace or branch APIs to the mailbox app.
 - The repo now includes a `Dockerfile` so StateFork/checkpoint-lite build mode
   can create a shell-capable packaged runtime.
+- The stable VM smoke path still uses StateFork's init mode by default. Set
+  `TOY_STATEFORK_BUILD=1` when explicitly testing checkpoint-lite build mode.
 - VM runs may create root-owned database files if started with `sudo`. If the
   app cannot write the default database, clean up generated runtime data:
 
