@@ -38,6 +38,29 @@ ordinary packaged web service from the outside.
 `TOY_STATEFORK_BUILD=1` before starting the controller to ask
 StateFork/checkpoint-lite to use the Dockerfile build path.
 
+## Recommended VM Start
+
+On `sf-exp`, prefer the Docker build-mode launcher:
+
+```bash
+cd ~/Web_Demo_For_Checkpointlite
+. .venv/bin/activate
+./scripts/run-statefork-docker.sh
+```
+
+If port `8000` or the runtime ports are already occupied:
+
+```bash
+./scripts/cleanup-statefork-demo.sh
+./scripts/run-statefork-docker.sh
+```
+
+The UI should show:
+
+```text
+statefork / statefork:ckpt_build / Docker build
+```
+
 ## Public Cloudflare Quick Tunnel Demo
 
 Use this when you want to send someone a temporary public URL for the VM-hosted
@@ -195,17 +218,38 @@ sudo apt-get install -y python3.12-venv
 
 ### 3. Start The StateFork Demo On The VM
 
-Still inside the SSH session:
+Still inside the SSH session, use the Docker build-mode launcher. This is the
+recommended demo path:
+
+```bash
+cd ~/Web_Demo_For_Checkpointlite
+. .venv/bin/activate
+./scripts/run-statefork-docker.sh
+```
+
+The script sets the StateFork/checkpoint-lite environment, enables
+`TOY_STATEFORK_BUILD=1`, uses this repo's `Dockerfile`, and starts the
+controller on `127.0.0.1:8000`.
+
+If port `8000` is already in use, clean up the previous demo first:
+
+```bash
+./scripts/cleanup-statefork-demo.sh
+./scripts/run-statefork-docker.sh
+```
+
+Manual equivalent, mostly for debugging:
 
 ```bash
 cd ~/Web_Demo_For_Checkpointlite
 . .venv/bin/activate
 
 export TOY_BRANCH_BACKEND=statefork
+export TOY_STATEFORK_BUILD=1
 export TOY_STATEFORK_ROOT=/users/alexxjk/StateFork
 export TOY_STATEFORK_CWD=/users/alexxjk/StateFork
 export TOY_STATEFORK_METHOD=ckpt_build
-export CHECKPOINT_SESSIONS_DIR=/tmp/checkpoint-sessions
+export CHECKPOINT_SESSIONS_DIR=/tmp/checkpoint-sessions-mailbox-demo
 export TOY_BRANCH_HOST=127.0.0.1
 export TOY_BRANCH_PORT_START=8300
 export PYTHONPATH=src
@@ -213,14 +257,8 @@ export PYTHONPATH=src
 sudo -E .venv/bin/uvicorn agent_safe_demo.main:app --host 127.0.0.1 --port 8000
 ```
 
-To enable Docker build mode, add this export before starting `uvicorn`:
-
-```bash
-export TOY_STATEFORK_BUILD=1
-```
-
-With that flag, StateFork calls checkpoint-lite build mode against this repo's
-`Dockerfile`. The mailbox app is still the ordinary runtime app
+In Docker build mode, StateFork calls checkpoint-lite build mode against this
+repo's `Dockerfile`. The mailbox app is still the ordinary runtime app
 (`agent_safe_demo.mailbox_app:app`); Docker is only used by checkpoint-lite to
 prepare the managed environment from the outside.
 
@@ -312,10 +350,7 @@ If a run is interrupted, clean up ports and checkpoint-lite/StateFork session
 mounts:
 
 ```bash
-lsof -tiTCP:8000 -sTCP:LISTEN | xargs -r kill
-lsof -tiTCP:8300-8350 -sTCP:LISTEN | xargs -r sudo kill
-sudo umount -l /tmp/checkpoint-sessions/*/work 2>/dev/null || true
-sudo rm -rf /tmp/checkpoint-sessions /tmp/checkpoint-sessions-info
+./scripts/cleanup-statefork-demo.sh
 ```
 
 ## Bootstrap A Fresh Shared VM
@@ -465,18 +500,18 @@ Then run the shared VM demo above.
 
 ### 7. Verify Docker Build Mode
 
-Use this when you specifically want to prove the Dockerfile path:
+Use this when you specifically want to prove the Dockerfile path. First verify
+the image builds:
 
 ```bash
 cd ~/Web_Demo_For_Checkpointlite
 sudo docker build -t agent-safe-mailbox:manual-check .
 ```
 
-Then start the normal StateFork controller with one additional flag:
+Then start the demo with the recommended launcher:
 
 ```bash
-export TOY_STATEFORK_BUILD=1
-sudo -E .venv/bin/uvicorn agent_safe_demo.main:app --host 127.0.0.1 --port 8000
+./scripts/run-statefork-docker.sh
 ```
 
 The first request to `/api/workspace` may take longer because checkpoint-lite is
@@ -508,23 +543,11 @@ UI and FastAPI endpoints stay the same, but the branch backend is selected with
 `TOY_BRANCH_BACKEND=statefork`:
 
 ```bash
-export TOY_BRANCH_BACKEND=statefork
-export TOY_STATEFORK_ROOT=/users/alexxjk/StateFork
-export TOY_STATEFORK_CWD=/users/alexxjk/StateFork
-export TOY_STATEFORK_METHOD=ckpt_build
-export CHECKPOINT_SESSIONS_DIR=/tmp/checkpoint-sessions
-export TOY_BRANCH_HOST=127.0.0.1
-export TOY_BRANCH_PORT_START=8300
-export PYTHONPATH=src
-
-sudo -E .venv/bin/uvicorn agent_safe_demo.main:app --host 127.0.0.1 --port 8000
+./scripts/run-statefork-docker.sh
 ```
 
-Enable Docker build mode by adding:
-
-```bash
-export TOY_STATEFORK_BUILD=1
-```
+The launcher sets `TOY_BRANCH_BACKEND=statefork`, `TOY_STATEFORK_BUILD=1`,
+StateFork paths, runtime ports, `CHECKPOINT_SESSIONS_DIR`, and `PYTHONPATH`.
 
 `StateForkBackend` currently calls StateFork's `snapshot`, `restore`,
 `create_env_from_snapshot`, and `cleanup` methods. The current mailbox UI shows
