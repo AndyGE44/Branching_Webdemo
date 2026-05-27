@@ -4,13 +4,14 @@ A FastAPI web demo for showing how StateFork and checkpoint-lite can give a
 normal email-style web service an agent-safe branch workflow:
 
 ```text
-main mailbox state -> create StateFork base -> create branch -> discard/commit
+open workspace -> initial checkpoint -> user/agent changes -> snapshot/restore
 ```
 
-This branch is Phase 1 of the email server migration. The UI now uses mailbox,
-message, label, and draft primitives. The StateFork/checkpoint-lite branch
-lifecycle is still intact, while email-specific agent actions and semantic diff
-will land in later phases.
+The UI uses mailbox, message, label, and draft primitives. The visible workflow
+is checkpoint-first: the app starts in a managed runtime, users explicitly save
+snapshots, and restore behaves like returning to a saved game point. The
+StateFork/checkpoint-lite base and branch lifecycle remains underneath that
+workspace controller.
 
 The preferred demo path is the shared Ubuntu VM with `StateForkBackend`
 enabled. StateFork uses its controller API to call snapshot, restore,
@@ -52,7 +53,7 @@ TOY_DEMO_AUTH_PASSWORD=<shared-demo-password>
 ```
 
 `TOY_DEMO_AUTH_USER` defaults to `demo`. The password protects the main app
-with HTTP Basic Auth. The active branch app is still an internal VM-only process
+with HTTP Basic Auth. The active runtime app is still an internal VM-only process
 on `127.0.0.1:8300`, so the main app can manage branch environments without
 opening the branch port publicly.
 
@@ -140,12 +141,12 @@ Port meanings:
 - `18000`: forwards your laptop's `127.0.0.1:18000` to the VM main FastAPI app
   on `127.0.0.1:8000`
 - `18300`: forwards your laptop's `127.0.0.1:18300` to the VM StateFork
-  branch app on `127.0.0.1:8300`
+  runtime app on `127.0.0.1:8300`
 
-The current StateFork and checkpoint-lite backends support one active branch at
-a time. Commit or discard the existing branch before creating another branch.
-The local-copy backend may run multiple branches because it is only a development
-simulation.
+The current StateFork and checkpoint-lite backends support one active runtime at
+a time. The workspace controller owns that runtime for the UI. The local-copy
+backend may run multiple branches through the legacy API because it is only a
+development simulation.
 
 Using `18000` and `18300` avoids colliding with a local copy of this demo that
 may already be running on your laptop. The `ExitOnForwardFailure=yes` option
@@ -204,15 +205,15 @@ http://127.0.0.1:18000
 Try this flow:
 
 ```text
-Create Base -> Create Branch -> Open Branch -> Commit or Discard
+Run Agent -> Snapshot -> Restore Initial checkpoint -> Snapshot again
 ```
 
 The header should show `statefork / statefork:ckpt_build`. The
-`Backend & Snapshot Stats` panel shows the active backend, base count, branch
-count, visible snapshot-tree nodes, and measured snapshot/restore calls for the
-current server process.
+`Runtime & Checkpoint Stats` panel shows the active backend, runtime branch,
+visible checkpoint nodes, and measured snapshot/restore calls for the current
+server process.
 
-The branch URL should look like:
+The runtime URL should look like:
 
 ```text
 http://127.0.0.1:8300
@@ -224,7 +225,7 @@ With the safer tunnel above, open the branch locally as:
 http://127.0.0.1:18300
 ```
 
-The app may still display the VM-side branch URL `http://127.0.0.1:8300`.
+The app may still display the VM-side runtime URL `http://127.0.0.1:8300`.
 Manually replace local port `8300` with `18300` in your browser.
 
 ### 5. Avoid Accidentally Opening A Local Demo
@@ -248,13 +249,13 @@ lsof -tiTCP:8300-8350 -sTCP:LISTEN | xargs -r kill
 You are seeing the preferred StateFork VM version when:
 
 - The header shows `statefork / statefork:ckpt_build`.
-- Branch IDs start with `sf-`.
-- The branch app uses VM port `8300`, viewed locally through `18300`.
+- Runtime branch IDs start with `sf-`.
+- The runtime app uses VM port `8300`, viewed locally through `18300`.
 
 You are probably seeing the local development version when:
 
-- Branch IDs start with `br-`.
-- Branch apps use local-copy ports around `8100+`.
+- Runtime branch IDs start with `br-`.
+- Runtime apps use local-copy ports around `8100+`.
 - The header shows `local-copy / file-copy`.
 
 ### 6. Optional Smoke Test On The VM
@@ -451,9 +452,8 @@ sudo -E .venv/bin/uvicorn agent_safe_demo.main:app --host 127.0.0.1 --port 8000
 ```
 
 `StateForkBackend` currently calls StateFork's `snapshot`, `restore`,
-`create_env_from_snapshot`, and `cleanup` methods. The current Phase 1 mailbox
-UI shows base checkpoints, branch environments, and the deterministic email
-agent flow.
+`create_env_from_snapshot`, and `cleanup` methods. The current mailbox UI shows
+the managed runtime, manual checkpoints, and the deterministic email agent flow.
 
 StateFork is intentionally treated as a single-active-branch backend in this
 prototype. The app rejects a second running StateFork branch until the existing
@@ -469,16 +469,16 @@ Target lifecycle:
 create base   -> StateFork snapshot
 create branch -> StateFork restore <base-id>
               -> StateFork create_env_from_snapshot <base-id>
-              -> start branch app URL in the forked environment
+              -> start runtime app URL in the forked environment
 run agent     -> deterministic email agent actions inside the branch
 status        -> /api/backend reports statefork:<method> and snapshot/restore stats
-discard       -> terminate branch app and cleanup StateFork environment
+discard       -> terminate runtime app and cleanup StateFork environment
 commit        -> promote branch state to main only if main still matches the base
 reset         -> delete active branches, bases, sessions, and reset main DB
 ```
 
 The direct checkpoint-lite backend remains available as a lower-level reference
-path. The same `Backend & Snapshot Stats` UI and `GET /api/backend` endpoint
+path. The same `Runtime & Checkpoint Stats` UI and `GET /api/backend` endpoint
 work in this mode, with the method shown as `statefork:<method>`.
 
 ## Checkpoint-Lite Backend Quick Reference
@@ -550,6 +550,12 @@ dist/
 - `GET /api/state`
 - `POST /api/reset` clears active branches, base checkpoints, backend sessions,
   and recreates the main toy database
+- `GET /api/workspace`
+- `GET /api/workspace/dirty`
+- `POST /api/workspace/run-agent`
+- `POST /api/workspace/snapshots`
+- `POST /api/workspace/restore`
+- `POST /api/workspace/reset`
 - `GET /api/backend`
 - `GET /api/bases`
 - `POST /api/bases`
@@ -560,8 +566,9 @@ dist/
 - `POST /api/branches/{branch_id}/commit`
 - `POST /api/branches/{branch_id}/discard`
 
-Legacy inventory endpoints and the old demo-agent diff endpoint still exist for
-compatibility while the email agent implementation is being built.
+Base/branch endpoints are still available for compatibility and tests, but the
+preferred UI path uses `/api/workspace`. Legacy inventory endpoints and the old
+diff shape still exist while semantic email review is being built.
 
 The generated OpenAPI docs are available at `/docs`.
 

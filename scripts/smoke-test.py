@@ -31,21 +31,19 @@ def post(path: str, payload: dict | None = None) -> dict:
 
 
 def main() -> None:
-    post("/api/reset")
-    branch = post("/api/branches")["branch"]
-    before_snapshot = post(
-        f"/api/branches/{branch['id']}/snapshots",
-        {"label": "before agent"},
-    )["snapshot"]
-    agent = post(f"/api/branches/{branch['id']}/run-agent-demo")
-    dirty_after_agent = get(f"/api/branches/{branch['id']}/dirty")
-    after_snapshot = post(
-        f"/api/branches/{branch['id']}/snapshots",
-        {"label": "after agent"},
-    )["snapshot"]
+    post("/api/workspace/reset")
+    workspace = get("/api/workspace")
+    branch = workspace["branch"]
+    before_snapshot = post("/api/workspace/snapshots", {"label": "before agent"})[
+        "snapshot"
+    ]
+    agent = post("/api/workspace/run-agent")
+    dirty_after_agent = get("/api/workspace/dirty")
+    after_snapshot = post("/api/workspace/snapshots", {"label": "after agent"})[
+        "snapshot"
+    ]
     branch_state = get_url(f"{branch['url']}/api/state")
     main_state = get("/api/state")
-    post(f"/api/branches/{branch['id']}/discard")
 
     branch_messages = {
         message["id"]: {
@@ -65,6 +63,7 @@ def main() -> None:
     }
 
     result = {
+        "workspace_mode": workspace["workspace"]["mode"],
         "branch_id": branch["id"],
         "branch_url": branch["url"],
         "manual_snapshots": [before_snapshot["label"], after_snapshot["label"]],

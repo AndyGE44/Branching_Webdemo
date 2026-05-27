@@ -64,6 +64,9 @@ def create_branch_backend() -> LocalCopyBackend | CheckpointLiteBackend | StateF
 
 
 branch_backend = create_branch_backend()
+WORKSPACE_BASE_ID: str | None = None
+WORKSPACE_BRANCH_ID: str | None = None
+WORKSPACE_INITIAL_SNAPSHOT_LABEL = "Initial checkpoint"
 
 
 @asynccontextmanager
@@ -184,6 +187,15 @@ class BranchSnapshotRequest(BaseModel):
 
 
 class BranchRestoreRequest(BaseModel):
+    snapshot_id: str
+    force: bool = False
+
+
+class WorkspaceSnapshotRequest(BaseModel):
+    label: str | None = Field(default=None, max_length=80)
+
+
+class WorkspaceRestoreRequest(BaseModel):
     snapshot_id: str
     force: bool = False
 
@@ -905,6 +917,7 @@ def state() -> dict:
 @app.post("/api/reset")
 def reset() -> dict:
     cleanup = branch_backend.reset()
+    reset_workspace_handles()
     if DB_PATH.exists():
         DB_PATH.unlink()
     init_db()
@@ -917,9 +930,132 @@ def branch_error(error: BranchError) -> HTTPException:
     return HTTPException(status_code=400, detail=str(error))
 
 
+def reset_workspace_handles() -> None:
+    global WORKSPACE_BASE_ID, WORKSPACE_BRANCH_ID
+    WORKSPACE_BASE_ID = None
+    WORKSPACE_BRANCH_ID = None
+
+
+def running_workspace_branch() -> dict | None:
+    global WORKSPACE_BRANCH_ID
+    branches = branch_backend.list_branches()
+    if WORKSPACE_BRANCH_ID:
+        for branch in branches:
+            if branch["id"] == WORKSPACE_BRANCH_ID and branch["status"] == "running":
+                return branch
+        WORKSPACE_BRANCH_ID = None
+    for branch in branches:
+        if branch["status"] == "running":
+            WORKSPACE_BRANCH_ID = branch["id"]
+            return branch
+    return None
+
+
+def workspace_payload(branch: dict) -> dict:
+    return {
+        "workspace": {
+            "mode": "runtime-checkpoints",
+            "base_id": branch.get("base_id") or WORKSPACE_BASE_ID,
+            "branch_id": branch["id"],
+            "runtime_url": branch["url"],
+            "current_snapshot_id": branch.get("current_snapshot_id"),
+            "dirty": branch.get("dirty", False),
+        },
+        "branch": branch,
+        "backend": branch_backend.status(),
+    }
+
+
+def ensure_workspace() -> dict:
+    global WORKSPACE_BASE_ID, WORKSPACE_BRANCH_ID
+    if BRANCH_ID:
+        raise BranchError("Workspace control is only available from the main demo server")
+    init_db()
+    branch = running_workspace_branch()
+    if branch is None:
+        base = branch_backend.create_base(label="Workspace start")
+        WORKSPACE_BASE_ID = base["id"]
+        branch = branch_backend.create_branch(base_id=base["id"])
+        WORKSPACE_BRANCH_ID = branch["id"]
+        branch = branch_backend.save_snapshot(
+            branch["id"],
+            label=WORKSPACE_INITIAL_SNAPSHOT_LABEL,
+        )["branch"]
+    else:
+        WORKSPACE_BASE_ID = branch.get("base_id") or WORKSPACE_BASE_ID
+    return workspace_payload(branch)
+
+
+def workspace_branch_id() -> str:
+    return ensure_workspace()["branch"]["id"]
+
+
 @app.get("/api/backend")
 def backend_status() -> dict:
     return branch_backend.status()
+
+
+@app.get("/api/workspace")
+def get_workspace() -> dict:
+    try:
+        return ensure_workspace()
+    except BranchError as error:
+        raise branch_error(error) from error
+
+
+@app.get("/api/workspace/dirty")
+def workspace_dirty() -> dict:
+    try:
+        branch_id = workspace_branch_id()
+        return branch_backend.dirty(branch_id)
+    except BranchError as error:
+        raise branch_error(error) from error
+
+
+@app.post("/api/workspace/run-agent")
+def run_workspace_agent() -> dict:
+    try:
+        branch_id = workspace_branch_id()
+        result = branch_backend.run_agent_demo(branch_id)
+        return {**result, "workspace": workspace_payload(result["branch"])["workspace"]}
+    except BranchError as error:
+        raise branch_error(error) from error
+
+
+@app.post("/api/workspace/snapshots")
+def save_workspace_snapshot(payload: WorkspaceSnapshotRequest | None = None) -> dict:
+    try:
+        branch_id = workspace_branch_id()
+        label = payload.label if payload else None
+        result = branch_backend.save_snapshot(branch_id, label=label)
+        return {**result, "workspace": workspace_payload(result["branch"])["workspace"]}
+    except BranchError as error:
+        raise branch_error(error) from error
+
+
+@app.post("/api/workspace/restore")
+def restore_workspace_snapshot(payload: WorkspaceRestoreRequest) -> dict:
+    try:
+        branch_id = workspace_branch_id()
+        result = branch_backend.restore_snapshot(
+            branch_id,
+            snapshot_id=payload.snapshot_id,
+            force=payload.force,
+        )
+        return {**result, "workspace": workspace_payload(result["branch"])["workspace"]}
+    except BranchError as error:
+        raise branch_error(error) from error
+
+
+@app.post("/api/workspace/reset")
+def reset_workspace() -> dict:
+    cleanup = branch_backend.reset()
+    reset_workspace_handles()
+    if DB_PATH.exists():
+        DB_PATH.unlink()
+    init_db()
+    workspace = ensure_workspace()
+    return {"status": "reset", "cleanup": cleanup, **workspace}
 
 
 @app.get("/api/bases")

@@ -68,6 +68,15 @@ h2 {
   gap: 10px;
 }
 
+.actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.snapshot-input {
+  width: 220px;
+}
+
 .layout {
   display: grid;
   grid-template-columns: minmax(320px, 1.1fr) minmax(320px, 0.9fr);
@@ -323,6 +332,10 @@ button:hover,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.backend-pill .badge {
+  margin: -2px 0;
 }
 
 .message-actions {
@@ -788,6 +801,13 @@ tr:last-child td {
 .snapshot-tree strong {
   display: block;
   font-size: 12px;
+}
+
+.checkpoint-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .snapshot-tree p {

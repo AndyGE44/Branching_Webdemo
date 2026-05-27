@@ -65,8 +65,8 @@ Phase 1 changed the visible app from inventory to mailbox:
   - message detail
   - message/draft state tables
   - backend stats
-  - base checkpoints
-  - branches
+  - the active workspace runtime
+  - manual checkpoints
 - The old `Diff` button is hidden from the UI because semantic email diff is
   not implemented yet.
 - Tests were rewritten around mailbox seed data, password auth, base/branch
@@ -93,10 +93,17 @@ The web UI now exposes simple user controls in `Message Detail`:
 - create a draft reply
 - view draft message bodies in `Draft Contents`
 
-The StateFork/checkpoint branch lifecycle is intentionally still separate from
-direct user message controls. Branch cards expose base checkpoints, branch
-creation, `Run Email Agent`, manual `Save Snapshot`, per-snapshot `Restore`,
-commit, and discard.
+The visible demo now starts in one managed workspace runtime. Base/branch
+creation remains in the backend compatibility API, but the user-facing UI hides
+that machinery and presents a checkpoint-style workflow:
+
+```text
+open app -> initial runtime checkpoint -> user/agent actions -> Snapshot -> Restore
+```
+
+The top-right action area exposes `Run Agent`, `Snapshot`, and workspace reset.
+`Run Agent` is just an automated sequence of mailbox operations inside the
+runtime.
 
 The branch-agent demo now runs a deterministic mailbox plan:
 
@@ -108,16 +115,16 @@ The branch-agent demo now runs a deterministic mailbox plan:
 5. Archive "Weekly CI report".
 ```
 
-Agent steps now mark the branch as unsaved/dirty. They no longer create
-automatic snapshot nodes. Users explicitly save checkpoint nodes:
+Agent/user steps now mark the workspace runtime as unsaved/dirty. They no
+longer create automatic snapshot nodes. Users explicitly save checkpoint nodes:
 
 ```text
-Base checkpoint
+Initial checkpoint
 -> before agent
 -> after agent
 ```
 
-Restoring a snapshot checks dirty state first. If the branch has unsaved
+Restoring a snapshot checks dirty state first. If the runtime has unsaved
 changes, the UI asks whether to save a snapshot, discard the changes, or cancel.
 
 ## Important Compatibility Detail
@@ -187,6 +194,12 @@ state, not just SQLite rows.
 Completed backend endpoints:
 
 ```text
+GET /api/workspace
+GET /api/workspace/dirty
+POST /api/workspace/run-agent
+POST /api/workspace/snapshots
+POST /api/workspace/restore
+POST /api/workspace/reset
 POST /api/messages/{message_id}/label
 POST /api/messages/{message_id}/move
 POST /api/messages/{message_id}/archive
@@ -227,9 +240,10 @@ AGENT_DEMO_ACTIONS
 run_agent_demo()
 ```
 
-Main mailbox must remain unchanged until commit. The backend now checks this:
-if main changed after the branch base was created, commit is rejected instead
-of silently promoting a stale branch.
+The visible workspace flow does not promote runtime changes back into main.
+Main mailbox remains a stable seed/control plane while the StateFork/checkpoint
+runtime is saved and restored. Legacy commit endpoints still exist for API
+compatibility and still reject stale base promotion.
 
 ## Later Phase: Semantic Diff
 
@@ -328,8 +342,9 @@ ssh \
   sf-exp
 ```
 
-The StateFork/checkpoint-lite backends are single-active-branch in this
-prototype. Commit or discard the existing branch before creating another.
+The StateFork/checkpoint-lite backends are still single-active-branch in this
+prototype. The workspace controller owns that branch from app startup, so the
+UI no longer asks users to create branches manually.
 
 Open locally:
 
@@ -373,10 +388,8 @@ Archive count 1
 - The package import path is still `agent_safe_demo`; only the package
   distribution name changed to `agent-safe-toy-mailbox`.
 - The branch backend abstraction is good and should be reused.
-- The legacy `run-agent-demo` endpoint still exists but should be migrated to
-  email actions before it is re-exposed in the UI.
-- The old `scripts/smoke-test.py` still exercises the legacy branch-agent path.
-  Update it once the email agent path is implemented.
+- Legacy base/branch endpoints and `run-agent-demo` still exist for
+  compatibility, but the UI and smoke test now use `/api/workspace`.
 - VM runs may create root-owned database files if started with `sudo`. If the
   app cannot write the default database, clean up generated runtime data:
 
@@ -394,8 +407,9 @@ We are continuing the Agent-Safe Toy Mailbox demo in
 /Users/andyge/Desktop/Research/Search_Agent/agent_safe_demo.
 
 Please read docs/email-server-handoff.md first. We are on branch
-email-server-demo. Phase 1 is complete: mailbox read UI/API and renamed mailbox
-runtime settings are done. Next, start Phase 2 by adding mailbox mutation APIs
-and simple user controls, while keeping StateFork branch lifecycle intact.
-Run tests locally, push the branch, and verify on sf-exp.
+email-server-demo. Mailbox read/mutation APIs, deterministic agent actions,
+manual snapshots/restores, and the managed workspace UI are in progress. Keep
+the user-facing flow checkpoint-first: startup creates the runtime, Snapshot
+saves, Restore returns to any checkpoint, and Run Agent is just an automated
+mailbox actor. Run tests locally, push the branch, and verify on sf-exp.
 ```

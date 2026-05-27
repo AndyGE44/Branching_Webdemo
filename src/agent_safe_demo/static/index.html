@@ -4,18 +4,25 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Agent-Safe Toy Mailbox</title>
-    <link rel="stylesheet" href="/static/styles.css?v=13" />
+    <link rel="stylesheet" href="/static/styles.css?v=14" />
   </head>
   <body>
     <header class="topbar">
       <div>
         <h1>Agent-Safe Toy Mailbox</h1>
-        <p>Review mailbox state, create safe branches, and inspect branch state.</p>
+        <p>Work in a StateFork-backed mailbox runtime, then save and restore checkpoints.</p>
       </div>
       <div class="actions">
+        <span id="workspaceState" class="backend-pill">Starting...</span>
+        <label class="snapshot-input">
+          Snapshot
+          <input id="snapshotLabelInput" type="text" maxlength="80" placeholder="before agent" />
+        </label>
+        <button id="snapshotBtn" class="primary" type="button">Snapshot</button>
+        <button id="runAgentBtn" type="button">Run Agent</button>
         <span id="backendMode" class="backend-pill">Backend...</span>
         <a class="icon-link" href="/docs" title="Open API docs">API</a>
-        <button id="resetBtn" class="danger" type="button">Reset</button>
+        <button id="resetBtn" class="danger" type="button">Reset Workspace</button>
       </div>
     </header>
 
@@ -40,8 +47,8 @@
       <section class="panel status-panel">
         <div class="panel-header">
           <div>
-            <h2>Backend & Snapshot Stats</h2>
-            <p id="snapshotMode" class="muted">Runtime branch control</p>
+            <h2>Runtime & Checkpoint Stats</h2>
+            <p id="snapshotMode" class="muted">Workspace control</p>
           </div>
         </div>
         <div id="backendStats" class="status-grid"></div>
@@ -50,28 +57,11 @@
       <section class="panel branch-panel">
         <div class="panel-header">
           <div>
-            <h2>Base Checkpoints</h2>
-            <p class="muted">Frozen starting points for agent branches.</p>
-          </div>
-          <div class="base-create">
-            <label>
-              Label
-              <input id="baseLabelInput" type="text" maxlength="80" placeholder="main-ready" />
-            </label>
-            <button id="createBaseBtn" class="primary" type="button">Create Base</button>
+            <h2>Checkpoints</h2>
+            <p class="muted">Manual save points for the current mailbox runtime.</p>
           </div>
         </div>
-        <div id="bases" class="base-list"></div>
-      </section>
-
-      <section class="panel branch-panel">
-        <div class="panel-header">
-          <div>
-            <h2>Agent Branch</h2>
-            <p class="muted">StateFork/checkpoint-lite allow one active branch at a time.</p>
-          </div>
-        </div>
-        <div id="branches" class="branch-list"></div>
+        <div id="checkpoints" class="branch-list"></div>
       </section>
 
       <section class="panel state-panel">
@@ -83,6 +73,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=13"></script>
+    <script src="/static/app.js?v=14"></script>
   </body>
 </html>

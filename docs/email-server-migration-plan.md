@@ -27,12 +27,12 @@ An email server is a better agent-safety story:
 The target story:
 
 ```text
-Main mailbox is stable.
-Create a StateFork base.
-Create an agent branch.
-Agent triages email in the branch.
-Review diff: labels, drafts, archives, spam moves.
-Commit accepted changes or discard the branch.
+Open the mailbox workspace.
+The app is already running in a StateFork-backed checkpoint runtime.
+User or agent triages email inside that runtime.
+Click Snapshot to save meaningful checkpoints.
+Restore any checkpoint like a game save point.
+Keep main mailbox as a stable seed/control plane until review/commit matures.
 ```
 
 ## Preserve The Current Demo
@@ -121,31 +121,30 @@ Example planned agent run:
 5. Archive one low-priority notification
 ```
 
-Agent steps should not automatically create StateFork snapshots. The branch
+Agent steps should not automatically create StateFork snapshots. The runtime
 should become dirty after agent/user actions, and the user should explicitly
 save checkpoint nodes:
 
 ```text
-Base checkpoint
+Initial checkpoint
 └── before agent
     └── after agent
 ```
 
-The key rule: the agent operates only inside the branch service.
+The key rule: the agent operates only inside the managed runtime service.
 
 ## Demo Flow
 
 Recommended UI flow:
 
 ```text
-1. Show main mailbox.
-2. Create Base.
-3. Create Branch.
-4. Run Agent.
-5. Save Snapshot or restore a previous snapshot.
-6. Review diff.
-7. Open branch mailbox if needed.
-8. Commit or Discard.
+1. Open app; workspace runtime is created automatically.
+2. Show mailbox from the runtime, not the main seed database.
+3. User edits mail or clicks Run Agent.
+4. Dirty badge shows unsaved runtime changes.
+5. Click Snapshot to save a checkpoint.
+6. Restore any checkpoint; if dirty, ask save/discard/cancel.
+7. Review diff/commit later when semantic review is ready.
 ```
 
 Main page sections:
@@ -155,22 +154,21 @@ Main page sections:
 - Message detail
 - Drafts
 - Backend & Snapshot Stats
-- Base Checkpoints
-- Agent Branches
+- Checkpoints
 - Diff / Review panel
 
-Branch card actions:
+Top-level actions:
 
 ```text
-Open Branch
 Run Agent
-Diff
-Commit
-Discard
+Snapshot
+Restore checkpoint
+Reset Workspace
 ```
 
-Avoid manual branch actions in the first version. Manual user actions belong on
-the main mailbox; branch changes should be presented as agent exploration.
+Avoid exposing manual base/branch actions in the primary UI. Manual user actions
+and agent actions both operate in the managed runtime; main remains the stable
+seed/control plane until semantic review and commit are ready.
 
 ## Diff Design
 
@@ -294,6 +292,17 @@ POST   /api/branches/{branch_id}/commit
 POST   /api/branches/{branch_id}/discard
 ```
 
+Workspace APIs:
+
+```text
+GET  /api/workspace
+GET  /api/workspace/dirty
+POST /api/workspace/run-agent
+POST /api/workspace/snapshots
+POST /api/workspace/restore
+POST /api/workspace/reset
+```
+
 ## Frontend Migration Plan
 
 Replace inventory components with email components:
@@ -303,16 +312,16 @@ Inventory grid       -> mailbox/message list
 Inventory actions    -> user mail actions
 State tables         -> mailbox state dashboard
 Inventory diff       -> email semantic diff
-Agent snapshot tree  -> keep
+Agent snapshot tree  -> checkpoint list
 Backend stats        -> keep
-Base/branch panels   -> keep
+Base/branch panels   -> hide behind workspace controller
 ```
 
 Recommended first UI:
 
 - Left column: folder list and message list.
 - Right column: selected message body and metadata.
-- Lower full-width panels: StateFork backend, bases, branches, diff.
+- Lower full-width panels: StateFork backend, checkpoints, diff.
 
 Keep the UI operational rather than marketing-style. This is a research demo
 tool, not a landing page.
@@ -336,12 +345,12 @@ Exit criteria:
 ### Phase 2: User Mail Actions
 
 - Add label, move, archive, create draft APIs.
-- Add UI buttons for user actions on main.
+- Add UI buttons for user actions in the managed runtime.
 - Update audit log.
 
 Exit criteria:
 
-- User can mutate main mailbox.
+- User can mutate the runtime mailbox.
 - Reset restores sample mailbox.
 
 ### Phase 3: Branch Agent Plan
@@ -349,13 +358,14 @@ Exit criteria:
 - Replace inventory agent plan with email agent plan.
 - Mark branch dirty after agent actions.
 - Let users manually save and restore snapshot nodes.
+- Move visible UI from base/branch controls to a managed workspace runtime.
 
 Exit criteria:
 
-- Branch agent run changes branch state without creating automatic snapshots.
-- User can save and restore branch snapshots.
+- Agent run changes runtime state without creating automatic snapshots.
+- User can save and restore runtime snapshots.
 - Main mailbox is unchanged.
-- Branch mailbox reflects agent actions.
+- Runtime mailbox reflects agent actions.
 
 ### Phase 4: Semantic Diff
 
@@ -388,9 +398,10 @@ Exit criteria:
 Required tests:
 
 - Seed mailbox loads expected messages.
-- User action mutates main mailbox.
-- Branch creation works.
-- Agent run creates expected snapshots.
+- Workspace auto-starts a runtime with an initial checkpoint.
+- User action mutates runtime mailbox.
+- Legacy branch creation still works.
+- Agent run marks the workspace dirty.
 - Diff contains expected label/move/draft changes.
 - Discard leaves main unchanged.
 - Commit promotes branch changes.
@@ -399,10 +410,10 @@ Required tests:
 StateFork smoke:
 
 ```text
-create base
-create branch
+open workspace
 run agent
-verify 3-4 snapshots
+save snapshot
+restore initial checkpoint
 verify semantic diff
 reset cleanup
 ```

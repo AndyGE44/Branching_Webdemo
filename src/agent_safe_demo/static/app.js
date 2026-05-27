@@ -3,15 +3,16 @@ const messageListEl = document.querySelector("#messageList");
 const messageDetailEl = document.querySelector("#messageDetail");
 const stateView = document.querySelector("#stateView");
 const resultPill = document.querySelector("#lastResult");
-const basesEl = document.querySelector("#bases");
-const baseLabelInput = document.querySelector("#baseLabelInput");
-const branchesEl = document.querySelector("#branches");
 const backendModeEl = document.querySelector("#backendMode");
 const backendStatsEl = document.querySelector("#backendStats");
 const snapshotModeEl = document.querySelector("#snapshotMode");
-let selectedBaseId = null;
-let baseCache = [];
+const workspaceStateEl = document.querySelector("#workspaceState");
+const checkpointsEl = document.querySelector("#checkpoints");
+const snapshotLabelInput = document.querySelector("#snapshotLabelInput");
+
 let selectedMessageId = null;
+let workspace = null;
+let runtimeBaseUrl = null;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -34,10 +35,30 @@ async function request(path, options = {}) {
   return data;
 }
 
+function runtimeRequest(path, options = {}) {
+  if (!runtimeBaseUrl) {
+    throw new Error("Runtime is not ready yet");
+  }
+  return request(`${runtimeBaseUrl}${path}`, options);
+}
+
 function showResult(text, ok = true) {
   resultPill.textContent = text;
   resultPill.style.background = ok ? "#e8f1ec" : "#f8e7df";
   resultPill.style.color = ok ? "#174938" : "#8a341f";
+}
+
+function badge(value) {
+  const safeValue = escapeHtml(value);
+  const normalized = String(value ?? "").toLowerCase();
+  let tone = "neutral";
+  if (["ready", "active", "draft", "saved", "current"].includes(normalized)) {
+    tone = "ok";
+  }
+  if (["blocked", "failed", "dirty", "unsaved"].includes(normalized)) {
+    tone = "warn";
+  }
+  return `<span class="badge ${tone}">${safeValue}</span>`;
 }
 
 function formatMs(value) {
@@ -46,6 +67,10 @@ function formatMs(value) {
     return `${(number / 1000).toFixed(2)}s`;
   }
   return `${number.toFixed(number >= 10 ? 0 : 1)}ms`;
+}
+
+function formatTime(epochSeconds) {
+  return new Date(epochSeconds * 1000).toLocaleString();
 }
 
 function statCard(label, value, hint = "") {
@@ -58,20 +83,29 @@ function statCard(label, value, hint = "") {
   `;
 }
 
-function renderBackendStatus(status) {
+function renderBackendStatus(status, branch) {
   const snapshotOps = status.operations?.snapshot || {};
   const restoreOps = status.operations?.restore || {};
   const totals = status.totals || {};
   backendModeEl.textContent = `${status.backend} / ${status.method}`;
-  snapshotModeEl.textContent = `${status.host}:${status.port_start}+`;
+  snapshotModeEl.textContent = `${branch.id} at ${branch.url}`;
   backendStatsEl.innerHTML = [
     statCard("Backend", status.backend, status.method),
-    statCard("Bases", totals.bases ?? 0, "frozen starting points"),
-    statCard("Branches", totals.branches ?? 0, "active branch count"),
-    statCard("Tree snapshots", totals.snapshots ?? 0, "visible branch nodes"),
-    statCard("Snapshot calls", snapshotOps.count ?? 0, `avg ${formatMs(snapshotOps.mean_ms)}`),
-    statCard("Restore/fork calls", restoreOps.count ?? 0, `avg ${formatMs(restoreOps.mean_ms)}`),
+    statCard("Runtime", branch.status, branch.id),
+    statCard("Checkpoints", branch.snapshots?.length ?? 0, "manual save points"),
+    statCard("Saved State", branch.current_snapshot_id || "none", branch.dirty ? "unsaved changes" : "clean"),
+    statCard("Snapshot Calls", snapshotOps.count ?? 0, `avg ${formatMs(snapshotOps.mean_ms)}`),
+    statCard("Restore Calls", restoreOps.count ?? 0, `avg ${formatMs(restoreOps.mean_ms)}`),
+    statCard("Bases", totals.bases ?? 0, "controller internals"),
+    statCard("Branches", totals.branches ?? 0, "runtime processes"),
   ].join("");
+}
+
+function renderWorkspaceState(branch) {
+  workspaceStateEl.innerHTML = branch.dirty ? badge("unsaved") : badge("saved");
+  workspaceStateEl.title = branch.dirty
+    ? "The runtime has changes since the last snapshot."
+    : "The runtime matches the current checkpoint.";
 }
 
 function renderMailboxSummary(mailbox) {
@@ -198,19 +232,6 @@ function renderMessageDetail(message) {
       </section>
     </article>
   `;
-}
-
-function badge(value) {
-  const safeValue = escapeHtml(value);
-  const normalized = String(value ?? "").toLowerCase();
-  let tone = "neutral";
-  if (["ready", "active", "draft"].includes(normalized)) {
-    tone = "ok";
-  }
-  if (["blocked", "failed", "dirty", "unsaved"].includes(normalized)) {
-    tone = "warn";
-  }
-  return `<span class="badge ${tone}">${safeValue}</span>`;
 }
 
 function emptyRow(columns, label = "No records yet") {
@@ -365,176 +386,66 @@ function renderState(state) {
   `;
 }
 
-function renderSnapshotTree(branch) {
+function renderCheckpoints(branch) {
   const snapshots = branch.snapshots || [];
-  const baseLabel = branch.base_checkpoint_id || branch.base_id || "base";
-  const snapshotItems = snapshots.length
-    ? snapshots
-        .map(
-          (snapshot, index) => `
-            <li>
-              <span class="snapshot-index">${index + 1}</span>
-              <div>
-                <strong>${escapeHtml(snapshot.label)}</strong>
-                <p>${escapeHtml(snapshot.backend)} · ${escapeHtml(snapshot.id)}</p>
-                <p>parent ${escapeHtml(snapshot.parent_id || baseLabel)}</p>
-                <button data-action="restore-snapshot" data-id="${escapeHtml(branch.id)}" data-snapshot-id="${escapeHtml(snapshot.id)}" type="button">Restore</button>
-              </div>
-            </li>
-          `,
-        )
-        .join("")
-    : `<li class="snapshot-empty"><span></span><p>No branch actions yet.</p></li>`;
+  if (!snapshots.length) {
+    checkpointsEl.innerHTML = `<p class="empty">No checkpoints yet.</p>`;
+    return;
+  }
 
-  return `
-    <section class="snapshot-tree">
+  checkpointsEl.innerHTML = `
+    <section class="snapshot-tree checkpoint-tree">
       <div class="snapshot-root">
         <span></span>
         <div>
-          <strong>Base checkpoint</strong>
-          <p>${escapeHtml(baseLabel)}</p>
+          <strong>Workspace runtime</strong>
+          <p>${escapeHtml(branch.id)} · ${escapeHtml(branch.url)}</p>
         </div>
       </div>
-      <ol>${snapshotItems}</ol>
+      <ol>
+        ${snapshots
+          .map(
+            (snapshot, index) => `
+              <li>
+                <span class="snapshot-index">${index + 1}</span>
+                <div>
+                  <div class="checkpoint-title">
+                    <strong>${escapeHtml(snapshot.label)}</strong>
+                    ${snapshot.id === branch.current_snapshot_id ? badge("current") : ""}
+                  </div>
+                  <p>${escapeHtml(snapshot.backend)} · ${escapeHtml(snapshot.id)}</p>
+                  <p>${escapeHtml(formatTime(snapshot.created_at))}</p>
+                  <button data-action="restore-snapshot" data-snapshot-id="${escapeHtml(snapshot.id)}" type="button">Restore</button>
+                </div>
+              </li>
+            `,
+          )
+          .join("")}
+      </ol>
     </section>
   `;
 }
 
-function formatTime(epochSeconds) {
-  return new Date(epochSeconds * 1000).toLocaleString();
-}
-
-function baseTitle(baseId) {
-  const base = baseCache.find((candidate) => candidate.id === baseId);
-  return base ? `${base.label} · ${base.id}` : baseId || "Ad hoc base";
-}
-
-function renderBases(bases) {
-  if (bases.length && !selectedBaseId) {
-    selectedBaseId = bases[0].id;
-  }
-  if (selectedBaseId && !bases.some((base) => base.id === selectedBaseId)) {
-    selectedBaseId = bases[0]?.id || null;
-  }
-
-  basesEl.innerHTML = bases.length
-    ? bases
-        .map((base) => {
-          const selected = base.id === selectedBaseId ? "selected" : "";
-          const sessionDetails = base.session_id
-            ? `<p>session ${escapeHtml(base.session_id)}</p>`
-            : `<p>${escapeHtml(base.backend)}</p>`;
-          return `
-            <article class="base-card ${selected}" data-base-id="${escapeHtml(base.id)}">
-              <div class="base-card-main">
-                <div>
-                  <h3>${escapeHtml(base.label)}</h3>
-                  <p>${escapeHtml(base.id)} · checkpoint ${escapeHtml(base.checkpoint_id)}</p>
-                  ${sessionDetails}
-                  <time>${escapeHtml(formatTime(base.created_at))}</time>
-                </div>
-                ${badge(base.status)}
-              </div>
-              <div class="branch-actions">
-                <button data-action="select-base" data-id="${escapeHtml(base.id)}" type="button">Select</button>
-                <button data-action="create-branch" data-id="${escapeHtml(base.id)}" class="primary" type="button">Create Branch</button>
-                <button data-action="delete-base" data-id="${escapeHtml(base.id)}" class="danger" type="button">Delete</button>
-              </div>
-            </article>
-          `;
-        })
-        .join("")
-    : `<p class="empty">No base checkpoints yet.</p>`;
-}
-
-function renderBranchCard(branch) {
-  const checkpointDetails = branch.base_checkpoint_id
-    ? `<p>from ${escapeHtml(branch.base_id)} · checkpoint ${escapeHtml(branch.base_checkpoint_id)}</p>`
-    : `<p>${escapeHtml(branch.backend)} · port ${escapeHtml(branch.port)}</p>`;
-  const dirtyBadge = branch.dirty ? badge("unsaved") : badge("saved");
-  return `
-    <article class="branch-card" data-branch-id="${escapeHtml(branch.id)}">
-      <div class="branch-card-main">
-        <div>
-          <h3>${escapeHtml(branch.id)}</h3>
-          ${checkpointDetails}
-          <p>${escapeHtml(branch.backend)} · port ${escapeHtml(branch.port)}</p>
-        </div>
-        <div class="message-meta">
-          ${dirtyBadge}
-          ${badge(branch.status)}
-        </div>
-      </div>
-      <div class="branch-actions">
-        <a class="icon-link" href="${escapeHtml(branch.url)}" target="_blank" rel="noreferrer">Open Branch</a>
-        <button class="primary" data-action="run-agent" data-id="${escapeHtml(branch.id)}" type="button">Run Email Agent</button>
-        <button data-action="commit" data-id="${escapeHtml(branch.id)}" type="button">Commit</button>
-        <button class="danger" data-action="discard" data-id="${escapeHtml(branch.id)}" type="button">Discard</button>
-      </div>
-      <div class="snapshot-save-row">
-        <label>
-          Snapshot Label
-          <input data-snapshot-label="${escapeHtml(branch.id)}" type="text" maxlength="80" placeholder="before agent" />
-        </label>
-        <button data-action="save-snapshot" data-id="${escapeHtml(branch.id)}" type="button">Save Snapshot</button>
-      </div>
-      ${renderSnapshotTree(branch)}
-    </article>
-  `;
-}
-
-function renderBranches(branches) {
-  if (!branches.length) {
-    branchesEl.innerHTML = `<p class="empty">No agent branches yet.</p>`;
-    return;
-  }
-
-  const grouped = branches.reduce((groups, branch) => {
-    const key = branch.base_id || "ad-hoc";
-    groups[key] ||= [];
-    groups[key].push(branch);
-    return groups;
-  }, {});
-
-  branchesEl.innerHTML = Object.entries(grouped)
-    .map(
-      ([baseId, group]) => `
-        <section class="branch-group">
-          <div class="branch-group-header">
-            <h3>${escapeHtml(baseTitle(baseId))}</h3>
-            <span>${group.length} branch${group.length === 1 ? "" : "es"}</span>
-          </div>
-          <div class="branch-group-list">
-            ${group.map((branch) => renderBranchCard(branch)).join("")}
-          </div>
-        </section>
-      `,
-    )
-    .join("");
-}
-
-async function refreshBranches() {
-  const [backendData, baseData, branchData] = await Promise.all([
-    request("/api/backend"),
-    request("/api/bases"),
-    request("/api/branches"),
-  ]);
-  renderBackendStatus(backendData);
-  baseCache = baseData.bases;
-  renderBases(baseCache);
-  renderBranches(branchData.branches);
+async function refreshWorkspace() {
+  const data = await request("/api/workspace");
+  workspace = data;
+  runtimeBaseUrl = data.workspace.runtime_url;
+  renderWorkspaceState(data.branch);
+  renderBackendStatus(data.backend, data.branch);
+  renderCheckpoints(data.branch);
+  return data;
 }
 
 async function refresh() {
+  await refreshWorkspace();
   const [mailbox, state] = await Promise.all([
-    request("/api/mailbox"),
-    request("/api/state"),
+    runtimeRequest("/api/mailbox"),
+    runtimeRequest("/api/state"),
   ]);
   renderMailboxSummary(mailbox);
   renderMessageList(mailbox.messages);
   renderMessageDetail(mailbox.messages.find((message) => message.id === selectedMessageId));
   renderState(state);
-  await refreshBranches();
 }
 
 async function mutate(label, fn) {
@@ -544,14 +455,78 @@ async function mutate(label, fn) {
     await refresh();
   } catch (error) {
     showResult(error.message, false);
-    await refresh();
+    try {
+      await refresh();
+    } catch {
+      // Keep the original error visible if refresh also fails.
+    }
   }
+}
+
+async function saveWorkspaceSnapshot(label) {
+  return request("/api/workspace/snapshots", {
+    method: "POST",
+    body: JSON.stringify({ label: label || null }),
+  });
+}
+
+async function restoreSnapshot(snapshotId) {
+  const dirty = await request("/api/workspace/dirty");
+  let force = false;
+  if (dirty.dirty) {
+    const saveFirst = window.confirm("This workspace has unsaved changes. Save a snapshot before restoring?");
+    if (saveFirst) {
+      const label = window.prompt("Snapshot label", "autosave before restore");
+      if (label === null) {
+        showResult("Restore canceled");
+        return;
+      }
+      await saveWorkspaceSnapshot(label.trim() || "autosave before restore");
+    } else {
+      const discard = window.confirm("Discard unsaved changes and restore the selected checkpoint?");
+      if (!discard) {
+        showResult("Restore canceled");
+        return;
+      }
+      force = true;
+    }
+  }
+  await request("/api/workspace/restore", {
+    method: "POST",
+    body: JSON.stringify({ snapshot_id: snapshotId, force }),
+  });
+  showResult("Checkpoint restored");
+  await refresh();
 }
 
 document.querySelector("#refreshBtn").addEventListener("click", refresh);
 
+document.querySelector("#snapshotBtn").addEventListener("click", async () => {
+  const label = snapshotLabelInput.value.trim();
+  await mutate("Snapshot saved", async () => {
+    await saveWorkspaceSnapshot(label);
+    snapshotLabelInput.value = "";
+  });
+});
+
+document.querySelector("#runAgentBtn").addEventListener("click", async () => {
+  try {
+    showResult("Running email agent...");
+    const data = await request("/api/workspace/run-agent", { method: "POST" });
+    showResult(`Email agent ran ${data.actions.length} actions`);
+    await refresh();
+  } catch (error) {
+    showResult(error.message, false);
+    await refreshWorkspace();
+  }
+});
+
 document.querySelector("#resetBtn").addEventListener("click", async () => {
-  await mutate("Reset", () => request("/api/reset", { method: "POST" }));
+  if (!window.confirm("Reset the workspace and discard runtime checkpoints?")) {
+    return;
+  }
+  selectedMessageId = null;
+  await mutate("Workspace reset", () => request("/api/workspace/reset", { method: "POST" }));
 });
 
 messageListEl.addEventListener("click", (event) => {
@@ -578,7 +553,7 @@ messageDetailEl.addEventListener("submit", async (event) => {
   const formData = new FormData(form);
   if (action === "label-message") {
     await mutate("Label added", () =>
-      request(`/api/messages/${messageId}/label`, {
+      runtimeRequest(`/api/messages/${messageId}/label`, {
         method: "POST",
         body: JSON.stringify({ label: formData.get("label") }),
       }),
@@ -587,7 +562,7 @@ messageDetailEl.addEventListener("submit", async (event) => {
   }
   if (action === "move-message") {
     await mutate("Message moved", () =>
-      request(`/api/messages/${messageId}/move`, {
+      runtimeRequest(`/api/messages/${messageId}/move`, {
         method: "POST",
         body: JSON.stringify({ folder: formData.get("folder") }),
       }),
@@ -596,7 +571,7 @@ messageDetailEl.addEventListener("submit", async (event) => {
   }
   if (action === "create-draft") {
     await mutate("Draft created", () =>
-      request("/api/drafts", {
+      runtimeRequest("/api/drafts", {
         method: "POST",
         body: JSON.stringify({
           source_message_id: messageId,
@@ -622,7 +597,7 @@ messageDetailEl.addEventListener("click", async (event) => {
   const action = button.dataset.action;
   if (action === "toggle-read") {
     await mutate("Read state updated", () =>
-      request(`/api/messages/${messageId}/read`, {
+      runtimeRequest(`/api/messages/${messageId}/read`, {
         method: "POST",
         body: JSON.stringify({ is_read: button.dataset.read === "true" }),
       }),
@@ -631,7 +606,7 @@ messageDetailEl.addEventListener("click", async (event) => {
   }
   if (action === "archive-message") {
     await mutate("Message archived", () =>
-      request(`/api/messages/${messageId}/archive`, {
+      runtimeRequest(`/api/messages/${messageId}/archive`, {
         method: "POST",
         body: JSON.stringify({ actor: "user" }),
       }),
@@ -639,133 +614,16 @@ messageDetailEl.addEventListener("click", async (event) => {
   }
 });
 
-document.querySelector("#createBaseBtn").addEventListener("click", async () => {
-  await mutate("Base created", async () => {
-    const label = baseLabelInput.value.trim();
-    const data = await request("/api/bases", {
-      method: "POST",
-      body: JSON.stringify({ label: label || null }),
-    });
-    selectedBaseId = data.base.id;
-    baseLabelInput.value = "";
-    await refreshBranches();
-    return data.base;
-  });
-});
-
-basesEl.addEventListener("click", async (event) => {
-  const button = event.target.closest("button[data-action]");
+checkpointsEl.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-action='restore-snapshot']");
   if (!button) {
     return;
   }
-  const baseId = button.dataset.id;
-  const action = button.dataset.action;
   try {
-    if (action === "select-base") {
-      selectedBaseId = baseId;
-      renderBases(baseCache);
-      showResult("Base selected");
-      return;
-    }
-    if (action === "create-branch") {
-      selectedBaseId = baseId;
-      showResult("Creating branch...");
-      const data = await request(`/api/bases/${baseId}/branches`, { method: "POST" });
-      await refreshBranches();
-      showResult(`Branch ${data.branch.id} created`);
-      return;
-    }
-    if (action === "delete-base") {
-      await request(`/api/bases/${baseId}`, { method: "DELETE" });
-      if (selectedBaseId === baseId) {
-        selectedBaseId = null;
-      }
-      await refreshBranches();
-      showResult("Base deleted");
-    }
+    await restoreSnapshot(button.dataset.snapshotId);
   } catch (error) {
     showResult(error.message, false);
-    await refreshBranches();
-  }
-});
-
-branchesEl.addEventListener("click", async (event) => {
-  const button = event.target.closest("button[data-action]");
-  if (!button) {
-    return;
-  }
-  const branchId = button.dataset.id;
-  const action = button.dataset.action;
-  try {
-    if (action === "run-agent") {
-      showResult("Running email agent...");
-      const data = await request(`/api/branches/${branchId}/run-agent-demo`, { method: "POST" });
-      showResult(`Email agent ran ${data.actions.length} actions`);
-      await refreshBranches();
-      return;
-    }
-    if (action === "save-snapshot") {
-      const card = button.closest(".branch-card");
-      const input = card?.querySelector("input[data-snapshot-label]");
-      const label = input?.value.trim() || null;
-      const data = await request(`/api/branches/${branchId}/snapshots`, {
-        method: "POST",
-        body: JSON.stringify({ label }),
-      });
-      if (input) {
-        input.value = "";
-      }
-      showResult(`Snapshot ${data.snapshot.label} saved`);
-      await refreshBranches();
-      return;
-    }
-    if (action === "restore-snapshot") {
-      const snapshotId = button.dataset.snapshotId;
-      const dirty = await request(`/api/branches/${branchId}/dirty`);
-      let force = false;
-      if (dirty.dirty) {
-        const saveFirst = window.confirm("This branch has unsaved changes. Save them before restoring?");
-        if (saveFirst) {
-          const label = window.prompt("Snapshot label", "autosave before restore");
-          if (label === null) {
-            showResult("Restore canceled");
-            return;
-          }
-          await request(`/api/branches/${branchId}/snapshots`, {
-            method: "POST",
-            body: JSON.stringify({ label: label.trim() || "autosave before restore" }),
-          });
-        } else {
-          const discard = window.confirm("Discard unsaved changes and restore the selected snapshot?");
-          if (!discard) {
-            showResult("Restore canceled");
-            return;
-          }
-          force = true;
-        }
-      }
-      await request(`/api/branches/${branchId}/restore`, {
-        method: "POST",
-        body: JSON.stringify({ snapshot_id: snapshotId, force }),
-      });
-      showResult("Snapshot restored");
-      await refreshBranches();
-      return;
-    }
-    if (action === "commit") {
-      await request(`/api/branches/${branchId}/commit`, { method: "POST" });
-      showResult("Branch committed");
-      await refresh();
-      return;
-    }
-    if (action === "discard") {
-      await request(`/api/branches/${branchId}/discard`, { method: "POST" });
-      showResult("Branch discarded");
-      await refresh();
-    }
-  } catch (error) {
-    showResult(error.message, false);
-    await refreshBranches();
+    await refreshWorkspace();
   }
 });
 

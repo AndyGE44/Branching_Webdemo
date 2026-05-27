@@ -312,6 +312,82 @@ def test_manual_snapshot_restore_requires_dirty_choice(monkeypatch, tmp_path):
     assert len(branch_state["drafts"]) == 1
 
 
+def test_workspace_starts_in_runtime_with_initial_checkpoint(monkeypatch, tmp_path):
+    app = load_app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        try:
+            response = client.get("/api/workspace")
+            assert response.status_code == 200
+            workspace = response.json()
+            branch = workspace["branch"]
+            runtime_mailbox = get_json(f"{branch['url']}/api/mailbox")
+            backend = client.get("/api/backend").json()
+        finally:
+            client.post("/api/reset")
+
+    assert workspace["workspace"]["mode"] == "runtime-checkpoints"
+    assert workspace["workspace"]["runtime_url"] == branch["url"]
+    assert branch["status"] == "running"
+    assert branch["dirty"] is False
+    assert [snapshot["label"] for snapshot in branch["snapshots"]] == [
+        "Initial checkpoint"
+    ]
+    assert runtime_mailbox["unread"] == 3
+    assert runtime_mailbox["drafts"] == 1
+    assert backend["totals"] == {"bases": 1, "branches": 1, "snapshots": 1}
+
+
+def test_workspace_agent_and_restore_keep_main_as_seed(monkeypatch, tmp_path):
+    app = load_app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        workspace = client.get("/api/workspace").json()
+        branch = workspace["branch"]
+        initial_snapshot = branch["snapshots"][0]
+        try:
+            agent = client.post("/api/workspace/run-agent")
+            dirty = client.get("/api/workspace/dirty")
+            branch_state = get_json(f"{branch['url']}/api/state")
+            main_state = client.get("/api/state").json()
+            blocked_restore = client.post(
+                "/api/workspace/restore",
+                json={"snapshot_id": initial_snapshot["id"]},
+            )
+            restored = client.post(
+                "/api/workspace/restore",
+                json={"snapshot_id": initial_snapshot["id"], "force": True},
+            )
+            restored_state = get_json(f"{restored.json()['branch']['url']}/api/state")
+        finally:
+            client.post("/api/reset")
+
+    assert agent.status_code == 200
+    assert dirty.json()["dirty"] is True
+    assert blocked_restore.status_code == 409
+    assert restored.status_code == 200
+    assert restored.json()["branch"]["dirty"] is False
+
+    branch_messages = {message["id"]: message for message in branch_state["messages"]}
+    assert "msg-agent-2001" in branch_messages
+    assert branch_messages["msg-agent-2001"]["folder"] == "Inbox"
+    assert branch_messages["msg-1003"]["folder"] == "Spam"
+    assert any(
+        draft["source_message_id"] == "msg-1002"
+        and draft["created_by"] == "agent"
+        and "new ETA shortly" in draft["body"]
+        for draft in branch_state["drafts"]
+    )
+
+    main_messages = {message["id"]: message for message in main_state["messages"]}
+    assert "msg-agent-2001" not in main_messages
+    assert main_messages["msg-1003"]["folder"] == "Inbox"
+    assert len(main_state["drafts"]) == 1
+
+    restored_messages = {message["id"]: message for message in restored_state["messages"]}
+    assert "msg-agent-2001" not in restored_messages
+    assert restored_messages["msg-1003"]["folder"] == "Inbox"
+    assert len(restored_state["drafts"]) == 1
+
+
 def test_commit_promotes_branch_when_main_still_matches_base(monkeypatch, tmp_path):
     app = load_app(monkeypatch, tmp_path)
     branch = None
