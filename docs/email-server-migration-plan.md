@@ -53,7 +53,7 @@ Use `main` for the email-server migration.
 
 ## Product Model
 
-The first email demo should be a toy email service, not a full SMTP/IMAP server.
+The first email demo should be a demo email service, not a full SMTP/IMAP server.
 The goal is to demonstrate branch safety, not implement internet mail.
 
 Recommended first model:
@@ -246,7 +246,7 @@ Current limitation to keep explicit:
 Commit is still application-level promotion.
 ```
 
-For the toy email service, commit can initially copy/promote the SQLite mailbox
+For the demo email service, commit can initially copy/promote the SQLite mailbox
 database, as inventory does today. But the code and docs should clearly call
 this a prototype commit.
 
@@ -444,14 +444,14 @@ reset cleanup
 
 - If the email service still stores everything in one SQLite file, StateFork's
   advantage may still look underused.
-- A real email server is significantly larger than a toy mailbox service.
+- A real email server is significantly larger than a demo mailbox service.
 - Commit semantics become harder once drafts, attachments, and message files are
   represented separately.
 - Public access requires auth before it is safe to let others operate branches.
 
 ## Recommendation
 
-Do not start with a full SMTP/IMAP implementation. Start with a toy mailbox web
+Do not start with a full SMTP/IMAP implementation. Start with a demo mailbox web
 service that behaves like email from the user's perspective.
 
 Best next implementation step:

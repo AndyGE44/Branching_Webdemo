@@ -35,9 +35,9 @@ The demo is now mailbox-first.
 Public/runtime names should use mailbox naming:
 
 ```bash
-TOY_MAILBOX_DB_PATH
-toy_mailbox.db
-agent-safe-toy-mailbox
+DEMO_MAILBOX_DB_PATH
+demo_mailbox.db
+agent-safe-demo-mailbox
 ```
 
 Avoid adding new public docs, env vars, filenames, or package names with
@@ -334,13 +334,13 @@ pytest -q
 Run the preferred StateFork demo on the VM:
 
 ```bash
-export TOY_BRANCH_BACKEND=statefork
-export TOY_STATEFORK_ROOT=/users/alexxjk/StateFork
-export TOY_STATEFORK_CWD=/users/alexxjk/StateFork
-export TOY_STATEFORK_METHOD=ckpt_build
+export DEMO_BRANCH_BACKEND=statefork
+export DEMO_STATEFORK_ROOT=/users/alexxjk/StateFork
+export DEMO_STATEFORK_CWD=/users/alexxjk/StateFork
+export DEMO_STATEFORK_METHOD=ckpt_build
 export CHECKPOINT_SESSIONS_DIR=/tmp/checkpoint-sessions
-export TOY_BRANCH_HOST=127.0.0.1
-export TOY_BRANCH_PORT_START=8300
+export DEMO_BRANCH_HOST=127.0.0.1
+export DEMO_BRANCH_PORT_START=8300
 export PYTHONPATH=src
 
 sudo -E .venv/bin/uvicorn agent_safe_demo.main:app \
@@ -402,7 +402,7 @@ Archive count 1
 ## Known Caveats
 
 - The package import path is still `agent_safe_demo`; only the package
-  distribution name changed to `agent-safe-toy-mailbox`.
+  distribution name changed to `agent-safe-demo-mailbox`.
 - The branch backend abstraction is good and should be reused.
 - Legacy base/branch endpoints and `run-agent-demo` still exist on the
   controller for compatibility, but the UI and smoke test now use
@@ -412,12 +412,12 @@ Archive count 1
 - The repo now includes a `Dockerfile` so StateFork/checkpoint-lite build mode
   can create a shell-capable packaged runtime.
 - The stable VM smoke path still uses StateFork's init mode by default. Set
-  `TOY_STATEFORK_BUILD=1` when explicitly testing checkpoint-lite build mode.
+  `DEMO_STATEFORK_BUILD=1` when explicitly testing checkpoint-lite build mode.
 - VM runs may create root-owned database files if started with `sudo`. If the
   app cannot write the default database, clean up generated runtime data:
 
 ```bash
-sudo rm -f toy_mailbox.db
+sudo rm -f demo_mailbox.db
 sudo rm -rf .branches
 ```
 
@@ -426,7 +426,7 @@ sudo rm -rf .branches
 Paste this into the new conversation:
 
 ```text
-We are continuing the Agent-Safe Toy Mailbox demo in
+We are continuing the Agent-Safe Demo Mailbox demo in
 /Users/andyge/Desktop/Research/Search_Agent/agent_safe_demo.
 
 Please read docs/email-server-handoff.md first. We are on branch

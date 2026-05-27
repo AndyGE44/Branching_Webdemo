@@ -8,4 +8,4 @@ dist
 output
 __pycache__
 *.pyc
-toy_inventory.db
+demo_inventory.db

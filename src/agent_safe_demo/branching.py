@@ -361,7 +361,7 @@ class LocalCopyBackend:
         base_id = f"base-{uuid.uuid4().hex[:8]}"
         base_dir = self.bases_dir / base_id
         base_dir.mkdir(parents=True)
-        base_db = base_dir / "toy_mailbox.db"
+        base_db = base_dir / "demo_mailbox.db"
         shutil.copy2(self.main_db_path, base_db)
         record_operation(self.operation_stats, "snapshot", started_at)
 
@@ -400,7 +400,7 @@ class LocalCopyBackend:
         branch_id = f"br-{uuid.uuid4().hex[:8]}"
         branch_dir = self.branches_dir / branch_id
         branch_dir.mkdir(parents=True)
-        branch_db = branch_dir / "toy_mailbox.db"
+        branch_db = branch_dir / "demo_mailbox.db"
         if base.db_path is None:
             raise BranchError(f"Base {base.id} does not have a database snapshot")
         shutil.copy2(base.db_path, branch_db)
@@ -681,7 +681,7 @@ class LocalCopyBackend:
         port: int,
     ) -> subprocess.Popen:
         env = os.environ.copy()
-        env["TOY_MAILBOX_DB_PATH"] = str(db_path)
+        env["DEMO_MAILBOX_DB_PATH"] = str(db_path)
         env["PYTHONPATH"] = pythonpath_for(self.project_root)
 
         return subprocess.Popen(
@@ -1249,7 +1249,7 @@ class CheckpointLiteBackend:
         cwd: Path,
     ) -> subprocess.Popen:
         env = os.environ.copy()
-        env["TOY_MAILBOX_DB_PATH"] = str(db_path)
+        env["DEMO_MAILBOX_DB_PATH"] = str(db_path)
         env["PYTHONPATH"] = pythonpath_for(Path(cwd))
 
         command = [
@@ -1267,7 +1267,7 @@ class CheckpointLiteBackend:
                 "sudo",
                 "env",
                 f"PYTHONPATH={env['PYTHONPATH']}",
-                f"TOY_MAILBOX_DB_PATH={env['TOY_MAILBOX_DB_PATH']}",
+                f"DEMO_MAILBOX_DB_PATH={env['DEMO_MAILBOX_DB_PATH']}",
                 *command,
             ]
 
@@ -1365,7 +1365,7 @@ class StateForkBackend(CheckpointLiteBackend):
 
     StateFork is a Python controller package, not a web API in this workspace.
     This adapter uses its EnvironmentManager API as the control plane:
-    snapshot, restore, create_env_from_snapshot, and cleanup. The toy web app
+    snapshot, restore, create_env_from_snapshot, and cleanup. The demo web app
     still runs as uvicorn so the rest of the demo UI can stay unchanged.
     """
 
@@ -1494,7 +1494,7 @@ class StateForkBackend(CheckpointLiteBackend):
         branch_id = f"sf-{uuid.uuid4().hex[:8]}"
         port = self._next_port()
         env = os.environ.copy()
-        env["TOY_MAILBOX_DB_PATH"] = str(branch_db)
+        env["DEMO_MAILBOX_DB_PATH"] = str(branch_db)
         env["PYTHONPATH"] = pythonpath_for(work_dir)
 
         process = subprocess.Popen(

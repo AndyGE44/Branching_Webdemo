@@ -23,7 +23,7 @@ sudo criu check
 ```
 
 `sudo criu check` must pass before checkpoint-lite process snapshots can work.
-The first toy backend mostly exercises OverlayFS sessions, but CRIU should be
+The first demo backend mostly exercises OverlayFS sessions, but CRIU should be
 healthy before we move to full process checkpointing.
 
 ## 2. Build Checkpoint-Lite
@@ -40,7 +40,7 @@ go build -o bash_init cmd/bash-init/main.go
 If `go` is missing, install the version expected by checkpoint-lite or use the
 project's existing build notes.
 
-## 3. Run The Toy App Normally First
+## 3. Run The Demo App Normally First
 
 ```bash
 cd ~/Search_Agent/agent_safe_demo
@@ -83,12 +83,12 @@ Stop the server, then restart it with:
 cd ~/Search_Agent/agent_safe_demo
 . .venv/bin/activate
 
-export TOY_BRANCH_BACKEND=checkpoint-lite
+export DEMO_BRANCH_BACKEND=checkpoint-lite
 export CHECKPOINT_LITE_BIN=../checkpoint-lite/checkpoint-lite
-export TOY_BRANCH_HOST=0.0.0.0
-export TOY_BRANCH_PORT_START=8200
-export TOY_CHECKPOINT_USE_SUDO=1
-export TOY_CHECKPOINT_SESSIONS_DIR=/tmp/checkpoint-sessions
+export DEMO_BRANCH_HOST=0.0.0.0
+export DEMO_BRANCH_PORT_START=8200
+export DEMO_CHECKPOINT_USE_SUDO=1
+export DEMO_CHECKPOINT_SESSIONS_DIR=/tmp/checkpoint-sessions
 
 PYTHONPATH=src uvicorn agent_safe_demo.main:app --host 0.0.0.0 --port 8000
 ```
@@ -104,12 +104,12 @@ Expected first result:
 - Main app remains on port `8000`.
 - The active branch app starts on `8200`.
 - Branch state writes to the checkpoint-lite overlay workdir.
-- Main `toy_mailbox.db` is not modified until `Commit`.
+- Main `demo_mailbox.db` is not modified until `Commit`.
 - Creating a second checkpoint-lite branch while one is running is rejected.
 
 If checkpoint-lite fails with `mount command failed: exit status 32`, verify
 the session directory. Some CloudLab images have a checkpoint-lite config that
-points at `/mydata2/checkpoint-sessions`; use `TOY_CHECKPOINT_SESSIONS_DIR` to
+points at `/mydata2/checkpoint-sessions`; use `DEMO_CHECKPOINT_SESSIONS_DIR` to
 force a known-good local path such as `/tmp/checkpoint-sessions`.
 
 ## 6. What This Backend Does Today
@@ -121,7 +121,7 @@ creates an explicit named base checkpoint for every branch:
 create branch -> sudo checkpoint-lite init <project-root> --quiet
               -> sudo checkpoint-lite create <session> <branch>-base -1
               -> start branch uvicorn in the overlay workdir
-              -> set TOY_MAILBOX_DB_PATH=<overlay>/toy_mailbox.db
+              -> set DEMO_MAILBOX_DB_PATH=<overlay>/demo_mailbox.db
 
 run agent     -> HTTP calls against the branch URL
 diff          -> SQLite summary diff between main DB and branch DB

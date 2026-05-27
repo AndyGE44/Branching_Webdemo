@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parents[1]
-DB_PATH = Path(os.getenv("TOY_MAILBOX_DB_PATH", PROJECT_ROOT / "toy_mailbox.db"))
+DB_PATH = Path(os.getenv("DEMO_MAILBOX_DB_PATH", PROJECT_ROOT / "demo_mailbox.db"))
 
 
 @asynccontextmanager
@@ -23,7 +23,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="Toy Mailbox Service",
+    title="Demo Mailbox Service",
     description="A plain mailbox web service. It does not know about StateFork.",
     version="0.1.0",
     lifespan=lifespan,
@@ -422,7 +422,7 @@ def init_db() -> None:
 
 @app.get("/")
 def root() -> dict:
-    return {"service": "toy-mailbox", "role": "business-app"}
+    return {"service": "demo-mailbox", "role": "business-app"}
 
 
 @app.get("/api/inventory")

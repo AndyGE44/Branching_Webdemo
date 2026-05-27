@@ -10,11 +10,11 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-main_port="${TOY_MAIN_PORT:-8000}"
-branch_start="${TOY_BRANCH_PORT_START:-8300}"
-branch_end="${TOY_BRANCH_PORT_END:-8350}"
+main_port="${DEMO_MAIN_PORT:-8000}"
+branch_start="${DEMO_BRANCH_PORT_START:-8300}"
+branch_end="${DEMO_BRANCH_PORT_END:-8350}"
 sessions_dir="${CHECKPOINT_SESSIONS_DIR:-/tmp/checkpoint-sessions-mailbox-demo}"
-statefork_cwd="${TOY_STATEFORK_CWD:-/users/alexxjk/StateFork}"
+statefork_cwd="${DEMO_STATEFORK_CWD:-/users/alexxjk/StateFork}"
 
 kill_listeners() {
   local port="$1"

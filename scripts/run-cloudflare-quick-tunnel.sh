@@ -10,7 +10,7 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-host="${TOY_MAIN_HOST:-127.0.0.1}"
-port="${TOY_MAIN_PORT:-8000}"
+host="${DEMO_MAIN_HOST:-127.0.0.1}"
+port="${DEMO_MAIN_PORT:-8000}"
 
 exec cloudflared tunnel --url "http://${host}:${port}"

@@ -115,7 +115,7 @@ The VM-stable StateFork path still defaults to init mode. Build mode can be
 requested with:
 
 ```bash
-TOY_STATEFORK_BUILD=1
+DEMO_STATEFORK_BUILD=1
 ```
 
 For build mode, the controller reuses the initial snapshot that StateFork's
@@ -155,7 +155,7 @@ local smoke test passed
 StateFork smoke passed
 StateFork restore-to-initial passed
 Docker build passed
-Docker build-mode workspace/smoke/restore passed with TOY_STATEFORK_BUILD=1
+Docker build-mode workspace/smoke/restore passed with DEMO_STATEFORK_BUILD=1
 ```
 
 API separation check on `sf-exp`:

@@ -7,7 +7,7 @@ workflow currently validated on the shared Ubuntu VM.
 
 ## Goals
 
-- Run the FastAPI demo on EC2 with `TOY_BRANCH_BACKEND=statefork`.
+- Run the FastAPI demo on EC2 with `DEMO_BRANCH_BACKEND=statefork`.
 - Validate StateFork snapshot, restore, branch server startup, diff, commit, and
   discard on EC2.
 - Provide a path from SSH-tunneled demo access to a public URL.
@@ -196,13 +196,13 @@ Private SSH-tunneled mode:
 cd ~/Web_Demo_For_Checkpointlite
 . .venv/bin/activate
 
-export TOY_BRANCH_BACKEND=statefork
-export TOY_STATEFORK_ROOT=/users/alexxjk/StateFork
-export TOY_STATEFORK_CWD=/users/alexxjk/StateFork
-export TOY_STATEFORK_METHOD=ckpt_build
+export DEMO_BRANCH_BACKEND=statefork
+export DEMO_STATEFORK_ROOT=/users/alexxjk/StateFork
+export DEMO_STATEFORK_CWD=/users/alexxjk/StateFork
+export DEMO_STATEFORK_METHOD=ckpt_build
 export CHECKPOINT_SESSIONS_DIR=/tmp/checkpoint-sessions
-export TOY_BRANCH_HOST=127.0.0.1
-export TOY_BRANCH_PORT_START=8300
+export DEMO_BRANCH_HOST=127.0.0.1
+export DEMO_BRANCH_PORT_START=8300
 export PYTHONPATH=src
 
 sudo -E .venv/bin/uvicorn agent_safe_demo.main:app --host 127.0.0.1 --port 8000

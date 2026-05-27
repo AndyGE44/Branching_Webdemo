@@ -1,7 +1,7 @@
 .venv/
 __pycache__/
 *.pyc
-toy_mailbox.db
+demo_mailbox.db
 .branches/
 build/
 dist/

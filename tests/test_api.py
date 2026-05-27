@@ -17,14 +17,14 @@ from agent_safe_demo.branching import (
 
 
 def configure_env(monkeypatch, tmp_path, auth_password=None) -> None:
-    db_path = tmp_path / "toy_mailbox.db"
-    monkeypatch.setenv("TOY_MAILBOX_DB_PATH", str(db_path))
-    monkeypatch.setenv("TOY_BRANCH_BACKEND", "local-copy")
-    monkeypatch.delenv("TOY_MAILBOX_BRANCH_ID", raising=False)
+    db_path = tmp_path / "demo_mailbox.db"
+    monkeypatch.setenv("DEMO_MAILBOX_DB_PATH", str(db_path))
+    monkeypatch.setenv("DEMO_BRANCH_BACKEND", "local-copy")
+    monkeypatch.delenv("DEMO_MAILBOX_BRANCH_ID", raising=False)
     if auth_password is None:
-        monkeypatch.delenv("TOY_DEMO_AUTH_PASSWORD", raising=False)
+        monkeypatch.delenv("DEMO_AUTH_PASSWORD", raising=False)
     else:
-        monkeypatch.setenv("TOY_DEMO_AUTH_PASSWORD", auth_password)
+        monkeypatch.setenv("DEMO_AUTH_PASSWORD", auth_password)
 
 
 def load_mailbox_app(monkeypatch, tmp_path, auth_password=None):
@@ -509,7 +509,7 @@ def test_checkpoint_backends_reject_concurrent_active_branch(backend_cls, backen
 
 
 def test_statefork_build_base_reuses_initial_snapshot(tmp_path):
-    db_path = tmp_path / "toy_mailbox.db"
+    db_path = tmp_path / "demo_mailbox.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute("CREATE TABLE marker (id TEXT PRIMARY KEY)")
 

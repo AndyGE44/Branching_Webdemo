@@ -1,4 +1,4 @@
-# Agent-Safe Toy Mailbox
+# Agent-Safe Demo Mailbox
 
 A FastAPI web demo for showing how StateFork and checkpoint-lite can give a
 normal email-style web service an agent-safe branch workflow:
@@ -35,7 +35,7 @@ which is the intended path for demonstrating that StateFork can manage an
 ordinary packaged web service from the outside.
 
 `StateForkBackend` keeps the current VM-stable init path by default. Set
-`TOY_STATEFORK_BUILD=1` before starting the controller to ask
+`DEMO_STATEFORK_BUILD=1` before starting the controller to ask
 StateFork/checkpoint-lite to use the Dockerfile build path.
 
 ## Recommended VM Start
@@ -82,7 +82,7 @@ cd ~/Web_Demo_For_Checkpointlite
 cp .env.example .env
 ```
 
-Edit `.env` and replace `TOY_DEMO_AUTH_PASSWORD` with a real demo password:
+Edit `.env` and replace `DEMO_AUTH_PASSWORD` with a real demo password:
 
 ```bash
 nano .env
@@ -91,10 +91,10 @@ nano .env
 Minimum required value:
 
 ```bash
-TOY_DEMO_AUTH_PASSWORD=<shared-demo-password>
+DEMO_AUTH_PASSWORD=<shared-demo-password>
 ```
 
-`TOY_DEMO_AUTH_USER` defaults to `demo`. The password protects the main app
+`DEMO_AUTH_USER` defaults to `demo`. The password protects the main app
 with HTTP Basic Auth. The active runtime app is still an internal VM-only process
 on `127.0.0.1:8300`, so the main app can manage branch environments without
 opening the branch port publicly.
@@ -228,7 +228,7 @@ cd ~/Web_Demo_For_Checkpointlite
 ```
 
 The script sets the StateFork/checkpoint-lite environment, enables
-`TOY_STATEFORK_BUILD=1`, uses this repo's `Dockerfile`, and starts the
+`DEMO_STATEFORK_BUILD=1`, uses this repo's `Dockerfile`, and starts the
 controller on `127.0.0.1:8000`.
 
 If port `8000` is already in use, clean up the previous demo first:
@@ -244,14 +244,14 @@ Manual equivalent, mostly for debugging:
 cd ~/Web_Demo_For_Checkpointlite
 . .venv/bin/activate
 
-export TOY_BRANCH_BACKEND=statefork
-export TOY_STATEFORK_BUILD=1
-export TOY_STATEFORK_ROOT=/users/alexxjk/StateFork
-export TOY_STATEFORK_CWD=/users/alexxjk/StateFork
-export TOY_STATEFORK_METHOD=ckpt_build
+export DEMO_BRANCH_BACKEND=statefork
+export DEMO_STATEFORK_BUILD=1
+export DEMO_STATEFORK_ROOT=/users/alexxjk/StateFork
+export DEMO_STATEFORK_CWD=/users/alexxjk/StateFork
+export DEMO_STATEFORK_METHOD=ckpt_build
 export CHECKPOINT_SESSIONS_DIR=/tmp/checkpoint-sessions-mailbox-demo
-export TOY_BRANCH_HOST=127.0.0.1
-export TOY_BRANCH_PORT_START=8300
+export DEMO_BRANCH_HOST=127.0.0.1
+export DEMO_BRANCH_PORT_START=8300
 export PYTHONPATH=src
 
 sudo -E .venv/bin/uvicorn agent_safe_demo.main:app --host 127.0.0.1 --port 8000
@@ -391,7 +391,7 @@ sudo docker version
 `sudo criu check` should print success. If it fails, checkpoint-lite process
 checkpointing is not ready on that VM.
 
-Docker is only required for `TOY_STATEFORK_BUILD=1`. The default StateFork init
+Docker is only required for `DEMO_STATEFORK_BUILD=1`. The default StateFork init
 mode can run without building the repo's Docker image.
 
 ### 2. Clone This Private Repo
@@ -460,7 +460,7 @@ git clone git@github.com:Alex-XJK/StateFork.git
 cd StateFork
 ```
 
-The shared VM demo expects `TOY_STATEFORK_ROOT` and `TOY_STATEFORK_CWD` to point
+The shared VM demo expects `DEMO_STATEFORK_ROOT` and `DEMO_STATEFORK_CWD` to point
 at this directory.
 
 ### 6. Verify OverlayFS With Checkpoint-Lite
@@ -540,13 +540,13 @@ does snapshot and restore from the outside.
 This is the preferred backend for the shared VM demo. It uses StateFork's Python
 controller API instead of calling checkpoint-lite directly from the web app. The
 UI and FastAPI endpoints stay the same, but the branch backend is selected with
-`TOY_BRANCH_BACKEND=statefork`:
+`DEMO_BRANCH_BACKEND=statefork`:
 
 ```bash
 ./scripts/run-statefork-docker.sh
 ```
 
-The launcher sets `TOY_BRANCH_BACKEND=statefork`, `TOY_STATEFORK_BUILD=1`,
+The launcher sets `DEMO_BRANCH_BACKEND=statefork`, `DEMO_STATEFORK_BUILD=1`,
 StateFork paths, runtime ports, `CHECKPOINT_SESSIONS_DIR`, and `PYTHONPATH`.
 
 `StateForkBackend` currently calls StateFork's `snapshot`, `restore`,
@@ -590,12 +590,12 @@ checkpoint-lite directly or listen on all interfaces. For the shared VM, prefer
 StateFork with SSH port forwarding and `--host 127.0.0.1`.
 
 ```bash
-export TOY_BRANCH_BACKEND=checkpoint-lite
+export DEMO_BRANCH_BACKEND=checkpoint-lite
 export CHECKPOINT_LITE_BIN=/path/to/checkpoint-lite
-export TOY_CHECKPOINT_SESSIONS_DIR=/tmp/checkpoint-sessions
-export TOY_BRANCH_HOST=0.0.0.0
-export TOY_BRANCH_PORT_START=8200
-export TOY_CHECKPOINT_USE_SUDO=1
+export DEMO_CHECKPOINT_SESSIONS_DIR=/tmp/checkpoint-sessions
+export DEMO_BRANCH_HOST=0.0.0.0
+export DEMO_BRANCH_PORT_START=8200
+export DEMO_CHECKPOINT_USE_SUDO=1
 export PYTHONPATH=src
 
 uvicorn agent_safe_demo.main:app --host 0.0.0.0 --port 8000
@@ -636,7 +636,7 @@ agent_safe_demo/
 Generated runtime data is ignored by git:
 
 ```text
-toy_mailbox.db
+demo_mailbox.db
 .branches/
 build/
 dist/
@@ -681,7 +681,7 @@ The generated OpenAPI docs are available at `/docs`.
 
 This mode is only for fast local development on macOS or non-Linux machines.
 It does not use checkpoint-lite. Branches are simulated by copying
-`toy_mailbox.db` into `.branches/<branch_id>/`.
+`demo_mailbox.db` into `.branches/<branch_id>/`.
 
 ```bash
 python3 -m venv .venv

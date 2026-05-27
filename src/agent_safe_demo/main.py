@@ -25,48 +25,48 @@ from agent_safe_demo.mailbox_app import DB_PATH, PROJECT_ROOT, init_db
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
-DEMO_AUTH_USER = os.getenv("TOY_DEMO_AUTH_USER", "demo")
-DEMO_AUTH_PASSWORD = os.getenv("TOY_DEMO_AUTH_PASSWORD")
-DEMO_AUTH_REALM = os.getenv("TOY_DEMO_AUTH_REALM", "Agent-Safe Demo")
+DEMO_AUTH_USER = os.getenv("DEMO_AUTH_USER", "demo")
+DEMO_AUTH_PASSWORD = os.getenv("DEMO_AUTH_PASSWORD")
+DEMO_AUTH_REALM = os.getenv("DEMO_AUTH_REALM", "Agent-Safe Demo")
 WORKSPACE_BASE_ID: str | None = None
 WORKSPACE_BRANCH_ID: str | None = None
 WORKSPACE_INITIAL_SNAPSHOT_LABEL = "Initial checkpoint"
 
 
 def statefork_kwargs_from_env() -> dict:
-    kwargs = json.loads(os.getenv("TOY_STATEFORK_KWARGS", "{}"))
-    if "build" not in kwargs and "TOY_STATEFORK_BUILD" in os.environ:
-        kwargs["build"] = os.getenv("TOY_STATEFORK_BUILD", "1") != "0"
+    kwargs = json.loads(os.getenv("DEMO_STATEFORK_KWARGS", "{}"))
+    if "build" not in kwargs and "DEMO_STATEFORK_BUILD" in os.environ:
+        kwargs["build"] = os.getenv("DEMO_STATEFORK_BUILD", "1") != "0"
     return kwargs
 
 
 def create_branch_backend() -> LocalCopyBackend | CheckpointLiteBackend | StateForkBackend:
-    backend = os.getenv("TOY_BRANCH_BACKEND", "local-copy")
+    backend = os.getenv("DEMO_BRANCH_BACKEND", "local-copy")
     if backend == "checkpoint-lite":
         return CheckpointLiteBackend(
             PROJECT_ROOT,
             DB_PATH,
             checkpoint_lite_bin=os.getenv("CHECKPOINT_LITE_BIN", "./checkpoint-lite"),
             checkpoint_sessions_dir=os.getenv(
-                "TOY_CHECKPOINT_SESSIONS_DIR",
+                "DEMO_CHECKPOINT_SESSIONS_DIR",
                 "/tmp/checkpoint-sessions",
             ),
-            host=os.getenv("TOY_BRANCH_HOST", "127.0.0.1"),
-            port_start=int(os.getenv("TOY_BRANCH_PORT_START", "8200")),
-            use_sudo=os.getenv("TOY_CHECKPOINT_USE_SUDO", "1") != "0",
+            host=os.getenv("DEMO_BRANCH_HOST", "127.0.0.1"),
+            port_start=int(os.getenv("DEMO_BRANCH_PORT_START", "8200")),
+            use_sudo=os.getenv("DEMO_CHECKPOINT_USE_SUDO", "1") != "0",
         )
     if backend == "statefork":
         return StateForkBackend(
             PROJECT_ROOT,
             DB_PATH,
             statefork_root=Path(
-                os.getenv("TOY_STATEFORK_ROOT", PROJECT_ROOT.parent / "StateFork")
+                os.getenv("DEMO_STATEFORK_ROOT", PROJECT_ROOT.parent / "StateFork")
             ),
-            statefork_method=os.getenv("TOY_STATEFORK_METHOD", "ckpt_build"),
-            statefork_cwd=Path(os.getenv("TOY_STATEFORK_CWD", str(PROJECT_ROOT))),
+            statefork_method=os.getenv("DEMO_STATEFORK_METHOD", "ckpt_build"),
+            statefork_cwd=Path(os.getenv("DEMO_STATEFORK_CWD", str(PROJECT_ROOT))),
             statefork_kwargs=statefork_kwargs_from_env(),
-            host=os.getenv("TOY_BRANCH_HOST", "127.0.0.1"),
-            port_start=int(os.getenv("TOY_BRANCH_PORT_START", "8300")),
+            host=os.getenv("DEMO_BRANCH_HOST", "127.0.0.1"),
+            port_start=int(os.getenv("DEMO_BRANCH_PORT_START", "8300")),
         )
     return LocalCopyBackend(PROJECT_ROOT, DB_PATH)
 
