@@ -35,8 +35,8 @@ which is the intended path for demonstrating that StateFork can manage an
 ordinary packaged web service from the outside.
 
 `StateForkBackend` keeps the current VM-stable init path by default. Set
-`TOY_STATEFORK_BUILD=1` to ask StateFork/checkpoint-lite to use the Dockerfile
-build path.
+`TOY_STATEFORK_BUILD=1` before starting the controller to ask
+StateFork/checkpoint-lite to use the Dockerfile build path.
 
 ## Public Cloudflare Quick Tunnel Demo
 
@@ -213,6 +213,17 @@ export PYTHONPATH=src
 sudo -E .venv/bin/uvicorn agent_safe_demo.main:app --host 127.0.0.1 --port 8000
 ```
 
+To enable Docker build mode, add this export before starting `uvicorn`:
+
+```bash
+export TOY_STATEFORK_BUILD=1
+```
+
+With that flag, StateFork calls checkpoint-lite build mode against this repo's
+`Dockerfile`. The mailbox app is still the ordinary runtime app
+(`agent_safe_demo.mailbox_app:app`); Docker is only used by checkpoint-lite to
+prepare the managed environment from the outside.
+
 ### 4. Open The UI Locally
 
 On your laptop, open:
@@ -284,18 +295,15 @@ In another SSH session or after stopping the server:
 ```bash
 cd ~/Web_Demo_For_Checkpointlite
 . .venv/bin/activate
-python scripts/smoke-test.py
+BASE_URL=http://127.0.0.1:8000 SMOKE_TIMEOUT=120 python scripts/smoke-test.py
 ```
 
-This smoke test still covers the legacy inventory agent path that will be
-replaced by the email agent flow in a later phase. Expected result:
+This smoke test covers the mailbox workspace flow. Expected result:
 
 ```text
-CASE-42 on_hand delta: -3
-SENSOR-9 on_hand delta: +5
-MCU-100 reserved delta: +2
-audit_log delta: +1
-main state after agent run: unchanged
+agent_action_statuses: labeled, moved, draft, received, archived
+branch mailbox after agent: changed
+main mailbox after agent: unchanged
 ```
 
 ### 7. Cleanup
@@ -338,13 +346,18 @@ sudo apt-get install -y \
   python3-pip \
   python3.12-venv \
   criu \
-  golang-go
+  golang-go \
+  docker.io
 
 sudo criu check
+sudo docker version
 ```
 
 `sudo criu check` should print success. If it fails, checkpoint-lite process
 checkpointing is not ready on that VM.
+
+Docker is only required for `TOY_STATEFORK_BUILD=1`. The default StateFork init
+mode can run without building the repo's Docker image.
 
 ### 2. Clone This Private Repo
 
@@ -450,6 +463,40 @@ sudo rm -rf /tmp/checkpoint-sessions /tmp/checkpoint-sessions-info /tmp/ckpt-lit
 
 Then run the shared VM demo above.
 
+### 7. Verify Docker Build Mode
+
+Use this when you specifically want to prove the Dockerfile path:
+
+```bash
+cd ~/Web_Demo_For_Checkpointlite
+sudo docker build -t agent-safe-mailbox:manual-check .
+```
+
+Then start the normal StateFork controller with one additional flag:
+
+```bash
+export TOY_STATEFORK_BUILD=1
+sudo -E .venv/bin/uvicorn agent_safe_demo.main:app --host 127.0.0.1 --port 8000
+```
+
+The first request to `/api/workspace` may take longer because checkpoint-lite is
+building from the Dockerfile:
+
+```bash
+curl -fsS http://127.0.0.1:8000/api/workspace
+```
+
+Expected signs that Docker build mode is working:
+
+- `GET /api/backend` still reports `statefork / statefork:ckpt_build`.
+- The workspace response includes a runtime URL such as
+  `http://127.0.0.1:8300`.
+- `python scripts/smoke-test.py` passes with the mailbox agent actions.
+
+Important: Docker build mode does not mean the mailbox app receives branching
+APIs. The Docker image still runs the plain mailbox app; StateFork/checkpoint-lite
+does snapshot and restore from the outside.
+
 ## StateFork Backend Quick Reference
 
 This is the preferred backend for the shared VM demo. It uses StateFork's Python
@@ -470,6 +517,12 @@ export PYTHONPATH=src
 sudo -E .venv/bin/uvicorn agent_safe_demo.main:app --host 127.0.0.1 --port 8000
 ```
 
+Enable Docker build mode by adding:
+
+```bash
+export TOY_STATEFORK_BUILD=1
+```
+
 `StateForkBackend` currently calls StateFork's `snapshot`, `restore`,
 `create_env_from_snapshot`, and `cleanup` methods. The current mailbox UI shows
 the managed runtime, manual checkpoints, and the deterministic email agent flow.
@@ -485,7 +538,9 @@ rejects commit and asks you to discard the stale branch or create a new base.
 Target lifecycle:
 
 ```text
-create base   -> StateFork snapshot
+create base   -> StateFork init mode: create manager -> snapshot
+              -> StateFork Docker build mode: checkpoint-lite build Dockerfile
+                 -> reuse build manager's initial snapshot
 create branch -> StateFork restore <base-id>
               -> StateFork create_env_from_snapshot <base-id>
               -> start runtime app URL in the forked environment
