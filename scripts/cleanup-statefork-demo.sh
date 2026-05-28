@@ -48,6 +48,33 @@ for port in $(seq "$branch_start" "$branch_end"); do
   force_kill_listeners "$port"
 done
 
+unmount_session_dir() {
+  local dir="$1"
+  local attempt
+
+  for attempt in $(seq 1 20); do
+    mapfile -t targets < <(
+      {
+        findmnt -R -n -r -o TARGET "$dir" 2>/dev/null || true
+        mount | grep -F "$dir" | awk '{print $3}' || true
+      } \
+        | awk 'NF' \
+        | awk '{print length($0), $0}' \
+        | sort -rn \
+        | cut -d' ' -f2- \
+        | awk '!seen[$0]++'
+    )
+
+    [[ "${#targets[@]}" -gt 0 ]] || break
+
+    for target in "${targets[@]}"; do
+      sudo umount -l "$target" 2>/dev/null || true
+    done
+
+    sleep 0.2
+  done
+}
+
 if [[ -d "$sessions_dir" ]]; then
   if [[ -x "${statefork_cwd}/checkpoint-lite" ]]; then
     for session_path in "$sessions_dir"/*; do
@@ -58,12 +85,7 @@ if [[ -d "$sessions_dir" ]]; then
     done
   fi
 
-  findmnt -R -n -o TARGET "$sessions_dir" 2>/dev/null \
-    | sort -r \
-    | while read -r target; do
-        sudo umount -l "$target" 2>/dev/null || true
-      done
-
+  unmount_session_dir "$sessions_dir"
   sudo rm -rf "$sessions_dir"
 fi
 
