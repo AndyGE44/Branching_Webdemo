@@ -1,6 +1,8 @@
-const mailboxSummaryEl = document.querySelector("#mailboxSummary");
-const messageListEl = document.querySelector("#messageList");
-const messageDetailEl = document.querySelector("#messageDetail");
+const appSelect = document.querySelector("#appSelect");
+const appDescriptionEl = document.querySelector("#appDescription");
+const runtimeTitleEl = document.querySelector("#runtimeTitle");
+const runtimeUrlEl = document.querySelector("#runtimeUrl");
+const runtimeFrame = document.querySelector("#runtimeFrame");
 const stateView = document.querySelector("#stateView");
 const resultPill = document.querySelector("#lastResult");
 const backendModeEl = document.querySelector("#backendMode");
@@ -9,10 +11,13 @@ const snapshotModeEl = document.querySelector("#snapshotMode");
 const workspaceStateEl = document.querySelector("#workspaceState");
 const checkpointsEl = document.querySelector("#checkpoints");
 const snapshotLabelInput = document.querySelector("#snapshotLabelInput");
+const runAgentBtn = document.querySelector("#runAgentBtn");
 
-let selectedMessageId = null;
+let apps = [];
+let currentAppId = null;
 let workspace = null;
 let runtimeBaseUrl = null;
+let runtimeStatePath = "/api/state";
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -52,10 +57,10 @@ function badge(value) {
   const safeValue = escapeHtml(value);
   const normalized = String(value ?? "").toLowerCase();
   let tone = "neutral";
-  if (["ready", "active", "draft", "saved", "current"].includes(normalized)) {
+  if (["ready", "active", "draft", "saved", "current", "running"].includes(normalized)) {
     tone = "ok";
   }
-  if (["blocked", "failed", "dirty", "unsaved"].includes(normalized)) {
+  if (["blocked", "failed", "dirty", "unsaved", "exited"].includes(normalized)) {
     tone = "warn";
   }
   return `<span class="badge ${tone}">${safeValue}</span>`;
@@ -83,6 +88,26 @@ function statCard(label, value, hint = "") {
   `;
 }
 
+function activeApp() {
+  return apps.find((app) => app.id === currentAppId) || workspace?.app || null;
+}
+
+function renderApps(payload) {
+  apps = payload.apps || [];
+  currentAppId = payload.current_app_id;
+  appSelect.innerHTML = apps
+    .map(
+      (app) => `<option value="${escapeHtml(app.id)}" ${app.id === currentAppId ? "selected" : ""}>${escapeHtml(app.label)}</option>`,
+    )
+    .join("");
+  const app = activeApp();
+  if (app) {
+    appDescriptionEl.textContent = app.description;
+    runtimeTitleEl.textContent = `${app.label} Runtime`;
+    runAgentBtn.textContent = app.agent_demo_label || "Run Agent";
+  }
+}
+
 function renderBackendStatus(status, branch) {
   const snapshotOps = status.operations?.snapshot || {};
   const restoreOps = status.operations?.restore || {};
@@ -99,6 +124,7 @@ function renderBackendStatus(status, branch) {
     : `${status.backend} / ${status.method}`;
   snapshotModeEl.textContent = `${branch.id} at ${branch.url}`;
   const cards = [
+    statCard("App", details.app_label || workspace?.app?.label || "app", details.app_id || ""),
     statCard("Backend", status.backend, status.method),
   ];
   if (stateforkMode) {
@@ -127,284 +153,6 @@ function renderWorkspaceState(branch) {
   workspaceStateEl.title = branch.dirty
     ? "The runtime has changes since the last snapshot."
     : "The runtime matches the current checkpoint.";
-}
-
-function renderMailboxSummary(mailbox) {
-  const folderCards = mailbox.folders
-    .map((folder) => statCard(folder.folder, folder.count, "folder"))
-    .join("");
-  mailboxSummaryEl.innerHTML = [
-    statCard("Unread", mailbox.unread, "needs review"),
-    statCard("Drafts", mailbox.drafts, "saved replies"),
-    folderCards,
-  ].join("");
-}
-
-function labelPills(labels) {
-  if (!labels.length) {
-    return `<span class="muted inline-muted">No labels</span>`;
-  }
-  return labels.map((label) => `<span class="label-pill">${escapeHtml(label)}</span>`).join("");
-}
-
-function replySubject(subject) {
-  return String(subject || "").toLowerCase().startsWith("re:") ? subject : `Re: ${subject}`;
-}
-
-function renderMessageList(messages) {
-  if (messages.length && !selectedMessageId) {
-    selectedMessageId = messages[0].id;
-  }
-  if (selectedMessageId && !messages.some((message) => message.id === selectedMessageId)) {
-    selectedMessageId = messages[0]?.id || null;
-  }
-
-  messageListEl.innerHTML = messages.length
-    ? messages
-        .map((message) => {
-          const selected = message.id === selectedMessageId ? "selected" : "";
-          const unread = message.is_read ? "" : "unread";
-          return `
-            <button class="message-row ${selected} ${unread}" data-message-id="${escapeHtml(message.id)}" type="button">
-              <div>
-                <strong>${escapeHtml(message.subject)}</strong>
-                <p>${escapeHtml(message.from_address)}</p>
-              </div>
-              <div class="message-meta">
-                ${badge(message.folder)}
-                ${badge(message.priority)}
-              </div>
-            </button>
-          `;
-        })
-        .join("")
-    : `<p class="empty">No messages yet.</p>`;
-}
-
-function renderMessageDetail(message) {
-  if (!message) {
-    messageDetailEl.innerHTML = `<p class="empty">Select a message.</p>`;
-    return;
-  }
-  messageDetailEl.innerHTML = `
-    <article>
-      <div class="message-detail-header">
-        <div>
-          <h3>${escapeHtml(message.subject)}</h3>
-          <p>From ${escapeHtml(message.from_address)}</p>
-          <p>To ${escapeHtml(message.to_address)}</p>
-        </div>
-        <div class="message-meta">
-          ${badge(message.folder)}
-          ${badge(message.priority)}
-          ${message.is_read ? badge("read") : badge("unread")}
-        </div>
-      </div>
-      <div class="label-row">${labelPills(message.labels)}</div>
-      <p class="message-body">${escapeHtml(message.body)}</p>
-      <section class="message-actions" data-message-id="${escapeHtml(message.id)}">
-        <div class="quick-actions">
-          <form data-action="label-message" class="inline-form">
-            <label>
-              Label
-              <input name="label" type="text" maxlength="40" placeholder="finance" />
-            </label>
-            <button class="primary" type="submit">Add</button>
-          </form>
-          <form data-action="move-message" class="inline-form">
-            <label>
-              Folder
-              <select name="folder">
-                ${["Inbox", "Archive", "Spam"]
-                  .map(
-                    (folder) =>
-                      `<option value="${folder}" ${folder === message.folder ? "selected" : ""}>${folder}</option>`,
-                  )
-                  .join("")}
-              </select>
-            </label>
-            <button type="submit">Move</button>
-          </form>
-          <button data-action="toggle-read" data-read="${message.is_read ? "false" : "true"}" type="button">
-            Mark ${message.is_read ? "Unread" : "Read"}
-          </button>
-          <button data-action="archive-message" type="button">Archive</button>
-        </div>
-
-        <form data-action="create-draft" class="draft-form">
-          <div class="draft-form-row">
-            <label>
-              To
-              <input name="to_address" type="email" value="${escapeHtml(message.from_address)}" />
-            </label>
-            <label>
-              Subject
-              <input name="subject" type="text" maxlength="200" value="${escapeHtml(replySubject(message.subject))}" />
-            </label>
-          </div>
-          <label>
-            Reply
-            <textarea name="body" rows="4" placeholder="Draft a reply..."></textarea>
-          </label>
-          <div class="button-row">
-            <button class="primary" type="submit">Create Draft</button>
-          </div>
-        </form>
-      </section>
-    </article>
-  `;
-}
-
-function emptyRow(columns, label = "No records yet") {
-  return `<tr><td colspan="${columns}" class="empty">${label}</td></tr>`;
-}
-
-function renderRows(items, columns) {
-  if (!items.length) {
-    return emptyRow(columns.length);
-  }
-  return items
-    .map(
-      (item) => `
-        <tr>
-          ${columns
-            .map((column) => {
-              const value =
-                typeof column.value === "function"
-                  ? column.value(item)
-                  : item[column.value];
-              return `<td>${column.html ? value : escapeHtml(value)}</td>`;
-            })
-            .join("")}
-        </tr>
-      `,
-    )
-    .join("");
-}
-
-function renderTable(title, items, columns) {
-  return `
-    <section class="state-card">
-      <div class="state-card-header">
-        <h3>${escapeHtml(title)}</h3>
-        <span>${items.length}</span>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>${columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join("")}</tr>
-          </thead>
-          <tbody>${renderRows(items, columns)}</tbody>
-        </table>
-      </div>
-    </section>
-  `;
-}
-
-function renderDraftContents(drafts) {
-  return `
-    <section class="state-card draft-content-card">
-      <div class="state-card-header">
-        <h3>Draft Contents</h3>
-        <span>${drafts.length}</span>
-      </div>
-      <div class="draft-content-list">
-        ${
-          drafts.length
-            ? drafts
-                .map(
-                  (draft) => `
-                    <article class="draft-preview">
-                      <div class="draft-preview-header">
-                        <div>
-                          <strong>${escapeHtml(draft.subject)}</strong>
-                          <p>To ${escapeHtml(draft.to_address)}</p>
-                        </div>
-                        ${badge(draft.created_by)}
-                      </div>
-                      <p class="draft-preview-body">${escapeHtml(draft.body)}</p>
-                    </article>
-                  `,
-                )
-                .join("")
-            : `<p class="empty">No draft content yet.</p>`
-        }
-      </div>
-    </section>
-  `;
-}
-
-function renderState(state) {
-  const folderCount = state.mailbox.folders.length;
-  const unreadCount = state.messages.filter((message) => !message.is_read).length;
-
-  stateView.innerHTML = `
-    <section class="state-summary">
-      <div>
-        <strong>${state.messages.length}</strong>
-        <span>Messages</span>
-      </div>
-      <div>
-        <strong>${unreadCount}</strong>
-        <span>Unread</span>
-      </div>
-      <div>
-        <strong>${folderCount}</strong>
-        <span>Folders</span>
-      </div>
-      <div>
-        <strong>${state.drafts.length}</strong>
-        <span>Drafts</span>
-      </div>
-    </section>
-
-    <div class="state-grid">
-      ${renderTable("Messages", state.messages, [
-        { label: "ID", value: "id" },
-        { label: "Folder", value: (row) => badge(row.folder), html: true },
-        { label: "Priority", value: (row) => badge(row.priority), html: true },
-        { label: "Subject", value: "subject" },
-        { label: "From", value: "from_address" },
-      ])}
-
-      ${renderTable("Drafts", state.drafts, [
-        { label: "ID", value: "id" },
-        { label: "To", value: "to_address" },
-        { label: "Subject", value: "subject" },
-        { label: "Status", value: (row) => badge(row.status), html: true },
-        { label: "Created By", value: "created_by" },
-      ])}
-    </div>
-
-    ${renderDraftContents(state.drafts)}
-
-    <section class="state-card audit-card">
-      <div class="state-card-header">
-        <h3>Audit Log</h3>
-        <span>latest ${state.audit_log.length}</span>
-      </div>
-      <div class="audit-list">
-        ${
-          state.audit_log.length
-            ? state.audit_log
-                .map(
-                  (event) => `
-                    <article class="audit-event">
-                      <div>
-                        ${badge(event.action)}
-                        <strong>${escapeHtml(event.actor)}</strong>
-                      </div>
-                      <p>${escapeHtml(event.detail)}</p>
-                      <time>${escapeHtml(event.created_at)}</time>
-                    </article>
-                  `,
-                )
-                .join("")
-            : `<p class="empty">No audit events yet</p>`
-        }
-      </div>
-    </section>
-  `;
 }
 
 function renderCheckpoints(branch) {
@@ -447,26 +195,135 @@ function renderCheckpoints(branch) {
   `;
 }
 
+function scalarEntries(state) {
+  const entries = [];
+  for (const [key, value] of Object.entries(state || {})) {
+    if (Array.isArray(value)) {
+      entries.push([key, value.length]);
+    } else if (value && typeof value === "object") {
+      entries.push([key, Object.keys(value).length]);
+    } else {
+      entries.push([key, value]);
+    }
+  }
+  return entries.slice(0, 4);
+}
+
+function valuePreview(value) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  return value;
+}
+
+function renderRows(items, columns) {
+  if (!items.length) {
+    return `<tr><td colspan="${columns.length}" class="empty">No records yet</td></tr>`;
+  }
+  return items
+    .slice(0, 25)
+    .map(
+      (item) => `
+        <tr>
+          ${columns.map((column) => `<td>${escapeHtml(valuePreview(item[column]))}</td>`).join("")}
+        </tr>
+      `,
+    )
+    .join("");
+}
+
+function renderTable(title, items) {
+  const columns = Array.from(
+    items.reduce((set, item) => {
+      Object.keys(item || {}).forEach((key) => set.add(key));
+      return set;
+    }, new Set()),
+  ).slice(0, 6);
+  return `
+    <section class="state-card">
+      <div class="state-card-header">
+        <h3>${escapeHtml(title)}</h3>
+        <span>${items.length}</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr></thead>
+          <tbody>${renderRows(items, columns)}</tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function renderState(state) {
+  const summary = state.summary && typeof state.summary === "object" ? Object.entries(state.summary) : scalarEntries(state);
+  const tables = Object.entries(state || {}).filter(([, value]) => Array.isArray(value) && value.every((item) => item && typeof item === "object"));
+  stateView.innerHTML = `
+    <section class="state-summary">
+      ${summary
+        .slice(0, 4)
+        .map(
+          ([key, value]) => `
+            <div>
+              <strong>${escapeHtml(valuePreview(value))}</strong>
+              <span>${escapeHtml(key)}</span>
+            </div>
+          `,
+        )
+        .join("")}
+    </section>
+    <div class="state-grid">
+      ${tables.slice(0, 4).map(([key, value]) => renderTable(key, value)).join("")}
+    </div>
+    <section class="state-card">
+      <div class="state-card-header"><h3>Raw State</h3><span>JSON</span></div>
+      <pre>${escapeHtml(JSON.stringify(state, null, 2))}</pre>
+    </section>
+  `;
+}
+
+async function refreshApps() {
+  const payload = await request("/api/apps");
+  renderApps(payload);
+  return payload;
+}
+
 async function refreshWorkspace() {
   const data = await request("/api/workspace");
   workspace = data;
+  currentAppId = data.app.id;
   runtimeBaseUrl = data.workspace.runtime_url;
+  runtimeStatePath = data.workspace.state_path || "/api/state";
+  renderApps({ apps, current_app_id: currentAppId });
   renderWorkspaceState(data.branch);
   renderBackendStatus(data.backend, data.branch);
   renderCheckpoints(data.branch);
+  runtimeUrlEl.textContent = data.workspace.runtime_ui_url;
+  if (runtimeFrame.src !== data.workspace.runtime_ui_url) {
+    runtimeFrame.src = data.workspace.runtime_ui_url;
+  }
   return data;
 }
 
-async function refresh() {
-  await refreshWorkspace();
-  const [mailbox, state] = await Promise.all([
-    runtimeRequest("/api/mailbox"),
-    runtimeRequest("/api/state"),
-  ]);
-  renderMailboxSummary(mailbox);
-  renderMessageList(mailbox.messages);
-  renderMessageDetail(mailbox.messages.find((message) => message.id === selectedMessageId));
+async function refreshState() {
+  const state = await runtimeRequest(runtimeStatePath);
   renderState(state);
+  return state;
+}
+
+async function refresh() {
+  if (!apps.length) {
+    await refreshApps();
+  }
+  await refreshWorkspace();
+  try {
+    await refreshState();
+  } catch (error) {
+    stateView.innerHTML = `<p class="empty">${escapeHtml(error.message)}</p>`;
+  }
 }
 
 async function mutate(label, fn) {
@@ -477,7 +334,7 @@ async function mutate(label, fn) {
   } catch (error) {
     showResult(error.message, false);
     try {
-      await refresh();
+      await refreshWorkspace();
     } catch {
       // Keep the original error visible if refresh also fails.
     }
@@ -520,6 +377,21 @@ async function restoreSnapshot(snapshotId) {
   await refresh();
 }
 
+appSelect.addEventListener("change", async () => {
+  const app = apps.find((candidate) => candidate.id === appSelect.value);
+  const label = app?.label || appSelect.value;
+  if (!window.confirm(`Switch to ${label} and reset the current workspace?`)) {
+    appSelect.value = currentAppId;
+    return;
+  }
+  runtimeFrame.removeAttribute("src");
+  stateView.innerHTML = `<p class="empty">Switching app...</p>`;
+  await mutate(`Switched to ${label}`, async () => {
+    await request(`/api/apps/${encodeURIComponent(appSelect.value)}/select`, { method: "POST" });
+    await refreshApps();
+  });
+});
+
 document.querySelector("#refreshBtn").addEventListener("click", refresh);
 
 document.querySelector("#snapshotBtn").addEventListener("click", async () => {
@@ -530,11 +402,11 @@ document.querySelector("#snapshotBtn").addEventListener("click", async () => {
   });
 });
 
-document.querySelector("#runAgentBtn").addEventListener("click", async () => {
+runAgentBtn.addEventListener("click", async () => {
   try {
-    showResult("Running email agent...");
+    showResult("Running agent...");
     const data = await request("/api/workspace/run-agent", { method: "POST" });
-    showResult(`Email agent ran ${data.actions.length} actions`);
+    showResult(`Agent ran ${data.actions.length} actions`);
     await refresh();
   } catch (error) {
     showResult(error.message, false);
@@ -546,93 +418,8 @@ document.querySelector("#resetBtn").addEventListener("click", async () => {
   if (!window.confirm("Reset the workspace and discard runtime checkpoints?")) {
     return;
   }
-  selectedMessageId = null;
+  runtimeFrame.removeAttribute("src");
   await mutate("Workspace reset", () => request("/api/workspace/reset", { method: "POST" }));
-});
-
-messageListEl.addEventListener("click", (event) => {
-  const button = event.target.closest("button[data-message-id]");
-  if (!button) {
-    return;
-  }
-  selectedMessageId = button.dataset.messageId;
-  refresh().catch((error) => showResult(error.message, false));
-});
-
-messageDetailEl.addEventListener("submit", async (event) => {
-  const form = event.target.closest("form[data-action]");
-  if (!form) {
-    return;
-  }
-  event.preventDefault();
-  const actions = form.closest(".message-actions");
-  const messageId = actions?.dataset.messageId;
-  if (!messageId) {
-    return;
-  }
-  const action = form.dataset.action;
-  const formData = new FormData(form);
-  if (action === "label-message") {
-    await mutate("Label added", () =>
-      runtimeRequest(`/api/messages/${messageId}/label`, {
-        method: "POST",
-        body: JSON.stringify({ label: formData.get("label") }),
-      }),
-    );
-    return;
-  }
-  if (action === "move-message") {
-    await mutate("Message moved", () =>
-      runtimeRequest(`/api/messages/${messageId}/move`, {
-        method: "POST",
-        body: JSON.stringify({ folder: formData.get("folder") }),
-      }),
-    );
-    return;
-  }
-  if (action === "create-draft") {
-    await mutate("Draft created", () =>
-      runtimeRequest("/api/drafts", {
-        method: "POST",
-        body: JSON.stringify({
-          source_message_id: messageId,
-          to_address: formData.get("to_address"),
-          subject: formData.get("subject"),
-          body: formData.get("body"),
-        }),
-      }),
-    );
-  }
-});
-
-messageDetailEl.addEventListener("click", async (event) => {
-  const button = event.target.closest("button[data-action]");
-  if (!button) {
-    return;
-  }
-  const actions = button.closest(".message-actions");
-  const messageId = actions?.dataset.messageId;
-  if (!messageId) {
-    return;
-  }
-  const action = button.dataset.action;
-  if (action === "toggle-read") {
-    await mutate("Read state updated", () =>
-      runtimeRequest(`/api/messages/${messageId}/read`, {
-        method: "POST",
-        body: JSON.stringify({ is_read: button.dataset.read === "true" }),
-      }),
-    );
-    return;
-  }
-  if (action === "archive-message") {
-    await mutate("Message archived", () =>
-      runtimeRequest(`/api/messages/${messageId}/archive`, {
-        method: "POST",
-        body: JSON.stringify({ actor: "user" }),
-      }),
-    );
-  }
 });
 
 checkpointsEl.addEventListener("click", async (event) => {

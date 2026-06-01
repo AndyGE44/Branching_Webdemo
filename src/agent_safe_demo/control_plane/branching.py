@@ -118,6 +118,8 @@ def build_status(
 
 
 def branch_action_request(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    if "path" in payload:
+        return payload["path"], payload.get("body", {})
     action = payload["action"]
     actor = payload.get("actor", "agent")
     if action == "label":
@@ -314,6 +316,12 @@ class StateForkBackend:
         statefork_kwargs: dict[str, Any] | None = None,
         host: str = "127.0.0.1",
         port_start: int = 8300,
+        app_id: str = "email",
+        app_label: str = "Email Service",
+        app_uvicorn_target_value: str | None = None,
+        app_db_env_var: str = "DEMO_MAILBOX_DB_PATH",
+        health_path: str = "/api/state",
+        agent_demo_actions: list[dict[str, Any]] | None = None,
     ) -> None:
         self.project_root = project_root
         self.main_db_path = main_db_path
@@ -323,6 +331,12 @@ class StateForkBackend:
         self.statefork_kwargs = statefork_kwargs or {}
         self.host = host
         self.port_start = port_start
+        self.app_id = app_id
+        self.app_label = app_label
+        self.app_uvicorn_target = app_uvicorn_target_value or app_uvicorn_target()
+        self.app_db_env_var = app_db_env_var
+        self.health_path = health_path
+        self.agent_demo_actions = list(AGENT_DEMO_ACTIONS if agent_demo_actions is None else agent_demo_actions)
         self.name = "statefork"
         self.bases: dict[str, BaseHandle] = {}
         self.branches: dict[str, BranchHandle] = {}
@@ -341,6 +355,10 @@ class StateForkBackend:
             branches=self.branches,
             operations=self.operation_stats,
             details={
+                "app_id": getattr(self, "app_id", "email"),
+                "app_label": getattr(self, "app_label", "Email Service"),
+                "app_uvicorn_target": getattr(self, "app_uvicorn_target", app_uvicorn_target()),
+                "app_db_env_var": getattr(self, "app_db_env_var", "DEMO_MAILBOX_DB_PATH"),
                 "head_base_id": getattr(self, "head_base_id", None),
                 "statefork_root": str(self.statefork_root),
                 "statefork_cwd": str(self.statefork_cwd),
@@ -498,8 +516,10 @@ class StateForkBackend:
         }
 
     def run_agent_demo(self, branch_id: str) -> dict[str, Any]:
+        if not self.agent_demo_actions:
+            raise BranchError(f"App {self.app_id} does not define an agent demo")
         actions = []
-        for payload in AGENT_DEMO_ACTIONS:
+        for payload in self.agent_demo_actions:
             result = self.apply_action(branch_id, payload)
             actions.append(result["action"])
         branch = self._require_branch(branch_id)
@@ -550,17 +570,25 @@ class StateForkBackend:
         branch = self._require_branch(branch_id)
         main = self._summary_for_branch_base(branch)
         candidate = self._read_summary(branch.db_path)
+        all_tables = sorted(set(main["counts"]) | set(candidate["counts"]))
+        counts = {
+            table: {
+                "main": main["counts"].get(table, 0),
+                "branch": candidate["counts"].get(table, 0),
+                "delta": candidate["counts"].get(table, 0) - main["counts"].get(table, 0),
+            }
+            for table in all_tables
+        }
+        changed_tables = [
+            table
+            for table in all_tables
+            if counts[table]["delta"]
+            or main["fingerprints"].get(table) != candidate["fingerprints"].get(table)
+        ]
         return {
             "branch_id": branch_id,
-            "inventory": self._inventory_diff(main["inventory"], candidate["inventory"]),
-            "counts": {
-                table: {
-                    "main": main["counts"][table],
-                    "branch": candidate["counts"][table],
-                    "delta": candidate["counts"][table] - main["counts"][table],
-                }
-                for table in main["counts"]
-            },
+            "tables": changed_tables,
+            "counts": counts,
         }
 
     def commit(self, branch_id: str) -> dict[str, Any]:
@@ -793,7 +821,7 @@ class StateForkBackend:
             if branch.status == "exited":
                 raise BranchError(f"Branch server exited early for {branch.id}")
             try:
-                with request.urlopen(f"{branch.url}/api/state", timeout=0.5) as response:
+                with request.urlopen(f"{branch.url}{self.health_path}", timeout=0.5) as response:
                     if response.status == 200:
                         return
             except URLError:
@@ -859,7 +887,7 @@ class StateForkBackend:
         cwd: Path,
     ) -> subprocess.Popen:
         env = os.environ.copy()
-        env["DEMO_MAILBOX_DB_PATH"] = str(db_path)
+        env[self.app_db_env_var] = str(db_path)
         env["PYTHONPATH"] = runtime_pythonpath_for(self.project_root, cwd)
 
         return subprocess.Popen(
@@ -867,7 +895,7 @@ class StateForkBackend:
                 sys.executable,
                 "-m",
                 "uvicorn",
-                app_uvicorn_target(),
+                self.app_uvicorn_target,
                 "--host",
                 self.host,
                 "--port",
@@ -907,7 +935,7 @@ class StateForkBackend:
                 return base.state_summary
         summary = self._safe_read_summary(self.main_db_path)
         if summary is None:
-            raise BranchError(f"Could not read base mailbox summary for branch {branch.id}")
+            raise BranchError(f"Could not read base database summary for branch {branch.id}")
         return summary
 
     def _safe_read_summary(self, db_path: Path) -> dict[str, Any] | None:
@@ -916,52 +944,33 @@ class StateForkBackend:
         except sqlite3.Error:
             return None
 
+    def _quote_identifier(self, name: str) -> str:
+        return '"' + name.replace('"', '""') + '"'
+
     def _read_summary(self, db_path: Path) -> dict[str, Any]:
         with sqlite3.connect(db_path) as conn:
             conn.row_factory = sqlite3.Row
-            inventory = {
-                row["id"]: dict(row)
+            table_names = [
+                row["name"]
                 for row in conn.execute(
                     """
-                    SELECT
-                        p.id,
-                        p.name,
-                        p.on_hand,
-                        p.on_hand - COALESCE(SUM(r.quantity), 0) AS available,
-                        COALESCE(SUM(r.quantity), 0) AS reserved
-                    FROM parts p
-                    LEFT JOIN reservations r ON r.part_id = p.id AND r.status = 'active'
-                    GROUP BY p.id
-                    ORDER BY p.id
+                    SELECT name
+                    FROM sqlite_master
+                    WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+                    ORDER BY name
                     """
                 )
-            }
-            counts = {
-                table: int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-                for table in ["reservations", "audit_log"]
-            }
-        return {"inventory": inventory, "counts": counts}
-
-    def _inventory_diff(
-        self,
-        main: dict[str, dict[str, Any]],
-        candidate: dict[str, dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        changes = []
-        for part_id, branch_item in candidate.items():
-            main_item = main.get(part_id)
-            if not main_item:
-                continue
-            on_hand_delta = branch_item["on_hand"] - main_item["on_hand"]
-            available_delta = branch_item["available"] - main_item["available"]
-            reserved_delta = branch_item["reserved"] - main_item["reserved"]
-            if on_hand_delta or available_delta or reserved_delta:
-                changes.append(
-                    {
-                        "part_id": part_id,
-                        "on_hand_delta": on_hand_delta,
-                        "available_delta": available_delta,
-                        "reserved_delta": reserved_delta,
-                    }
+            ]
+            counts: dict[str, int] = {}
+            fingerprints: dict[str, str] = {}
+            for table_name in table_names:
+                quoted = self._quote_identifier(table_name)
+                counts[table_name] = int(
+                    conn.execute(f"SELECT COUNT(*) FROM {quoted}").fetchone()[0]
                 )
-        return changes
+                hasher = hashlib.sha256()
+                for row in conn.execute(f"SELECT * FROM {quoted} ORDER BY rowid"):
+                    hasher.update(repr(tuple(row)).encode("utf-8"))
+                    hasher.update(b"\n")
+                fingerprints[table_name] = hasher.hexdigest()
+        return {"tables": table_names, "counts": counts, "fingerprints": fingerprints}

@@ -3,16 +3,20 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Agent-Safe Demo Mailbox</title>
-    <link rel="stylesheet" href="/static/styles.css?v=14" />
+    <title>Agent-Safe Workspace</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20" />
   </head>
   <body>
     <header class="topbar">
       <div>
-        <h1>Agent-Safe Demo Mailbox</h1>
-        <p>Work in a StateFork-backed mailbox runtime, then save and restore checkpoints.</p>
+        <h1>Agent-Safe Workspace</h1>
+        <p id="appDescription">StateFork app runtime</p>
       </div>
       <div class="actions">
+        <label class="app-select-label">
+          App
+          <select id="appSelect"></select>
+        </label>
         <span id="workspaceState" class="backend-pill">Starting...</span>
         <label class="snapshot-input">
           Snapshot
@@ -22,57 +26,53 @@
         <button id="runAgentBtn" type="button">Run Agent</button>
         <span id="backendMode" class="backend-pill">Backend...</span>
         <a class="icon-link" href="/docs" title="Open API docs">API</a>
-        <button id="resetBtn" class="danger" type="button">Reset Workspace</button>
+        <button id="resetBtn" class="danger" type="button">Reset</button>
       </div>
     </header>
 
     <main class="layout">
-      <section class="panel mailbox-panel">
+      <section class="panel runtime-panel">
         <div class="panel-header">
-          <h2>Mailbox</h2>
+          <div>
+            <h2 id="runtimeTitle">Runtime</h2>
+            <p id="runtimeUrl" class="muted">Waiting for workspace</p>
+          </div>
           <button id="refreshBtn" type="button">Refresh</button>
         </div>
-        <div id="mailboxSummary" class="mailbox-summary"></div>
-        <div id="messageList" class="message-list"></div>
+        <iframe id="runtimeFrame" title="App runtime"></iframe>
       </section>
 
-      <section class="panel message-panel">
-        <div class="panel-header">
-          <h2>Message Detail</h2>
-          <span id="lastResult" class="result-pill">Ready</span>
-        </div>
-        <div id="messageDetail" class="message-detail"></div>
-      </section>
-
-      <section class="panel status-panel">
-        <div class="panel-header">
-          <div>
-            <h2>Runtime & Checkpoint Stats</h2>
-            <p id="snapshotMode" class="muted">Workspace control</p>
+      <aside class="side-column">
+        <section class="panel status-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Runtime & Checkpoint Stats</h2>
+              <p id="snapshotMode" class="muted">Workspace control</p>
+            </div>
           </div>
-        </div>
-        <div id="backendStats" class="status-grid"></div>
-      </section>
+          <div id="backendStats" class="status-grid"></div>
+        </section>
 
-      <section class="panel branch-panel">
-        <div class="panel-header">
-          <div>
-            <h2>Checkpoints</h2>
-            <p class="muted">Manual save points for the current mailbox runtime.</p>
+        <section class="panel branch-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Checkpoints</h2>
+              <p class="muted">Current runtime save points</p>
+            </div>
           </div>
-        </div>
-        <div id="checkpoints" class="branch-list"></div>
-      </section>
+          <div id="checkpoints" class="branch-list"></div>
+        </section>
+      </aside>
 
       <section class="panel state-panel">
         <div class="panel-header">
-          <h2>State</h2>
-          <span class="muted">Structured database view</span>
+          <h2>Runtime State</h2>
+          <span id="lastResult" class="result-pill">Ready</span>
         </div>
         <div id="stateView" class="state-dashboard"></div>
       </section>
     </main>
 
-    <script src="/static/app.js?v=15"></script>
+    <script src="/static/app.js?v=20"></script>
   </body>
 </html>

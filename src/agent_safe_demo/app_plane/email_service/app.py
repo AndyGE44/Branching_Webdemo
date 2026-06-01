@@ -9,6 +9,7 @@ from typing import AsyncIterator, Iterator
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -420,9 +421,116 @@ def init_db() -> None:
             audit(conn, "system", "seed", "Loaded sample mailbox data")
 
 
-@app.get("/")
-def root() -> dict:
-    return {"service": "demo-mailbox", "role": "business-app"}
+@app.get("/", response_class=HTMLResponse)
+def root() -> str:
+    return """
+    <!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Email Runtime</title>
+        <style>
+          body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #f7f8f6; color: #18211c; }
+          main { padding: 18px; display: grid; grid-template-columns: minmax(240px, 0.85fr) minmax(320px, 1.2fr); gap: 14px; }
+          header { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+          h1 { font-size: 20px; margin: 0; }
+          h2 { font-size: 15px; margin: 0 0 8px; }
+          p { margin: 4px 0 0; color: #5d6a62; }
+          button { border: 1px solid #b7c4bb; background: #fff; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
+          button.primary { background: #174938; color: white; border-color: #174938; }
+          .panel { background: white; border: 1px solid #d8dfd9; border-radius: 8px; padding: 12px; min-height: 120px; }
+          .message { width: 100%; text-align: left; display: grid; gap: 4px; margin-bottom: 8px; }
+          .message strong { font-size: 13px; }
+          .message span, .muted { color: #68756d; font-size: 12px; }
+          .pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+          .pill { background: #eef3ef; color: #34443b; border-radius: 999px; padding: 3px 8px; font-size: 12px; }
+          form { display: grid; gap: 8px; margin-top: 12px; }
+          input, select, textarea { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #c8d0ca; border-radius: 6px; }
+          label { display: grid; gap: 4px; font-size: 12px; color: #5d6a62; }
+          .result { color: #174938; font-size: 13px; }
+        </style>
+      </head>
+      <body>
+        <main>
+          <header>
+            <div>
+              <h1>Email Runtime</h1>
+              <p>Plain app UI running inside the StateFork-managed environment.</p>
+            </div>
+            <button id="refreshBtn">Refresh</button>
+          </header>
+          <section class="panel">
+            <h2>Mailbox</h2>
+            <div id="summary" class="muted">Loading...</div>
+            <div id="messages"></div>
+          </section>
+          <section class="panel">
+            <h2>Message Detail</h2>
+            <div id="detail" class="muted">Select a message.</div>
+          </section>
+        </main>
+        <script>
+          const summaryEl = document.querySelector('#summary');
+          const messagesEl = document.querySelector('#messages');
+          const detailEl = document.querySelector('#detail');
+          const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
+          let selectedId = null;
+          async function request(path, options = {}) {
+            const response = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.detail || `Request failed: ${response.status}`);
+            return data;
+          }
+          function pills(values) { return `<div class="pills">${values.map((value) => `<span class="pill">${esc(value)}</span>`).join('')}</div>`; }
+          function renderDetail(message) {
+            if (!message) { detailEl.textContent = 'Select a message.'; return; }
+            detailEl.innerHTML = `
+              <strong>${esc(message.subject)}</strong>
+              <p>From ${esc(message.from_address)}</p>
+              <p>To ${esc(message.to_address)}</p>
+              ${pills([message.folder, message.priority, message.is_read ? 'read' : 'unread', ...(message.labels || [])])}
+              <p>${esc(message.body)}</p>
+              <form id="labelForm"><label>Label<input name="label" placeholder="finance" /></label><button class="primary">Add Label</button></form>
+              <form id="moveForm"><label>Folder<select name="folder"><option>Inbox</option><option>Archive</option><option>Spam</option></select></label><button>Move</button></form>
+            `;
+            document.querySelector('#labelForm').addEventListener('submit', async (event) => {
+              event.preventDefault();
+              const form = new FormData(event.currentTarget);
+              await request(`/api/messages/${message.id}/label`, { method: 'POST', body: JSON.stringify({ label: form.get('label'), actor: 'user' }) });
+              await refresh();
+            });
+            document.querySelector('#moveForm').addEventListener('submit', async (event) => {
+              event.preventDefault();
+              const form = new FormData(event.currentTarget);
+              await request(`/api/messages/${message.id}/move`, { method: 'POST', body: JSON.stringify({ folder: form.get('folder'), actor: 'user' }) });
+              await refresh();
+            });
+          }
+          async function refresh() {
+            const mailbox = await request('/api/mailbox');
+            if (!selectedId && mailbox.messages.length) selectedId = mailbox.messages[0].id;
+            summaryEl.textContent = `${mailbox.unread} unread · ${mailbox.drafts} drafts · ${mailbox.messages.length} messages`;
+            messagesEl.innerHTML = mailbox.messages.map((message) => `
+              <button class="message" data-id="${esc(message.id)}">
+                <strong>${esc(message.subject)}</strong>
+                <span>${esc(message.from_address)} · ${esc(message.folder)} · ${esc(message.priority)}</span>
+              </button>
+            `).join('');
+            renderDetail(mailbox.messages.find((message) => message.id === selectedId));
+          }
+          messagesEl.addEventListener('click', async (event) => {
+            const button = event.target.closest('button[data-id]');
+            if (!button) return;
+            selectedId = button.dataset.id;
+            await refresh();
+          });
+          document.querySelector('#refreshBtn').addEventListener('click', refresh);
+          refresh().catch((error) => { summaryEl.textContent = error.message; });
+        </script>
+      </body>
+    </html>
+    """
 
 
 @app.get("/api/inventory")

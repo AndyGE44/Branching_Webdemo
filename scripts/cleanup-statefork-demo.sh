@@ -13,7 +13,7 @@ fi
 main_port="${DEMO_MAIN_PORT:-8000}"
 branch_start="${DEMO_BRANCH_PORT_START:-8300}"
 branch_end="${DEMO_BRANCH_PORT_END:-8350}"
-sessions_dir="${CHECKPOINT_SESSIONS_DIR:-/tmp/checkpoint-sessions-mailbox-demo}"
+sessions_dir="${CHECKPOINT_SESSIONS_DIR:-/tmp/checkpoint-sessions-agent-safe-demo}"
 statefork_cwd="${DEMO_STATEFORK_CWD:-/users/alexxjk/StateFork}"
 
 kill_listeners() {

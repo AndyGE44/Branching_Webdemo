@@ -1,41 +1,41 @@
-# Agent-Safe Demo Mailbox
+# Agent-Safe Multi-App Demo
 
-A FastAPI web demo for showing how StateFork can give a normal email-style web
-service an agent-safe branch workflow:
+A FastAPI web demo for showing how StateFork can give normal app-plane web
+services an agent-safe branch workflow:
 
 ```text
 open workspace -> initial checkpoint -> user/agent changes -> snapshot/restore
 ```
 
-The UI uses mailbox, message, label, and draft primitives. The visible workflow
-is checkpoint-first: the app starts in a managed runtime, users explicitly save
-snapshots, and restore behaves like returning to a saved game point. The
-StateFork base and branch lifecycle remains underneath that workspace
-controller.
+The control UI is app-agnostic: it selects an app-plane service, starts that
+service in a managed runtime, embeds the runtime UI, and exposes snapshot/restore
+controls around it. The StateFork base and branch lifecycle remains underneath
+that workspace controller.
 
 The demo is split into two API surfaces:
 
-- `agent_safe_demo.app_plane.email_service.app:app` is the ordinary business
-  app. It only knows about mailbox, message, draft, and state APIs.
+- `agent_safe_demo.app_plane.email_service.app:app` and
+  `agent_safe_demo.app_plane.inventory_service.app:app` are ordinary business
+  apps. They expose their own runtime UI plus app-specific APIs.
 - `agent_safe_demo.control_plane.main:app` is the StateFork workspace
-  controller. It owns snapshot, restore, runtime startup, and the checkpoint UI.
+  controller. It owns app selection, snapshot, restore, runtime startup, and the
+  checkpoint UI.
 
-Runtime branches are launched as
-`agent_safe_demo.app_plane.email_service.app:app`, so the managed program does
-not know it has been branched. The old `agent_safe_demo.main`,
-`agent_safe_demo.mailbox_app`, and `agent_safe_demo.branching` modules remain as
-compatibility entrypoints.
+Runtime branches are launched from the selected app registry entry, so the
+managed program does not know it has been branched. The old
+`agent_safe_demo.main`, `agent_safe_demo.mailbox_app`, and
+`agent_safe_demo.branching` modules remain as compatibility entrypoints.
 
 The app plane is intentionally directory-based: each child under
-`agent_safe_demo/app_plane/` owns one independent app. The current
-`email_service/` app is small, but the same shape leaves room for larger
-multi-module apps later without mixing them into the controller.
+`agent_safe_demo/app_plane/` owns one independent app. New apps are registered in
+`agent_safe_demo.control_plane.app_registry` with an app id, uvicorn target, DB
+env var, DB filename, health path, and optional agent-demo actions.
 
 The repo now exposes a single backend: `StateForkBackend`. StateFork uses its
 controller API to call snapshot, restore, create-env, and cleanup operations.
 
 The repo includes a `Dockerfile` for checkpoint-lite/StateFork build mode. The
-build image contains Python, the mailbox package, and a shell-capable runtime,
+build image contains Python, the app package, and a shell-capable runtime,
 which is the intended path for demonstrating that StateFork can manage an
 ordinary packaged web service from the outside.
 
@@ -541,12 +541,13 @@ StateFork:
 ./scripts/run-statefork-docker.sh
 ```
 
-The launcher sets `DEMO_STATEFORK_BUILD=1`, StateFork paths, runtime ports,
-`CHECKPOINT_SESSIONS_DIR`, and `PYTHONPATH`.
+The launcher sets `DEMO_STATEFORK_BUILD=1`, `DEMO_APP_ID`, app DB paths,
+StateFork paths, runtime ports, `CHECKPOINT_SESSIONS_DIR`, and `PYTHONPATH`.
 
 `StateForkBackend` currently calls StateFork's `snapshot`, `restore`,
-`create_env_from_snapshot`, and `cleanup` methods. The current mailbox UI shows
-the managed runtime, manual checkpoints, and the deterministic email agent flow.
+`create_env_from_snapshot`, and `cleanup` methods. The control UI embeds the
+selected runtime app, shows manual checkpoints, and runs the selected app's
+deterministic agent flow when one is registered.
 
 StateFork is intentionally treated as a single-active-branch backend in this
 prototype. The app rejects a second running StateFork branch until the existing
@@ -568,11 +569,11 @@ create base   -> StateFork init mode: create manager -> snapshot
 create branch -> StateFork restore <base-id>
               -> StateFork create_env_from_snapshot <base-id>
               -> start runtime app URL in the forked environment
-run agent     -> deterministic email agent actions inside the branch
+run agent     -> deterministic app-specific agent actions inside the branch
 status        -> /api/backend reports statefork:<method> and snapshot/restore stats
 discard       -> terminate runtime app and cleanup StateFork environment
 commit        -> StateFork snapshot + restore, then advance controller head
-reset         -> delete active branches, bases, sessions, and reset main DB
+reset         -> delete active branches, bases, sessions, and reset selected app DB
 ```
 
 The same `Runtime & Checkpoint Stats` UI and `GET /api/backend` endpoint report
@@ -585,7 +586,8 @@ agent_safe_demo/
 ├── src/agent_safe_demo/
 │   ├── control_plane/         # Workspace controller, branch backends, static UI
 │   └── app_plane/
-│       └── email_service/     # Independent managed email app
+│       ├── email_service/     # Independent managed email app
+│       └── inventory_service/ # Independent managed inventory app
 ├── tests/                     # API tests
 ├── docs/                      # Ubuntu / checkpoint-lite setup notes
 ├── scripts/                   # Local run and smoke-test helpers
@@ -598,6 +600,7 @@ Generated runtime data is ignored by git:
 
 ```text
 demo_mailbox.db
+demo_inventory.db
 .branches/
 build/
 dist/
@@ -605,9 +608,10 @@ dist/
 
 ## Useful Endpoints
 
-Business mailbox app endpoints, served by the managed runtime:
+Registered app-plane endpoints, served by the managed runtime:
 
-- `GET /api/mailbox`
+- `GET /api/mailbox` for the email app
+- `GET /api/inventory` for the inventory app
 - `GET /api/messages`
 - `GET /api/messages/{message_id}`
 - `GET /api/state`
@@ -615,6 +619,8 @@ Business mailbox app endpoints, served by the managed runtime:
 
 Workspace controller endpoints, served by the main controller:
 
+- `GET /api/apps`
+- `POST /api/apps/{app_id}/select`
 - `GET /api/workspace`
 - `GET /api/workspace/dirty`
 - `POST /api/workspace/run-agent`
@@ -633,8 +639,8 @@ Workspace controller endpoints, served by the main controller:
 
 Base/branch endpoints are still available for compatibility and tests, but the
 preferred UI path uses `/api/workspace`. The controller intentionally does not
-serve `/api/mailbox`, and the business app intentionally does not serve
-`/api/workspace`.
+serve app business APIs such as `/api/mailbox` or `/api/inventory`, and the
+business apps intentionally do not serve `/api/workspace`.
 
 The generated OpenAPI docs are available at `/docs`.
 
@@ -657,11 +663,9 @@ Open:
 http://127.0.0.1:8000
 ```
 
-The controller starts local runtime copies as:
-
-```text
-agent_safe_demo.app_plane.email_service.app:app
-```
+The controller starts local runtime copies from the selected app registry entry.
+Set `DEMO_APP_ID=email` or `DEMO_APP_ID=inventory` before startup to choose the
+initial app; the UI can switch apps at runtime.
 
 Run tests:
 

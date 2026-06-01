@@ -25,7 +25,10 @@ requires_statefork_integration = pytest.mark.skipif(
 
 def configure_env(monkeypatch, tmp_path, auth_password=None) -> None:
     db_path = tmp_path / "demo_mailbox.db"
+    inventory_db_path = tmp_path / "demo_inventory.db"
     monkeypatch.setenv("DEMO_MAILBOX_DB_PATH", str(db_path))
+    monkeypatch.setenv("DEMO_INVENTORY_DB_PATH", str(inventory_db_path))
+    monkeypatch.delenv("DEMO_APP_ID", raising=False)
     monkeypatch.setenv(
         "DEMO_STATEFORK_ROOT",
         os.getenv("DEMO_STATEFORK_ROOT", "/users/alexxjk/StateFork"),
@@ -52,12 +55,24 @@ def load_mailbox_app(monkeypatch, tmp_path, auth_password=None):
     return module.app
 
 
+def load_inventory_app(monkeypatch, tmp_path, auth_password=None):
+    configure_env(monkeypatch, tmp_path, auth_password)
+    sys.modules.pop("agent_safe_demo.app_plane.inventory_service.app", None)
+    module = importlib.import_module("agent_safe_demo.app_plane.inventory_service.app")
+    return module.app
+
+
 def load_controller_app(monkeypatch, tmp_path, auth_password=None):
     configure_env(monkeypatch, tmp_path, auth_password)
-    sys.modules.pop("agent_safe_demo.control_plane.main", None)
-    sys.modules.pop("agent_safe_demo.app_plane.email_service.app", None)
-    sys.modules.pop("agent_safe_demo.main", None)
-    sys.modules.pop("agent_safe_demo.mailbox_app", None)
+    for module_name in [
+        "agent_safe_demo.control_plane.main",
+        "agent_safe_demo.control_plane.app_registry",
+        "agent_safe_demo.app_plane.email_service.app",
+        "agent_safe_demo.app_plane.inventory_service.app",
+        "agent_safe_demo.main",
+        "agent_safe_demo.mailbox_app",
+    ]:
+        sys.modules.pop(module_name, None)
     module = importlib.import_module("agent_safe_demo.control_plane.main")
     module.reset_workspace_handles()
     return module.app
@@ -107,6 +122,39 @@ def test_mailbox_seed_data(monkeypatch, tmp_path):
     assert mailbox["unread"] == 3
     assert mailbox["drafts"] == 1
     assert {"folder": "Inbox", "count": 4} in mailbox["folders"]
+
+
+def test_inventory_app_seed_and_reservation(monkeypatch, tmp_path):
+    app = load_inventory_app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        inventory = client.get("/api/inventory")
+        reservation = client.post(
+            "/api/reservations",
+            json={"part_id": "MCU-100", "quantity": 2, "actor": "tester"},
+        )
+        state = client.get("/api/state")
+
+    assert inventory.status_code == 200
+    assert {item["id"] for item in inventory.json()["items"]} >= {"MCU-100", "SENSOR-9"}
+    assert reservation.status_code == 200
+    assert reservation.json()["status"] == "active"
+    assert state.json()["summary"]["reservations"] == 1
+
+
+def test_controller_lists_and_switches_registered_apps(monkeypatch, tmp_path):
+    app = load_controller_app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        apps = client.get("/api/apps")
+        selected = client.post("/api/apps/inventory/select")
+        backend = client.get("/api/backend")
+
+    assert apps.status_code == 200
+    assert apps.json()["current_app_id"] == "email"
+    assert {app["id"] for app in apps.json()["apps"]} == {"email", "inventory"}
+    assert selected.status_code == 200
+    assert selected.json()["current_app_id"] == "inventory"
+    assert backend.json()["details"]["app_id"] == "inventory"
+    assert backend.json()["details"]["app_db_env_var"] == "DEMO_INVENTORY_DB_PATH"
 
 
 def test_message_detail_includes_labels(monkeypatch, tmp_path):

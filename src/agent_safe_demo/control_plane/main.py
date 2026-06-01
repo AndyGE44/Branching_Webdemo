@@ -14,12 +14,12 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from agent_safe_demo.control_plane.app_registry import AppSpec, get_app_spec, list_app_specs
 from agent_safe_demo.control_plane.branching import (
     BranchError,
     DirtyBranchError,
     StateForkBackend,
 )
-from agent_safe_demo.app_plane.email_service.app import DB_PATH, PROJECT_ROOT, init_db
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -29,6 +29,7 @@ DEMO_AUTH_REALM = os.getenv("DEMO_AUTH_REALM", "Agent-Safe Demo")
 WORKSPACE_BASE_ID: str | None = None
 WORKSPACE_BRANCH_ID: str | None = None
 WORKSPACE_INITIAL_SNAPSHOT_LABEL = "Initial checkpoint"
+CURRENT_APP: AppSpec = get_app_spec()
 
 
 def statefork_kwargs_from_env() -> dict:
@@ -38,33 +39,40 @@ def statefork_kwargs_from_env() -> dict:
     return kwargs
 
 
-def create_branch_backend() -> StateForkBackend:
+def create_branch_backend(app_spec: AppSpec | None = None) -> StateForkBackend:
+    selected_app = app_spec or CURRENT_APP
     return StateForkBackend(
-        PROJECT_ROOT,
-        DB_PATH,
+        selected_app.project_root,
+        selected_app.db_path,
         statefork_root=Path(
-            os.getenv("DEMO_STATEFORK_ROOT", PROJECT_ROOT.parent / "StateFork")
+            os.getenv("DEMO_STATEFORK_ROOT", selected_app.project_root.parent / "StateFork")
         ),
         statefork_method=os.getenv("DEMO_STATEFORK_METHOD", "ckpt_build"),
-        statefork_cwd=Path(os.getenv("DEMO_STATEFORK_CWD", str(PROJECT_ROOT))),
+        statefork_cwd=Path(os.getenv("DEMO_STATEFORK_CWD", str(selected_app.project_root))),
         statefork_kwargs=statefork_kwargs_from_env(),
         host=os.getenv("DEMO_BRANCH_HOST", "127.0.0.1"),
         port_start=int(os.getenv("DEMO_BRANCH_PORT_START", "8300")),
+        app_id=selected_app.id,
+        app_label=selected_app.label,
+        app_uvicorn_target_value=selected_app.uvicorn_target,
+        app_db_env_var=selected_app.db_env_var,
+        health_path=selected_app.health_path,
+        agent_demo_actions=list(selected_app.agent_demo_actions or []),
     )
 
 
-branch_backend = create_branch_backend()
+branch_backend = create_branch_backend(CURRENT_APP)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    init_db()
+    CURRENT_APP.init_db()
     yield
 
 
 app = FastAPI(
-    title="Agent-Safe Mailbox Workspace Controller",
-    description="A StateFork web shell that manages a plain mailbox web service.",
+    title="Agent-Safe Multi-App Workspace Controller",
+    description="A StateFork web shell that manages plain app-plane services.",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -152,6 +160,10 @@ def reset_workspace_handles() -> None:
     WORKSPACE_BRANCH_ID = None
 
 
+def app_payload() -> dict:
+    return CURRENT_APP.public_dict()
+
+
 def running_workspace_branch() -> dict | None:
     global WORKSPACE_BRANCH_ID
     branches = branch_backend.list_branches()
@@ -168,12 +180,17 @@ def running_workspace_branch() -> dict | None:
 
 
 def workspace_payload(branch: dict) -> dict:
+    runtime_ui_path = CURRENT_APP.runtime_ui_path
     return {
+        "app": app_payload(),
         "workspace": {
             "mode": "runtime-checkpoints",
+            "app_id": CURRENT_APP.id,
             "base_id": branch.get("base_id") or WORKSPACE_BASE_ID,
             "branch_id": branch["id"],
             "runtime_url": branch["url"],
+            "runtime_ui_url": f"{branch['url']}{runtime_ui_path}",
+            "state_path": CURRENT_APP.state_path,
             "current_snapshot_id": branch.get("current_snapshot_id"),
             "dirty": branch.get("dirty", False),
         },
@@ -184,10 +201,10 @@ def workspace_payload(branch: dict) -> dict:
 
 def ensure_workspace() -> dict:
     global WORKSPACE_BASE_ID, WORKSPACE_BRANCH_ID
-    init_db()
+    CURRENT_APP.init_db()
     branch = running_workspace_branch()
     if branch is None:
-        base = branch_backend.create_base(label="Workspace start")
+        base = branch_backend.create_base(label=f"{CURRENT_APP.label} workspace start")
         WORKSPACE_BASE_ID = base["id"]
         branch = branch_backend.create_branch(base_id=base["id"])
         WORKSPACE_BRANCH_ID = branch["id"]
@@ -204,6 +221,41 @@ def workspace_branch_id() -> str:
     return ensure_workspace()["branch"]["id"]
 
 
+def switch_current_app(app_id: str) -> dict:
+    global CURRENT_APP, branch_backend
+    next_app = get_app_spec(app_id)
+    if next_app.id == CURRENT_APP.id:
+        return {"cleanup": {"branches_deleted": 0, "bases_deleted": 0}, **app_selection_payload()}
+    cleanup = branch_backend.reset()
+    reset_workspace_handles()
+    CURRENT_APP = next_app
+    CURRENT_APP.init_db()
+    branch_backend = create_branch_backend(CURRENT_APP)
+    return {"cleanup": cleanup, **app_selection_payload()}
+
+
+def app_selection_payload() -> dict:
+    return {
+        "current_app_id": CURRENT_APP.id,
+        "apps": [spec.public_dict() for spec in list_app_specs()],
+    }
+
+
+@app.get("/api/apps")
+def apps() -> dict:
+    return app_selection_payload()
+
+
+@app.post("/api/apps/{app_id}/select")
+def select_app(app_id: str) -> dict:
+    try:
+        return switch_current_app(app_id)
+    except ValueError as error:
+        return JSONResponse({"detail": str(error)}, status_code=404)
+    except BranchError as error:
+        return branch_error(error)
+
+
 @app.get("/api/backend")
 def backend_status() -> dict:
     return branch_backend.status()
@@ -213,10 +265,10 @@ def backend_status() -> dict:
 def reset() -> dict:
     cleanup = branch_backend.reset()
     reset_workspace_handles()
-    if DB_PATH.exists():
-        DB_PATH.unlink()
-    init_db()
-    return {"status": "reset", "cleanup": cleanup}
+    if CURRENT_APP.db_path.exists():
+        CURRENT_APP.db_path.unlink()
+    CURRENT_APP.init_db()
+    return {"status": "reset", "cleanup": cleanup, "app": app_payload()}
 
 
 @app.get("/api/workspace")
@@ -273,9 +325,9 @@ def restore_workspace_snapshot(payload: WorkspaceRestoreRequest) -> dict:
 def reset_workspace() -> dict:
     cleanup = branch_backend.reset()
     reset_workspace_handles()
-    if DB_PATH.exists():
-        DB_PATH.unlink()
-    init_db()
+    if CURRENT_APP.db_path.exists():
+        CURRENT_APP.db_path.unlink()
+    CURRENT_APP.init_db()
     try:
         workspace = ensure_workspace()
     except BranchError as error:
