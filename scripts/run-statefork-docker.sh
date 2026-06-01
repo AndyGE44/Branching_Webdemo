@@ -10,7 +10,6 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-export DEMO_BRANCH_BACKEND="${DEMO_BRANCH_BACKEND:-statefork}"
 export DEMO_STATEFORK_BUILD=1
 export DEMO_STATEFORK_ROOT="${DEMO_STATEFORK_ROOT:-/users/alexxjk/StateFork}"
 export DEMO_STATEFORK_CWD="${DEMO_STATEFORK_CWD:-/users/alexxjk/StateFork}"
@@ -25,7 +24,7 @@ host="${DEMO_MAIN_HOST:-127.0.0.1}"
 port="${DEMO_MAIN_PORT:-8000}"
 
 if ! command -v sudo >/dev/null 2>&1; then
-  echo "sudo is required for StateFork/checkpoint-lite demo mode." >&2
+  echo "sudo is required for StateFork demo mode." >&2
   exit 1
 fi
 
@@ -61,4 +60,4 @@ Mailbox DB:      ${DEMO_MAILBOX_DB_PATH}
 The UI should show: statefork / statefork:ckpt_build / Docker build
 EOF
 
-exec sudo -E .venv/bin/uvicorn agent_safe_demo.main:app --host "$host" --port "$port"
+exec sudo -E .venv/bin/uvicorn agent_safe_demo.control_plane.main:app --host "$host" --port "$port"

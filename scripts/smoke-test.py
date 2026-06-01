@@ -9,7 +9,7 @@ from urllib import request
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from agent_safe_demo.mailbox_app import state as local_mailbox_state
+from agent_safe_demo.app_plane.email_service.app import state as local_mailbox_state
 
 
 BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:8000")

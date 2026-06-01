@@ -7,7 +7,7 @@ workflow currently validated on the shared Ubuntu VM.
 
 ## Goals
 
-- Run the FastAPI demo on EC2 with `DEMO_BRANCH_BACKEND=statefork`.
+- Run the FastAPI demo on EC2 with the StateFork-only backend.
 - Validate StateFork snapshot, restore, branch server startup, diff, commit, and
   discard on EC2.
 - Provide a path from SSH-tunneled demo access to a public URL.
@@ -17,8 +17,8 @@ workflow currently validated on the shared Ubuntu VM.
 
 - No public multi-user login yet.
 - No long-running public deployment without HTTPS and access control.
-- No assumption that commit is a general StateFork merge. Current commit remains
-  application-level SQLite promotion.
+- No assumption that commit is a general StateFork merge. Current commit advances
+  the controller's StateFork head snapshot and does not perform SQL DB promotion.
 - No broad public exposure of branch ports unless explicitly testing public demo
   mode.
 
@@ -196,7 +196,6 @@ Private SSH-tunneled mode:
 cd ~/Web_Demo_For_Checkpointlite
 . .venv/bin/activate
 
-export DEMO_BRANCH_BACKEND=statefork
 export DEMO_STATEFORK_ROOT=/users/alexxjk/StateFork
 export DEMO_STATEFORK_CWD=/users/alexxjk/StateFork
 export DEMO_STATEFORK_METHOD=ckpt_build
@@ -205,7 +204,7 @@ export DEMO_BRANCH_HOST=127.0.0.1
 export DEMO_BRANCH_PORT_START=8300
 export PYTHONPATH=src
 
-sudo -E .venv/bin/uvicorn agent_safe_demo.main:app --host 127.0.0.1 --port 8000
+sudo -E .venv/bin/uvicorn agent_safe_demo.control_plane.main:app --host 127.0.0.1 --port 8000
 ```
 
 Expected UI flow:

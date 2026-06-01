@@ -137,10 +137,10 @@ The mailbox runtime should remain a normal web app. Branching APIs belong to a
 separate controller/web-shell surface:
 
 ```text
-agent_safe_demo.mailbox_app:app
+agent_safe_demo.app_plane.email_service.app:app
   mailbox business APIs only
 
-agent_safe_demo.main:app
+agent_safe_demo.control_plane.main:app
   workspace, snapshot, restore, run-agent APIs
 ```
 
@@ -218,11 +218,9 @@ This will be easier to explain than table count deltas.
 
 ## Backend Architecture
 
-Reuse the existing backend abstraction:
+The backend surface should expose StateFork as the single runtime backend:
 
 ```text
-LocalCopyBackend
-CheckpointLiteBackend
 StateForkBackend
 ```
 
@@ -401,13 +399,13 @@ Exit criteria:
 
 ### Phase 5: Commit Review
 
-- First version: keep full SQLite promotion.
+- First version: commit by advancing the controller's StateFork head snapshot.
 - Better version: apply structured approved operations.
 
 Exit criteria:
 
 - Commit behavior is clearly documented.
-- UI labels do not imply a production-grade merge if we still use DB promotion.
+- UI labels do not imply a production-grade merge while commit is head promotion.
 
 ### Phase 6: Deployment Track
 

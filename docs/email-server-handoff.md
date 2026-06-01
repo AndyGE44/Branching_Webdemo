@@ -106,9 +106,9 @@ runtime.
 
 The app has been split into two API surfaces:
 
-- `agent_safe_demo.mailbox_app:app` is the ordinary mailbox business app. It
+- `agent_safe_demo.app_plane.email_service.app:app` is the ordinary mailbox business app. It
   does not import StateFork and does not expose workspace/branch APIs.
-- `agent_safe_demo.main:app` is the StateFork workspace controller. It serves
+- `agent_safe_demo.control_plane.main:app` is the StateFork workspace controller. It serves
   the checkpoint UI and workspace APIs, and launches runtime branches as the
   plain mailbox app.
 
@@ -140,7 +140,7 @@ changes, the UI asks whether to save a snapshot, discard the changes, or cancel.
 ## Important Compatibility Detail
 
 Some legacy inventory code is still intentionally present in
-`src/agent_safe_demo/main.py` and `src/agent_safe_demo/branching.py`.
+`src/agent_safe_demo/control_plane/main.py` and `src/agent_safe_demo/control_plane/branching.py`.
 
 Why it remains:
 
@@ -160,27 +160,27 @@ Rule for new work:
 Backend app:
 
 ```text
-src/agent_safe_demo/main.py
+src/agent_safe_demo/control_plane/main.py
 ```
 
 Plain mailbox business app:
 
 ```text
-src/agent_safe_demo/mailbox_app.py
+src/agent_safe_demo/app_plane/email_service/app.py
 ```
 
 Branch backends and current email agent plan:
 
 ```text
-src/agent_safe_demo/branching.py
+src/agent_safe_demo/control_plane/branching.py
 ```
 
 Frontend:
 
 ```text
-src/agent_safe_demo/static/index.html
-src/agent_safe_demo/static/app.js
-src/agent_safe_demo/static/styles.css
+src/agent_safe_demo/control_plane/static/index.html
+src/agent_safe_demo/control_plane/static/app.js
+src/agent_safe_demo/control_plane/static/styles.css
 ```
 
 Tests:
@@ -247,7 +247,7 @@ DraftRequest:
 ```
 
 The current deterministic email agent plan is in
-`src/agent_safe_demo/branching.py`:
+`src/agent_safe_demo/control_plane/branching.py`:
 
 ```text
 branch_action_request()
@@ -294,10 +294,10 @@ pip install -e ".[dev]"
 pytest -q
 ```
 
-Run locally without checkpoint-lite:
+Run the controller locally:
 
 ```bash
-PYTHONPATH=src .venv/bin/uvicorn agent_safe_demo.main:app \
+PYTHONPATH=src .venv/bin/uvicorn agent_safe_demo.control_plane.main:app \
   --host 127.0.0.1 \
   --port 8000
 ```
@@ -308,8 +308,7 @@ Open:
 http://127.0.0.1:8000
 ```
 
-This local mode uses `local-copy`; it is for frontend/API development only and
-does not demonstrate real checkpoint-lite/StateFork behavior.
+Full workspace branch/snapshot flows still require StateFork to be available.
 
 ## Shared VM Commands
 
@@ -334,7 +333,6 @@ pytest -q
 Run the preferred StateFork demo on the VM:
 
 ```bash
-export DEMO_BRANCH_BACKEND=statefork
 export DEMO_STATEFORK_ROOT=/users/alexxjk/StateFork
 export DEMO_STATEFORK_CWD=/users/alexxjk/StateFork
 export DEMO_STATEFORK_METHOD=ckpt_build
@@ -343,7 +341,7 @@ export DEMO_BRANCH_HOST=127.0.0.1
 export DEMO_BRANCH_PORT_START=8300
 export PYTHONPATH=src
 
-sudo -E .venv/bin/uvicorn agent_safe_demo.main:app \
+sudo -E .venv/bin/uvicorn agent_safe_demo.control_plane.main:app \
   --host 127.0.0.1 \
   --port 8000
 ```
@@ -358,9 +356,9 @@ ssh \
   sf-exp
 ```
 
-The StateFork/checkpoint-lite backends are still single-active-branch in this
-prototype. The workspace controller owns that branch from app startup, so the
-UI no longer asks users to create branches manually.
+The StateFork backend is still single-active-branch in this prototype. The
+workspace controller owns that branch from app startup, so the UI no longer
+asks users to create branches manually.
 
 Open locally:
 
@@ -374,15 +372,15 @@ Run before committing:
 
 ```bash
 pytest -q
-python -m py_compile src/agent_safe_demo/main.py src/agent_safe_demo/mailbox_app.py src/agent_safe_demo/branching.py scripts/smoke-test.py
-node --check src/agent_safe_demo/static/app.js
+python -m py_compile src/agent_safe_demo/control_plane/main.py src/agent_safe_demo/app_plane/email_service/app.py src/agent_safe_demo/control_plane/branching.py scripts/smoke-test.py
+node --check src/agent_safe_demo/control_plane/static/app.js
 git diff --check
 ```
 
 For a quick API smoke test:
 
 ```bash
-PYTHONPATH=src .venv/bin/uvicorn agent_safe_demo.main:app \
+PYTHONPATH=src .venv/bin/uvicorn agent_safe_demo.control_plane.main:app \
   --host 127.0.0.1 \
   --port 8765
 
@@ -403,11 +401,11 @@ Archive count 1
 
 - The package import path is still `agent_safe_demo`; only the package
   distribution name changed to `agent-safe-demo-mailbox`.
-- The branch backend abstraction is good and should be reused.
+- The branch backend now exposes only the StateFork implementation.
 - Legacy base/branch endpoints and `run-agent-demo` still exist on the
   controller for compatibility, but the UI and smoke test now use
   `/api/workspace`.
-- Runtime branches launch `agent_safe_demo.mailbox_app:app`; do not add
+- Runtime branches launch `agent_safe_demo.app_plane.email_service.app:app`; do not add
   workspace or branch APIs to the mailbox app.
 - The repo now includes a `Dockerfile` so StateFork/checkpoint-lite build mode
   can create a shell-capable packaged runtime.
@@ -432,7 +430,7 @@ We are continuing the Agent-Safe Demo Mailbox demo in
 Please read docs/email-server-handoff.md first. We are on branch
 split-controller-mailbox-app. The current task is separating the ordinary
 mailbox business app from the StateFork workspace controller. Keep mailbox
-business APIs in `agent_safe_demo.mailbox_app:app`; keep snapshot/restore/run
-agent APIs in `agent_safe_demo.main:app`; runtime branches should launch the
+business APIs in `agent_safe_demo.app_plane.email_service.app:app`; keep snapshot/restore/run
+agent APIs in `agent_safe_demo.control_plane.main:app`; runtime branches should launch the
 plain mailbox app. Run tests locally, push the branch, and verify on sf-exp.
 ```

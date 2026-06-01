@@ -1,5 +1,6 @@
 import importlib
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -8,18 +9,33 @@ from urllib import request as urlrequest
 import pytest
 from fastapi.testclient import TestClient
 
-from agent_safe_demo.branching import (
+from agent_safe_demo.control_plane.branching import (
     BranchError,
     BranchHandle,
-    CheckpointLiteBackend,
     StateForkBackend,
 )
 
 
+RUN_STATEFORK_INTEGRATION = os.getenv("RUN_STATEFORK_INTEGRATION") == "1"
+requires_statefork_integration = pytest.mark.skipif(
+    not RUN_STATEFORK_INTEGRATION,
+    reason="requires real StateFork integration",
+)
+
 def configure_env(monkeypatch, tmp_path, auth_password=None) -> None:
     db_path = tmp_path / "demo_mailbox.db"
     monkeypatch.setenv("DEMO_MAILBOX_DB_PATH", str(db_path))
-    monkeypatch.setenv("DEMO_BRANCH_BACKEND", "local-copy")
+    monkeypatch.setenv(
+        "DEMO_STATEFORK_ROOT",
+        os.getenv("DEMO_STATEFORK_ROOT", "/users/alexxjk/StateFork"),
+    )
+    monkeypatch.setenv(
+        "DEMO_STATEFORK_CWD",
+        os.getenv("DEMO_STATEFORK_CWD", "/users/alexxjk/StateFork"),
+    )
+    monkeypatch.setenv("DEMO_STATEFORK_METHOD", os.getenv("DEMO_STATEFORK_METHOD", "ckpt_build"))
+    monkeypatch.setenv("DEMO_BRANCH_PORT_START", os.getenv("DEMO_BRANCH_PORT_START", "8300"))
+    monkeypatch.delenv("DEMO_STATEFORK_BUILD", raising=False)
     monkeypatch.delenv("DEMO_MAILBOX_BRANCH_ID", raising=False)
     if auth_password is None:
         monkeypatch.delenv("DEMO_AUTH_PASSWORD", raising=False)
@@ -29,27 +45,53 @@ def configure_env(monkeypatch, tmp_path, auth_password=None) -> None:
 
 def load_mailbox_app(monkeypatch, tmp_path, auth_password=None):
     configure_env(monkeypatch, tmp_path, auth_password)
+    sys.modules.pop("agent_safe_demo.app_plane.email_service.app", None)
     sys.modules.pop("agent_safe_demo.mailbox_app", None)
-    module = importlib.import_module("agent_safe_demo.mailbox_app")
+    module = importlib.import_module("agent_safe_demo.app_plane.email_service.app")
     return module.app
 
 
 def load_controller_app(monkeypatch, tmp_path, auth_password=None):
     configure_env(monkeypatch, tmp_path, auth_password)
+    sys.modules.pop("agent_safe_demo.control_plane.main", None)
+    sys.modules.pop("agent_safe_demo.app_plane.email_service.app", None)
     sys.modules.pop("agent_safe_demo.main", None)
     sys.modules.pop("agent_safe_demo.mailbox_app", None)
-    module = importlib.import_module("agent_safe_demo.main")
+    module = importlib.import_module("agent_safe_demo.control_plane.main")
+    module.reset_workspace_handles()
     return module.app
 
 
 def mailbox_state() -> dict:
-    module = importlib.import_module("agent_safe_demo.mailbox_app")
+    module = importlib.import_module("agent_safe_demo.app_plane.email_service.app")
     return module.state()
 
 
 def get_json(url: str) -> dict:
     with urlrequest.urlopen(url, timeout=10) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def test_legacy_entrypoints_delegate_to_new_planes(monkeypatch, tmp_path):
+    configure_env(monkeypatch, tmp_path)
+    for module_name in [
+        "agent_safe_demo.main",
+        "agent_safe_demo.mailbox_app",
+        "agent_safe_demo.branching",
+        "agent_safe_demo.control_plane.main",
+        "agent_safe_demo.app_plane.email_service.app",
+    ]:
+        sys.modules.pop(module_name, None)
+
+    legacy_controller = importlib.import_module("agent_safe_demo.main")
+    control_plane = importlib.import_module("agent_safe_demo.control_plane.main")
+    legacy_mailbox = importlib.import_module("agent_safe_demo.mailbox_app")
+    email_service = importlib.import_module("agent_safe_demo.app_plane.email_service.app")
+    legacy_branching = importlib.import_module("agent_safe_demo.branching")
+
+    assert legacy_controller.app is control_plane.app
+    assert legacy_mailbox.app is email_service.app
+    assert legacy_branching.BranchError is BranchError
 
 
 def test_mailbox_seed_data(monkeypatch, tmp_path):
@@ -221,6 +263,7 @@ def test_business_and_control_apis_are_separate(monkeypatch, tmp_path):
     assert controller_business.status_code == 404
 
 
+@requires_statefork_integration
 def test_base_checkpoint_api_shapes_branch_creation(monkeypatch, tmp_path):
     app = load_controller_app(monkeypatch, tmp_path)
     with TestClient(app) as client:
@@ -256,14 +299,15 @@ def test_base_checkpoint_api_shapes_branch_creation(monkeypatch, tmp_path):
     assert branches.json()["branches"][0]["base_id"] == base["id"]
     assert branches.json()["branches"][0]["snapshots"] == []
     backend_status = backend.json()
-    assert backend_status["backend"] == "local-copy"
-    assert backend_status["method"] == "file-copy"
+    assert backend_status["backend"] == "statefork"
+    assert backend_status["method"] == "statefork:ckpt_build"
     assert backend_status["totals"] == {"bases": 1, "branches": 1, "snapshots": 0}
     assert backend_status["operations"]["snapshot"]["count"] >= 1
     assert backend_status["operations"]["restore"]["count"] >= 1
     assert deleted.json()["status"] == "deleted"
 
 
+@requires_statefork_integration
 def test_branch_agent_demo_runs_email_plan_without_changing_main(monkeypatch, tmp_path):
     app = load_controller_app(monkeypatch, tmp_path)
     branch = None
@@ -303,6 +347,7 @@ def test_branch_agent_demo_runs_email_plan_without_changing_main(monkeypatch, tm
     assert len(main_state["drafts"]) == 1
 
 
+@requires_statefork_integration
 def test_manual_snapshot_restore_requires_dirty_choice(monkeypatch, tmp_path):
     app = load_controller_app(monkeypatch, tmp_path)
     branch = None
@@ -345,6 +390,7 @@ def test_manual_snapshot_restore_requires_dirty_choice(monkeypatch, tmp_path):
     assert len(branch_state["drafts"]) == 1
 
 
+@requires_statefork_integration
 def test_workspace_starts_in_runtime_with_initial_checkpoint(monkeypatch, tmp_path):
     app = load_controller_app(monkeypatch, tmp_path)
     with TestClient(app) as client:
@@ -370,6 +416,7 @@ def test_workspace_starts_in_runtime_with_initial_checkpoint(monkeypatch, tmp_pa
     assert backend["totals"] == {"bases": 1, "branches": 1, "snapshots": 1}
 
 
+@requires_statefork_integration
 def test_workspace_agent_and_restore_keep_main_as_seed(monkeypatch, tmp_path):
     app = load_controller_app(monkeypatch, tmp_path)
     with TestClient(app) as client:
@@ -421,82 +468,82 @@ def test_workspace_agent_and_restore_keep_main_as_seed(monkeypatch, tmp_path):
     assert len(restored_state["drafts"]) == 1
 
 
-def test_commit_promotes_branch_when_main_still_matches_base(monkeypatch, tmp_path):
+@requires_statefork_integration
+def test_commit_advances_statefork_head_without_sqlite_promotion(monkeypatch, tmp_path):
     app = load_controller_app(monkeypatch, tmp_path)
     branch = None
+    next_branch = None
     with TestClient(app) as client:
         base = client.post("/api/bases", json={"label": "commit-base"}).json()["base"]
         branch = client.post(f"/api/bases/{base['id']}/branches").json()["branch"]
-        agent = client.post(f"/api/branches/{branch['id']}/run-agent-demo")
-        commit = client.post(f"/api/branches/{branch['id']}/commit")
-        main_state = mailbox_state()
-        branches = client.get("/api/branches").json()["branches"]
+        try:
+            agent = client.post(f"/api/branches/{branch['id']}/run-agent-demo")
+            commit = client.post(f"/api/branches/{branch['id']}/commit")
+            branches_after_commit = client.get("/api/branches").json()["branches"]
+            next_branch = client.post("/api/branches").json()["branch"]
+            committed_state = get_json(f"{next_branch['url']}/api/state")
+            main_state = mailbox_state()
+        finally:
+            if next_branch:
+                client.post(f"/api/branches/{next_branch['id']}/discard")
+            elif branch:
+                client.post(f"/api/branches/{branch['id']}/discard")
 
     assert agent.status_code == 200
     assert commit.status_code == 200
-    assert commit.json()["status"] == "committed"
-    assert branches == []
+    commit_payload = commit.json()
+    assert commit_payload["status"] == "committed"
+    assert commit_payload["head_base"]["is_head"] is True
+    assert commit_payload["head_base"]["checkpoint_id"] != base["checkpoint_id"]
+    assert branches_after_commit == []
 
-    main_messages = {message["id"]: message for message in main_state["messages"]}
-    assert "finance" in main_messages["msg-1001"]["labels"]
-    assert main_messages["msg-1003"]["folder"] == "Spam"
-    assert main_messages["msg-1004"]["folder"] == "Archive"
-    assert main_messages["msg-agent-2001"]["subject"] == "Follow-up: customer escalation"
+    committed_messages = {message["id"]: message for message in committed_state["messages"]}
+    assert "finance" in committed_messages["msg-1001"]["labels"]
+    assert committed_messages["msg-1003"]["folder"] == "Spam"
+    assert committed_messages["msg-1004"]["folder"] == "Archive"
+    assert committed_messages["msg-agent-2001"]["subject"] == "Follow-up: customer escalation"
     assert any(
         draft["source_message_id"] == "msg-1002"
         and draft["created_by"] == "agent"
         and "new ETA shortly" in draft["body"]
-        for draft in main_state["drafts"]
+        for draft in committed_state["drafts"]
     )
 
+    main_messages = {message["id"]: message for message in main_state["messages"]}
+    assert "finance" not in main_messages["msg-1001"]["labels"]
+    assert main_messages["msg-1003"]["folder"] == "Inbox"
+    assert "msg-agent-2001" not in main_messages
 
-def test_commit_rejects_branch_when_main_changed_after_base(monkeypatch, tmp_path):
+
+@requires_statefork_integration
+def test_commit_rejects_branch_when_statefork_head_changed_after_base(monkeypatch, tmp_path):
     app = load_controller_app(monkeypatch, tmp_path)
     branch = None
     with TestClient(app) as client:
         base = client.post("/api/bases", json={"label": "stale-base"}).json()["base"]
         branch = client.post(f"/api/bases/{base['id']}/branches").json()["branch"]
-
-        mailbox_app = importlib.import_module("agent_safe_demo.mailbox_app").app
-        with TestClient(mailbox_app) as mailbox_client:
-            user_change = mailbox_client.post(
-                "/api/messages/msg-1001/label",
-                json={"label": "user-work", "actor": "user"},
-            )
+        new_head = client.post("/api/bases", json={"label": "new-head"}).json()["base"]
         agent = client.post(f"/api/branches/{branch['id']}/run-agent-demo")
         commit = client.post(f"/api/branches/{branch['id']}/commit")
-        main_state = mailbox_state()
         branches = client.get("/api/branches").json()["branches"]
+        bases = client.get("/api/bases").json()["bases"]
         client.post(f"/api/branches/{branch['id']}/discard")
 
-    assert user_change.status_code == 200
+    assert new_head["is_head"] is True
     assert agent.status_code == 200
     assert commit.status_code == 400
-    assert "Main state changed after this branch base was created" in commit.json()["detail"]
+    assert "Committed StateFork head changed after this branch base was created" in commit.json()["detail"]
     assert [active["id"] for active in branches] == [branch["id"]]
-
-    main_messages = {message["id"]: message for message in main_state["messages"]}
-    assert "user-work" in main_messages["msg-1001"]["labels"]
-    assert "finance" not in main_messages["msg-1001"]["labels"]
-    assert main_messages["msg-1003"]["folder"] == "Inbox"
-    assert main_messages["msg-1004"]["folder"] == "Inbox"
-    assert "msg-agent-2001" not in main_messages
+    assert [base["id"] for base in bases if base["is_head"]] == [new_head["id"]]
 
 
-@pytest.mark.parametrize(
-    ("backend_cls", "backend_name"),
-    [
-        (CheckpointLiteBackend, "checkpoint-lite"),
-        (StateForkBackend, "statefork"),
-    ],
-)
-def test_checkpoint_backends_reject_concurrent_active_branch(backend_cls, backend_name):
-    backend = object.__new__(backend_cls)
-    backend.name = backend_name
+def test_statefork_backend_rejects_concurrent_active_branch():
+    backend = object.__new__(StateForkBackend)
+    backend.name = "statefork"
     backend.branches = {
         "active-branch": BranchHandle(
             id="active-branch",
-            backend=backend_name,
+            backend="statefork",
             db_path=Path("branch.db"),
             port=8300,
             url="http://127.0.0.1:8300",
@@ -505,7 +552,7 @@ def test_checkpoint_backends_reject_concurrent_active_branch(backend_cls, backen
     }
 
     with pytest.raises(BranchError, match="one active branch at a time"):
-        backend_cls.create_branch(backend, base_id="base-1")
+        StateForkBackend.create_branch(backend, base_id="base-1")
 
 
 def test_statefork_build_base_reuses_initial_snapshot(tmp_path):
@@ -513,7 +560,7 @@ def test_statefork_build_base_reuses_initial_snapshot(tmp_path):
     with sqlite3.connect(db_path) as conn:
         conn.execute("CREATE TABLE marker (id TEXT PRIMARY KEY)")
 
-    class FakeBuildManager:
+    class BuildManagerStub:
         session_id = "session-build"
         last_snapshot_id = "initial-build-snapshot"
         current_snapshot_id = "initial-build-snapshot"
@@ -522,7 +569,7 @@ def test_statefork_build_base_reuses_initial_snapshot(tmp_path):
         def snapshot(self):
             raise AssertionError("build mode should reuse the manager's initial snapshot")
 
-    manager = FakeBuildManager()
+    manager = BuildManagerStub()
     backend = object.__new__(StateForkBackend)
     backend.name = "statefork"
     backend.project_root = tmp_path
@@ -561,6 +608,7 @@ def test_statefork_status_reports_runtime_mode(tmp_path):
     assert status["details"]["statefork_runtime_mode"] == "docker-build"
 
 
+@requires_statefork_integration
 def test_reset_clears_bases_branches_and_mailbox_state(monkeypatch, tmp_path):
     app = load_controller_app(monkeypatch, tmp_path)
     with TestClient(app) as client:

@@ -10,7 +10,7 @@ managed by StateFork from the outside instead of managing its own branches.
 Added:
 
 ```text
-src/agent_safe_demo/mailbox_app.py
+src/agent_safe_demo/app_plane/email_service/app.py
 ```
 
 This is the ordinary web app. It only exposes mailbox business APIs:
@@ -37,7 +37,7 @@ workspace/checkpoint APIs.
 Kept:
 
 ```text
-src/agent_safe_demo/main.py
+src/agent_safe_demo/control_plane/main.py
 ```
 
 But it is now the controller/web-shell layer. It owns the UI and control APIs:
@@ -64,19 +64,19 @@ runtime mailbox app over HTTP.
 Updated:
 
 ```text
-src/agent_safe_demo/branching.py
+src/agent_safe_demo/control_plane/branching.py
 ```
 
 Runtime branches now start:
 
 ```text
-agent_safe_demo.mailbox_app:app
+agent_safe_demo.app_plane.email_service.app:app
 ```
 
 instead of:
 
 ```text
-agent_safe_demo.main:app
+agent_safe_demo.control_plane.main:app
 ```
 
 This means the managed program is a normal mailbox app and does not know it has
@@ -105,7 +105,7 @@ FastAPI / uvicorn / package dependencies
 The image default command runs the ordinary mailbox app:
 
 ```text
-python -m uvicorn agent_safe_demo.mailbox_app:app --host 0.0.0.0 --port 8000
+python -m uvicorn agent_safe_demo.app_plane.email_service.app:app --host 0.0.0.0 --port 8000
 ```
 
 This gives checkpoint-lite/StateFork build mode a packaged, shell-capable

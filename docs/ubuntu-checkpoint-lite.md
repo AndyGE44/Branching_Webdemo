@@ -1,7 +1,9 @@
-# Ubuntu / EC2 Checkpoint-Lite Setup
+# Ubuntu / EC2 StateFork Setup
 
-This guide moves the mailbox branch demo from the local-copy backend to the
-first checkpoint-lite backend on an Ubuntu VM or EC2 instance.
+This guide documents the supported VM path after the demo was simplified to a
+single backend: StateFork. checkpoint-lite may still be used underneath
+StateFork, especially in Docker build mode, but the FastAPI controller no longer
+exposes a direct checkpoint-lite backend.
 
 ## 1. System Requirements
 
@@ -11,144 +13,70 @@ Required capabilities:
 
 - Linux kernel with OverlayFS support
 - CRIU installed and working
-- Go toolchain if building checkpoint-lite from source
+- Docker when using `DEMO_STATEFORK_BUILD=1`
 - Python 3.10+
+- A working StateFork checkout
 
 Install baseline packages:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y python3 python3-venv python3-pip git curl criu
+sudo apt-get install -y python3 python3-venv python3-pip git curl criu docker.io
 sudo criu check
 ```
 
-`sudo criu check` must pass before checkpoint-lite process snapshots can work.
-The first demo backend mostly exercises OverlayFS sessions, but CRIU should be
-healthy before we move to full process checkpointing.
-
-## 2. Build Checkpoint-Lite
-
-From the parent research directory:
+## 2. Prepare The Demo
 
 ```bash
-cd ~/Search_Agent/checkpoint-lite
-go build -o checkpoint-lite cmd/checkpoint-lite/main.go
-go build -o bash_init cmd/bash-init/main.go
-./checkpoint-lite version
-```
-
-If `go` is missing, install the version expected by checkpoint-lite or use the
-project's existing build notes.
-
-## 3. Run The Demo App Normally First
-
-```bash
-cd ~/Search_Agent/agent_safe_demo
+cd ~/Web_Demo_For_Checkpointlite
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -e ".[dev]"
-PYTHONPATH=src uvicorn agent_safe_demo.main:app --host 0.0.0.0 --port 8000
+pytest -q
 ```
 
-From your browser, open:
+## 3. Start The StateFork Demo
 
-```text
-http://<vm-ip>:8000
-```
-
-On EC2, the security group must allow inbound TCP `8000`. For this prototype,
-use a single branch port such as `8200` only if you intentionally expose branch
-URLs. Prefer SSH forwarding or a reverse proxy for demos.
-
-## 4. Smoke Test Local-Copy Branching On Ubuntu
-
-Before switching backends, confirm the current branch flow works:
+Prefer the launcher:
 
 ```bash
-curl -s http://127.0.0.1:8000/api/branches
-curl -s -X POST http://127.0.0.1:8000/api/branches
+./scripts/run-statefork-docker.sh
 ```
 
-Then use the UI:
-
-```text
-Create Agent Branch -> Run Agent -> Diff -> Discard
-```
-
-## 5. Start With Checkpoint-Lite Backend
-
-Stop the server, then restart it with:
+Manual equivalent:
 
 ```bash
-cd ~/Search_Agent/agent_safe_demo
-. .venv/bin/activate
+export DEMO_STATEFORK_BUILD=1
+export DEMO_STATEFORK_ROOT=/users/alexxjk/StateFork
+export DEMO_STATEFORK_CWD=/users/alexxjk/StateFork
+export DEMO_STATEFORK_METHOD=ckpt_build
+export CHECKPOINT_SESSIONS_DIR=/tmp/checkpoint-sessions-mailbox-demo
+export DEMO_BRANCH_HOST=127.0.0.1
+export DEMO_BRANCH_PORT_START=8300
+export PYTHONPATH=src
 
-export DEMO_BRANCH_BACKEND=checkpoint-lite
-export CHECKPOINT_LITE_BIN=../checkpoint-lite/checkpoint-lite
-export DEMO_BRANCH_HOST=0.0.0.0
-export DEMO_BRANCH_PORT_START=8200
-export DEMO_CHECKPOINT_USE_SUDO=1
-export DEMO_CHECKPOINT_SESSIONS_DIR=/tmp/checkpoint-sessions
-
-PYTHONPATH=src uvicorn agent_safe_demo.main:app --host 0.0.0.0 --port 8000
+sudo -E .venv/bin/uvicorn agent_safe_demo.control_plane.main:app \
+  --host 127.0.0.1 \
+  --port 8000
 ```
 
-Open the main app again and use:
+## 4. Expected Behavior
 
-```text
-Create Agent Branch -> Open Branch -> Run Agent -> Diff -> Discard
+- The main controller runs on `127.0.0.1:8000`.
+- The managed runtime starts at `127.0.0.1:8300` by default.
+- `GET /api/backend` reports `backend=statefork`.
+- A second active branch is rejected until the current runtime is committed,
+  discarded, or reset.
+- Runtime state writes to the StateFork-managed workdir DB, not directly to the
+  main `demo_mailbox.db`.
+
+## 5. Cleanup
+
+If a run is interrupted:
+
+```bash
+./scripts/cleanup-statefork-demo.sh
 ```
 
-Expected first result:
-
-- Main app remains on port `8000`.
-- The active branch app starts on `8200`.
-- Branch state writes to the checkpoint-lite overlay workdir.
-- Main `demo_mailbox.db` is not modified until `Commit`.
-- Creating a second checkpoint-lite branch while one is running is rejected.
-
-If checkpoint-lite fails with `mount command failed: exit status 32`, verify
-the session directory. Some CloudLab images have a checkpoint-lite config that
-points at `/mydata2/checkpoint-sessions`; use `DEMO_CHECKPOINT_SESSIONS_DIR` to
-force a known-good local path such as `/tmp/checkpoint-sessions`.
-
-## 6. What This Backend Does Today
-
-The first `CheckpointLiteBackend` is intentionally conservative, but it now
-creates an explicit named base checkpoint for every branch:
-
-```text
-create branch -> sudo checkpoint-lite init <project-root> --quiet
-              -> sudo checkpoint-lite create <session> <branch>-base -1
-              -> start branch uvicorn in the overlay workdir
-              -> set DEMO_MAILBOX_DB_PATH=<overlay>/demo_mailbox.db
-
-run agent     -> HTTP calls against the branch URL
-diff          -> SQLite summary diff between main DB and branch DB
-discard       -> terminate branch server, checkpoint-lite cleanup
-commit        -> copy branch SQLite DB back to main DB, cleanup
-```
-
-This validates the web-service branch lifecycle without forcing us to solve
-multi-process CRIU restore in the same step.
-
-## 7. Known Limitations
-
-- The current checkpoint-lite and StateFork backends support one active branch at
-  a time. Commit or discard the existing branch before creating another.
-- The first backend uses `checkpoint-lite init` and `create`; it does not yet
-  restore multiple active branches from one shared base session.
-- Commit is SQLite promotion, not a general filesystem merge.
-- If main state changes while a branch is active, this prototype does not yet
-  implement conflict detection.
-- Branch server processes are started by the controller, not restored from CRIU.
-- InvenTree is intentionally deferred until this lifecycle is stable.
-
-## 8. Next Backend Iteration
-
-After the first Ubuntu smoke test works, the next implementation should add:
-
-- branch creation from a shared named checkpoint
-- branch metadata persisted across controller restarts
-- conflict detection before commit
-- optional process checkpoint/restore for long-running app state
+The cleanup script stops the main/runtime ports and removes StateFork session
+state where possible.
