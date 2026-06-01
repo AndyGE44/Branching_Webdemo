@@ -7,10 +7,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 import secrets
 from typing import AsyncIterator
+from urllib import request as urlrequest
+from urllib.error import HTTPError, URLError
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -189,7 +191,8 @@ def workspace_payload(branch: dict) -> dict:
             "base_id": branch.get("base_id") or WORKSPACE_BASE_ID,
             "branch_id": branch["id"],
             "runtime_url": branch["url"],
-            "runtime_ui_url": f"{branch['url']}{runtime_ui_path}",
+            "runtime_proxy_url": "/runtime",
+            "runtime_ui_url": f"/runtime{runtime_ui_path}",
             "state_path": CURRENT_APP.state_path,
             "current_snapshot_id": branch.get("current_snapshot_id"),
             "dirty": branch.get("dirty", False),
@@ -254,6 +257,55 @@ def select_app(app_id: str) -> dict:
         return JSONResponse({"detail": str(error)}, status_code=404)
     except BranchError as error:
         return branch_error(error)
+
+
+def runtime_target_url(branch: dict, path: str, query_string: bytes = b"") -> str:
+    suffix = f"/{path}" if path else "/"
+    query = query_string.decode("utf-8")
+    return f"{branch['url']}{suffix}{'?' + query if query else ''}"
+
+
+def proxy_headers(request: Request) -> dict[str, str]:
+    blocked = {"host", "content-length", "accept-encoding", "connection"}
+    return {
+        key: value
+        for key, value in request.headers.items()
+        if key.lower() not in blocked
+    }
+
+
+def proxied_response(content: bytes, status_code: int, content_type: str | None) -> Response:
+    headers = {"content-type": content_type} if content_type else None
+    return Response(content=content, status_code=status_code, headers=headers)
+
+
+@app.api_route("/runtime", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+@app.api_route("/runtime/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+async def runtime_proxy(request: Request, path: str = "") -> Response:
+    try:
+        branch = ensure_workspace()["branch"]
+    except BranchError as error:
+        return branch_error(error)
+
+    body = await request.body()
+    target = runtime_target_url(branch, path, request.scope.get("query_string", b""))
+    proxy_request = urlrequest.Request(
+        target,
+        data=body or None,
+        headers=proxy_headers(request),
+        method=request.method,
+    )
+    try:
+        with urlrequest.urlopen(proxy_request, timeout=15) as proxy_response:
+            content = proxy_response.read()
+            content_type = proxy_response.headers.get("content-type")
+            return proxied_response(content, proxy_response.status, content_type)
+    except HTTPError as error:
+        content = error.read()
+        content_type = error.headers.get("content-type")
+        return proxied_response(content, error.code, content_type)
+    except URLError as error:
+        return JSONResponse({"detail": f"Runtime proxy failed: {error}"}, status_code=502)
 
 
 @app.get("/api/backend")

@@ -295,7 +295,7 @@ async function refreshWorkspace() {
   const data = await request("/api/workspace");
   workspace = data;
   currentAppId = data.app.id;
-  runtimeBaseUrl = data.workspace.runtime_url;
+  runtimeBaseUrl = data.workspace.runtime_proxy_url || data.workspace.runtime_url;
   runtimeStatePath = data.workspace.state_path || "/api/state";
   renderApps({ apps, current_app_id: currentAppId });
   renderWorkspaceState(data.branch);

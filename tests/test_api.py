@@ -157,6 +157,22 @@ def test_controller_lists_and_switches_registered_apps(monkeypatch, tmp_path):
     assert backend.json()["details"]["app_db_env_var"] == "DEMO_INVENTORY_DB_PATH"
 
 
+def test_workspace_payload_uses_same_origin_runtime_proxy(monkeypatch, tmp_path):
+    configure_env(monkeypatch, tmp_path)
+    sys.modules.pop("agent_safe_demo.control_plane.main", None)
+    module = importlib.import_module("agent_safe_demo.control_plane.main")
+    branch = {"id": "branch-1", "url": "http://127.0.0.1:8300", "snapshots": []}
+
+    workspace = module.workspace_payload(branch)["workspace"]
+
+    assert workspace["runtime_url"] == "http://127.0.0.1:8300"
+    assert workspace["runtime_proxy_url"] == "/runtime"
+    assert workspace["runtime_ui_url"] == "/runtime/"
+    assert module.runtime_target_url(branch, "api/state", b"page=1") == (
+        "http://127.0.0.1:8300/api/state?page=1"
+    )
+
+
 def test_message_detail_includes_labels(monkeypatch, tmp_path):
     app = load_mailbox_app(monkeypatch, tmp_path)
     with TestClient(app) as client:

@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 demo_mailbox.db
+demo_inventory.db
 .branches/
 build/
 dist/

@@ -249,7 +249,7 @@ def root() -> str:
           }
           function row(cells) { return `<tr>${cells.map((cell) => `<td>${esc(cell)}</td>`).join('')}</tr>`; }
           async function refresh() {
-            const state = await request('/api/state');
+            const state = await request('api/state');
             itemsEl.innerHTML = state.inventory.map((item) => row([item.id, item.name, item.location, item.on_hand, item.available, item.reserved, item.reorder_point])).join('');
             reservationsEl.innerHTML = state.reservations.length ? state.reservations.map((r) => row([r.id, r.part_id, r.quantity, r.status, r.actor, r.created_at])).join('') : '<tr><td colspan="6">No reservations yet</td></tr>';
             partSelect.innerHTML = state.inventory.map((item) => `<option value="${esc(item.id)}">${esc(item.id)}</option>`).join('');
@@ -260,7 +260,7 @@ def root() -> str:
             const form = new FormData(event.currentTarget);
             const action = form.get('action');
             const body = JSON.stringify({ part_id: form.get('part_id'), quantity: Number(form.get('quantity')), actor: 'user' });
-            const path = action === 'reserve' ? '/api/reservations' : `/api/inventory/${action}`;
+            const path = action === 'reserve' ? 'api/reservations' : `api/inventory/${action}`;
             try { await request(path, { method: 'POST', body }); resultEl.textContent = `${action} saved`; await refresh(); }
             catch (error) { resultEl.textContent = error.message; }
           });

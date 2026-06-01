@@ -462,8 +462,6 @@ class StateForkBackend:
 
         work_dir = Path(getattr(manager, "work_dir", base.work_dir or self.project_root))
         branch_db = work_dir / self.main_db_path.name
-        if not branch_db.exists():
-            raise BranchError(f"StateFork branch database does not exist: {branch_db}")
 
         branch_id = f"sf-{uuid.uuid4().hex[:8]}"
         port = self._next_port()
@@ -483,12 +481,15 @@ class StateForkBackend:
             base_checkpoint_id=base.checkpoint_id,
             work_dir=work_dir,
             current_snapshot_id=base.checkpoint_id,
-            last_saved_fingerprint=sqlite_fingerprint(branch_db),
             process=process,
         )
         self.branches[branch_id] = branch
         self.branch_environments[branch_id] = str(environment_name)
         self._wait_until_ready(branch)
+        if not branch_db.exists():
+            raise BranchError(f"App runtime did not create its database: {branch_db}")
+        branch.last_saved_fingerprint = sqlite_fingerprint(branch_db)
+        branch.dirty = False
         return branch.to_dict()
 
     def list_branches(self) -> list[dict[str, Any]]:

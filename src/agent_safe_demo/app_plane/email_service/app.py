@@ -497,18 +497,18 @@ def root() -> str:
             document.querySelector('#labelForm').addEventListener('submit', async (event) => {
               event.preventDefault();
               const form = new FormData(event.currentTarget);
-              await request(`/api/messages/${message.id}/label`, { method: 'POST', body: JSON.stringify({ label: form.get('label'), actor: 'user' }) });
+              await request(`api/messages/${message.id}/label`, { method: 'POST', body: JSON.stringify({ label: form.get('label'), actor: 'user' }) });
               await refresh();
             });
             document.querySelector('#moveForm').addEventListener('submit', async (event) => {
               event.preventDefault();
               const form = new FormData(event.currentTarget);
-              await request(`/api/messages/${message.id}/move`, { method: 'POST', body: JSON.stringify({ folder: form.get('folder'), actor: 'user' }) });
+              await request(`api/messages/${message.id}/move`, { method: 'POST', body: JSON.stringify({ folder: form.get('folder'), actor: 'user' }) });
               await refresh();
             });
           }
           async function refresh() {
-            const mailbox = await request('/api/mailbox');
+            const mailbox = await request('api/mailbox');
             if (!selectedId && mailbox.messages.length) selectedId = mailbox.messages[0].id;
             summaryEl.textContent = `${mailbox.unread} unread · ${mailbox.drafts} drafts · ${mailbox.messages.length} messages`;
             messagesEl.innerHTML = mailbox.messages.map((message) => `
