@@ -2,6 +2,7 @@ import importlib
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 from urllib import request as urlrequest
@@ -553,6 +554,24 @@ def test_statefork_backend_rejects_concurrent_active_branch():
 
     with pytest.raises(BranchError, match="one active branch at a time"):
         StateForkBackend.create_branch(backend, base_id="base-1")
+
+
+def test_statefork_command_errors_return_branch_error(tmp_path):
+    backend = object.__new__(StateForkBackend)
+    backend.statefork_cwd = tmp_path
+    command_error = subprocess.CalledProcessError(
+        returncode=1,
+        cmd=["./checkpoint-lite", "build", "/tmp/demo"],
+        stderr="bash_init binary not found",
+    )
+
+    with pytest.raises(BranchError, match="StateFork command failed") as excinfo:
+        StateForkBackend._call_statefork(
+            backend,
+            lambda: (_ for _ in ()).throw(command_error),
+        )
+
+    assert "bash_init binary not found" in str(excinfo.value)
 
 
 def test_statefork_build_base_reuses_initial_snapshot(tmp_path):

@@ -751,7 +751,19 @@ class StateForkBackend:
 
     def _call_statefork(self, fn: Callable[[], Any]) -> Any:
         with self._statefork_working_directory():
-            return fn()
+            try:
+                return fn()
+            except BranchError:
+                raise
+            except subprocess.CalledProcessError as error:
+                output = (error.stderr or error.stdout or str(error)).strip()
+                command = " ".join(str(part) for part in error.cmd)
+                raise BranchError(
+                    f"StateFork command failed with exit {error.returncode}: {command}. {output}"
+                ) from error
+            except FileNotFoundError as error:
+                missing = error.filename or str(error)
+                raise BranchError(f"StateFork command not found: {missing}") from error
 
     @contextmanager
     def _statefork_working_directory(self) -> Iterator[None]:
