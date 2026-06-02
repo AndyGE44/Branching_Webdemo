@@ -171,16 +171,27 @@ ssh sf-exp
 Use SSH port forwarding to view the VM-hosted StateFork demo from your
 local browser without opening public inbound ports.
 
-### 1. Open A Tunnel From Your Laptop
+### 1. Open An Auto-Reconnecting Tunnel From Your Laptop
 
-Run this on your laptop and keep the terminal open:
+Run this on your laptop in a dedicated tunnel terminal. It uses tunnel-only
+mode (`-N`) and retries when the SSH connection drops, which is useful when your
+laptop sleeps and later wakes back up:
 
 ```bash
-ssh \
-  -o ExitOnForwardFailure=yes \
-  -L 18000:127.0.0.1:8000 \
-  -L 18300:127.0.0.1:8300 \
-  sf-exp
+while true; do
+  echo "[$(date)] starting SSH tunnel to sf-exp"
+  ssh \
+    -N \
+    -o ExitOnForwardFailure=yes \
+    -o ServerAliveInterval=15 \
+    -o ServerAliveCountMax=2 \
+    -o TCPKeepAlive=no \
+    -L 18000:127.0.0.1:8000 \
+    -L 18300:127.0.0.1:8300 \
+    sf-exp
+  echo "[$(date)] SSH tunnel stopped; retrying in 5 seconds"
+  sleep 5
+done
 ```
 
 Port meanings:
@@ -188,7 +199,7 @@ Port meanings:
 - `18000`: forwards your laptop's `127.0.0.1:18000` to the VM main FastAPI app
   on `127.0.0.1:8000`
 - `18300`: forwards your laptop's `127.0.0.1:18300` to the VM StateFork
-  runtime app on `127.0.0.1:8300`
+  runtime app on `127.0.0.1:8300` for direct runtime debugging
 
 The current StateFork backend supports one active runtime at a time. The
 workspace controller owns that runtime for the UI.
@@ -196,11 +207,19 @@ workspace controller owns that runtime for the UI.
 Using `18000` and `18300` avoids colliding with a local copy of this demo that
 may already be running on your laptop. The `ExitOnForwardFailure=yes` option
 makes SSH fail immediately if a requested local port is already occupied, instead
-of silently leaving you connected to the wrong server.
+of silently leaving you connected to the wrong server. `ServerAliveInterval` and
+`ServerAliveCountMax` make SSH notice dead sleep/wake connections quickly so the
+loop can reconnect.
 
 ### 2. Prepare The Repo On The VM
 
-Inside the SSH session:
+Open a second terminal for VM commands:
+
+```bash
+ssh sf-exp
+```
+
+Inside that VM shell:
 
 ```bash
 cd ~/Web_Demo_For_Checkpointlite
