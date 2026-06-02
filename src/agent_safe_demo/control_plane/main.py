@@ -22,6 +22,7 @@ from agent_safe_demo.control_plane.branching import (
     DirtyBranchError,
     StateForkBackend,
 )
+from agent_safe_demo.control_plane.commit_store import CommitStore
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -32,6 +33,18 @@ WORKSPACE_BASE_ID: str | None = None
 WORKSPACE_BRANCH_ID: str | None = None
 WORKSPACE_INITIAL_SNAPSHOT_LABEL = "Initial checkpoint"
 CURRENT_APP: AppSpec = get_app_spec()
+
+
+def control_plane_db_path() -> Path:
+    return Path(
+        os.getenv(
+            "DEMO_CONTROL_PLANE_DB_PATH",
+            str(CURRENT_APP.project_root / "control_plane_metadata.db"),
+        )
+    )
+
+
+commit_store = CommitStore(control_plane_db_path())
 
 
 def statefork_kwargs_from_env() -> dict:
@@ -69,6 +82,7 @@ branch_backend = create_branch_backend(CURRENT_APP)
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     CURRENT_APP.init_db()
+    commit_store.init_db()
     yield
 
 
@@ -109,6 +123,12 @@ class WorkspaceSnapshotRequest(BaseModel):
 class WorkspaceRestoreRequest(BaseModel):
     snapshot_id: str
     force: bool = False
+
+
+class WorkspaceCommitRequest(BaseModel):
+    label: str | None = Field(default=None, max_length=80)
+    message: str | None = Field(default=None, max_length=500)
+    author: str = Field(default="user", max_length=80)
 
 
 def demo_auth_enabled() -> bool:
@@ -181,8 +201,21 @@ def running_workspace_branch() -> dict | None:
     return None
 
 
+def app_head_payload() -> dict | None:
+    head = commit_store.app_head(CURRENT_APP.id)
+    if not head:
+        return None
+    active_base_id = getattr(branch_backend, "head_base_id", None)
+    return {**head, "active": head["base_id"] == active_base_id}
+
+
+def commit_history_payload(limit: int = 5) -> list[dict]:
+    return commit_store.list_commits(CURRENT_APP.id, limit=limit)
+
+
 def workspace_payload(branch: dict) -> dict:
     runtime_ui_path = CURRENT_APP.runtime_ui_path
+    head_commit = app_head_payload()
     return {
         "app": app_payload(),
         "workspace": {
@@ -196,9 +229,12 @@ def workspace_payload(branch: dict) -> dict:
             "state_path": CURRENT_APP.state_path,
             "current_snapshot_id": branch.get("current_snapshot_id"),
             "dirty": branch.get("dirty", False),
+            "head_commit_id": head_commit["id"] if head_commit and head_commit["active"] else None,
         },
         "branch": branch,
         "backend": branch_backend.status(),
+        "app_head": head_commit,
+        "commits": commit_history_payload(),
     }
 
 
@@ -207,9 +243,13 @@ def ensure_workspace() -> dict:
     CURRENT_APP.init_db()
     branch = running_workspace_branch()
     if branch is None:
-        base = branch_backend.create_base(label=f"{CURRENT_APP.label} workspace start")
-        WORKSPACE_BASE_ID = base["id"]
-        branch = branch_backend.create_branch(base_id=base["id"])
+        head_base_id = getattr(branch_backend, "head_base_id", None)
+        if head_base_id:
+            branch = branch_backend.create_branch(base_id=head_base_id)
+        else:
+            base = branch_backend.create_base(label=f"{CURRENT_APP.label} workspace start")
+            branch = branch_backend.create_branch(base_id=base["id"])
+        WORKSPACE_BASE_ID = branch.get("base_id")
         WORKSPACE_BRANCH_ID = branch["id"]
         branch = branch_backend.save_snapshot(
             branch["id"],
@@ -369,6 +409,56 @@ def restore_workspace_snapshot(payload: WorkspaceRestoreRequest) -> dict:
             force=payload.force,
         )
         return {**result, "workspace": workspace_payload(result["branch"])["workspace"]}
+    except BranchError as error:
+        return branch_error(error)
+
+
+@app.get("/api/workspace/commits")
+def list_workspace_commits() -> dict:
+    return {
+        "app": app_payload(),
+        "head": app_head_payload(),
+        "commits": commit_history_payload(limit=20),
+    }
+
+
+@app.post("/api/workspace/commit")
+def commit_workspace(payload: WorkspaceCommitRequest | None = None) -> dict:
+    try:
+        current_workspace = ensure_workspace()
+        branch_id = current_workspace["branch"]["id"]
+        parent_head = app_head_payload()
+        parent_commit_id = (
+            parent_head["id"] if parent_head and parent_head.get("active") else None
+        )
+        diff = branch_backend.diff(branch_id)
+        label = (payload.label if payload else None) or f"{CURRENT_APP.label} update"
+        label = label.strip() or f"{CURRENT_APP.label} update"
+        message = ((payload.message if payload else None) or "").strip()
+        author = ((payload.author if payload else None) or "user").strip() or "user"
+
+        result = branch_backend.commit(branch_id)
+        head_base = result["head_base"]
+        commit = commit_store.create_commit(
+            app_id=CURRENT_APP.id,
+            parent_commit_id=parent_commit_id,
+            base_id=head_base["id"],
+            branch_id=branch_id,
+            checkpoint_id=head_base["checkpoint_id"],
+            label=label,
+            message=message,
+            author=author,
+            diff=diff,
+        )
+        reset_workspace_handles()
+        next_workspace = ensure_workspace()
+        return {
+            "status": "committed",
+            "commit": commit,
+            "committed_branch": result["branch"],
+            "head_base": head_base,
+            **next_workspace,
+        }
     except BranchError as error:
         return branch_error(error)
 

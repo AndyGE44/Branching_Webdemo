@@ -15,6 +15,7 @@ from agent_safe_demo.control_plane.branching import (
     BranchHandle,
     StateForkBackend,
 )
+from agent_safe_demo.control_plane.commit_store import CommitStore
 
 
 RUN_STATEFORK_INTEGRATION = os.getenv("RUN_STATEFORK_INTEGRATION") == "1"
@@ -26,8 +27,10 @@ requires_statefork_integration = pytest.mark.skipif(
 def configure_env(monkeypatch, tmp_path, auth_password=None) -> None:
     db_path = tmp_path / "demo_mailbox.db"
     inventory_db_path = tmp_path / "demo_inventory.db"
+    control_plane_db_path = tmp_path / "control_plane_metadata.db"
     monkeypatch.setenv("DEMO_MAILBOX_DB_PATH", str(db_path))
     monkeypatch.setenv("DEMO_INVENTORY_DB_PATH", str(inventory_db_path))
+    monkeypatch.setenv("DEMO_CONTROL_PLANE_DB_PATH", str(control_plane_db_path))
     monkeypatch.delenv("DEMO_APP_ID", raising=False)
     monkeypatch.setenv(
         "DEMO_STATEFORK_ROOT",
@@ -141,6 +144,39 @@ def test_inventory_app_seed_and_reservation(monkeypatch, tmp_path):
     assert state.json()["summary"]["reservations"] == 1
 
 
+def test_commit_store_records_app_heads(tmp_path):
+    store = CommitStore(tmp_path / "metadata.db")
+
+    first = store.create_commit(
+        app_id="email",
+        parent_commit_id=None,
+        base_id="base-1",
+        branch_id="branch-1",
+        checkpoint_id="checkpoint-1",
+        label="first",
+        message="seed accepted",
+        author="tester",
+        diff={"tables": ["messages"]},
+    )
+    second = store.create_commit(
+        app_id="email",
+        parent_commit_id=first["id"],
+        base_id="base-1",
+        branch_id="branch-2",
+        checkpoint_id="checkpoint-2",
+        label="second",
+        diff={"tables": ["drafts"]},
+    )
+
+    assert store.app_head("email")["id"] == second["id"]
+    assert store.app_head("email")["parent_commit_id"] == first["id"]
+    assert [commit["id"] for commit in store.list_commits("email")] == [
+        second["id"],
+        first["id"],
+    ]
+    assert store.list_commits("inventory") == []
+
+
 def test_controller_lists_and_switches_registered_apps(monkeypatch, tmp_path):
     app = load_controller_app(monkeypatch, tmp_path)
     with TestClient(app) as client:
@@ -171,6 +207,40 @@ def test_workspace_payload_uses_same_origin_runtime_proxy(monkeypatch, tmp_path)
     assert module.runtime_target_url(branch, "api/state", b"page=1") == (
         "http://127.0.0.1:8300/api/state?page=1"
     )
+
+
+def test_workspace_payload_includes_active_app_head(monkeypatch, tmp_path):
+    configure_env(monkeypatch, tmp_path)
+    sys.modules.pop("agent_safe_demo.control_plane.main", None)
+    module = importlib.import_module("agent_safe_demo.control_plane.main")
+    commit = module.commit_store.create_commit(
+        app_id="email",
+        parent_commit_id=None,
+        base_id="base-1",
+        branch_id="branch-1",
+        checkpoint_id="checkpoint-1",
+        label="accepted mailbox",
+        diff={"tables": ["messages"]},
+    )
+    module.branch_backend.head_base_id = "base-1"
+    branch = {
+        "id": "branch-2",
+        "base_id": "base-1",
+        "url": "http://127.0.0.1:8300",
+        "snapshots": [],
+    }
+
+    payload = module.workspace_payload(branch)
+
+    assert payload["app_head"]["id"] == commit["id"]
+    assert payload["app_head"]["active"] is True
+    assert payload["workspace"]["head_commit_id"] == commit["id"]
+    assert payload["commits"][0]["diff"] == {"tables": ["messages"]}
+
+    module.branch_backend.head_base_id = "base-2"
+    inactive_payload = module.workspace_payload(branch)
+    assert inactive_payload["app_head"]["active"] is False
+    assert inactive_payload["workspace"]["head_commit_id"] is None
 
 
 def test_message_detail_includes_labels(monkeypatch, tmp_path):
@@ -479,6 +549,48 @@ def test_workspace_starts_in_runtime_with_initial_checkpoint(monkeypatch, tmp_pa
     assert runtime_mailbox["unread"] == 3
     assert runtime_mailbox["drafts"] == 1
     assert backend["totals"] == {"bases": 1, "branches": 1, "snapshots": 1}
+
+
+@requires_statefork_integration
+def test_workspace_commit_records_metadata_and_reopens_from_head(monkeypatch, tmp_path):
+    app = load_controller_app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        try:
+            workspace = client.get("/api/workspace").json()
+            initial_branch_id = workspace["branch"]["id"]
+            agent = client.post("/api/workspace/run-agent")
+            commit = client.post(
+                "/api/workspace/commit",
+                json={"label": "accept agent plan", "message": "looks good"},
+            )
+            commits = client.get("/api/workspace/commits").json()
+            new_branch = commit.json()["branch"]
+            committed_state = get_json(f"{new_branch['url']}/api/state")
+            main_state = mailbox_state()
+        finally:
+            client.post("/api/reset")
+
+    assert agent.status_code == 200
+    assert commit.status_code == 200
+    payload = commit.json()
+    assert payload["status"] == "committed"
+    assert payload["commit"]["label"] == "accept agent plan"
+    assert payload["commit"]["message"] == "looks good"
+    assert payload["commit"]["branch_id"] == initial_branch_id
+    assert payload["app_head"]["active"] is True
+    assert payload["workspace"]["head_commit_id"] == payload["commit"]["id"]
+    assert new_branch["id"] != initial_branch_id
+    assert commits["head"]["id"] == payload["commit"]["id"]
+    assert commits["commits"][0]["diff"]["tables"]
+
+    committed_messages = {message["id"]: message for message in committed_state["messages"]}
+    assert "finance" in committed_messages["msg-1001"]["labels"]
+    assert committed_messages["msg-1003"]["folder"] == "Spam"
+    assert "msg-agent-2001" in committed_messages
+
+    main_messages = {message["id"]: message for message in main_state["messages"]}
+    assert "finance" not in main_messages["msg-1001"]["labels"]
+    assert "msg-agent-2001" not in main_messages
 
 
 @requires_statefork_integration

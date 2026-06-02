@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Agent-Safe Workspace</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20" />
+    <link rel="stylesheet" href="/static/styles.css?v=21" />
   </head>
   <body>
     <header class="topbar">
@@ -23,6 +23,7 @@
           <input id="snapshotLabelInput" type="text" maxlength="80" placeholder="before agent" />
         </label>
         <button id="snapshotBtn" class="primary" type="button">Snapshot</button>
+        <button id="commitBtn" type="button">Commit</button>
         <button id="runAgentBtn" type="button">Run Agent</button>
         <span id="backendMode" class="backend-pill">Backend...</span>
         <a class="icon-link" href="/docs" title="Open API docs">API</a>
@@ -62,6 +63,17 @@
           </div>
           <div id="checkpoints" class="branch-list"></div>
         </section>
+
+        <section class="panel commit-panel">
+          <div class="panel-header">
+            <div>
+              <h2>App Head</h2>
+              <p class="muted">Committed app state</p>
+            </div>
+          </div>
+          <div id="commitHead" class="commit-head"></div>
+          <div id="commitHistory" class="commit-list"></div>
+        </section>
       </aside>
 
       <section class="panel state-panel">
@@ -73,6 +85,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=20"></script>
+    <script src="/static/app.js?v=21"></script>
   </body>
 </html>

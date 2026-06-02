@@ -10,7 +10,10 @@ const backendStatsEl = document.querySelector("#backendStats");
 const snapshotModeEl = document.querySelector("#snapshotMode");
 const workspaceStateEl = document.querySelector("#workspaceState");
 const checkpointsEl = document.querySelector("#checkpoints");
+const commitHeadEl = document.querySelector("#commitHead");
+const commitHistoryEl = document.querySelector("#commitHistory");
 const snapshotLabelInput = document.querySelector("#snapshotLabelInput");
+const commitBtn = document.querySelector("#commitBtn");
 const runAgentBtn = document.querySelector("#runAgentBtn");
 
 let apps = [];
@@ -153,6 +156,51 @@ function renderWorkspaceState(branch) {
   workspaceStateEl.title = branch.dirty
     ? "The runtime has changes since the last snapshot."
     : "The runtime matches the current checkpoint.";
+}
+
+function commitDiffSummary(commit) {
+  const tables = commit.diff?.tables || [];
+  return tables.length ? `Changed: ${tables.join(", ")}` : "No table changes";
+}
+
+function renderCommits(data) {
+  const head = data.app_head;
+  const commits = data.commits || [];
+  if (!head) {
+    commitHeadEl.innerHTML = `<p class="empty">No commits yet.</p>`;
+  } else {
+    commitHeadEl.innerHTML = `
+      <article class="commit-card">
+        <div class="checkpoint-title">
+          <strong>${escapeHtml(head.label)}</strong>
+          ${head.active ? badge("active") : badge("inactive")}
+        </div>
+        <p>${escapeHtml(head.id)} · ${escapeHtml(head.checkpoint_id)}</p>
+        <p>${escapeHtml(formatTime(head.created_at))} · ${escapeHtml(head.author)}</p>
+        ${head.message ? `<p>${escapeHtml(head.message)}</p>` : ""}
+      </article>
+    `;
+  }
+
+  if (!commits.length) {
+    commitHistoryEl.innerHTML = "";
+    return;
+  }
+  commitHistoryEl.innerHTML = `
+    <ol>
+      ${commits
+        .map(
+          (commit) => `
+            <li>
+              <strong>${escapeHtml(commit.label)}</strong>
+              <p>${escapeHtml(commit.id)} · ${escapeHtml(formatTime(commit.created_at))}</p>
+              <p>${escapeHtml(commitDiffSummary(commit))}</p>
+            </li>
+          `,
+        )
+        .join("")}
+    </ol>
+  `;
 }
 
 function renderCheckpoints(branch) {
@@ -301,6 +349,7 @@ async function refreshWorkspace() {
   renderWorkspaceState(data.branch);
   renderBackendStatus(data.backend, data.branch);
   renderCheckpoints(data.branch);
+  renderCommits(data);
   runtimeUrlEl.textContent = data.workspace.runtime_ui_url;
   if (runtimeFrame.src !== data.workspace.runtime_ui_url) {
     runtimeFrame.src = data.workspace.runtime_ui_url;
@@ -346,6 +395,35 @@ async function saveWorkspaceSnapshot(label) {
     method: "POST",
     body: JSON.stringify({ label: label || null }),
   });
+}
+
+async function commitWorkspace() {
+  const dirty = await request("/api/workspace/dirty");
+  if (!dirty.dirty && !window.confirm("Commit the current clean workspace head?")) {
+    showResult("Commit canceled");
+    return;
+  }
+  const app = activeApp();
+  const defaultLabel = `${app?.label || "App"} update`;
+  const label = window.prompt("Commit label", defaultLabel);
+  if (label === null) {
+    showResult("Commit canceled");
+    return;
+  }
+  const message = window.prompt("Commit message", "");
+  if (message === null) {
+    showResult("Commit canceled");
+    return;
+  }
+  runtimeFrame.removeAttribute("src");
+  stateView.innerHTML = `<p class="empty">Committing workspace...</p>`;
+  showResult("Committing...");
+  const data = await request("/api/workspace/commit", {
+    method: "POST",
+    body: JSON.stringify({ label: label.trim() || null, message: message.trim(), author: "user" }),
+  });
+  showResult(`Committed ${data.commit.id}`);
+  await refresh();
 }
 
 async function restoreSnapshot(snapshotId) {
@@ -400,6 +478,15 @@ document.querySelector("#snapshotBtn").addEventListener("click", async () => {
     await saveWorkspaceSnapshot(label);
     snapshotLabelInput.value = "";
   });
+});
+
+commitBtn.addEventListener("click", async () => {
+  try {
+    await commitWorkspace();
+  } catch (error) {
+    showResult(error.message, false);
+    await refreshWorkspace();
+  }
 });
 
 runAgentBtn.addEventListener("click", async () => {
