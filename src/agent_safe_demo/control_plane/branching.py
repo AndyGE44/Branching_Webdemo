@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shlex
 import socket
 import sqlite3
 import subprocess
@@ -14,6 +15,8 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 from urllib import request
 from urllib.error import HTTPError, URLError
+
+from agent_safe_demo.control_plane.manifest import interpolate_template
 
 
 class BranchError(RuntimeError):
@@ -31,6 +34,34 @@ def sqlite_fingerprint(db_path: Path) -> str:
             hasher.update(line.encode("utf-8"))
             hasher.update(b"\n")
     return hasher.hexdigest()
+
+
+def path_fingerprint(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"path": str(path), "exists": False}
+    hasher = hashlib.sha256()
+    size = 0
+    if path.is_dir():
+        for child in sorted(item for item in path.rglob("*") if item.is_file()):
+            relative = child.relative_to(path).as_posix()
+            hasher.update(relative.encode("utf-8"))
+            hasher.update(b"\0")
+            data = child.read_bytes()
+            hasher.update(data)
+            size += len(data)
+        kind = "directory"
+    else:
+        data = path.read_bytes()
+        hasher.update(data)
+        size = len(data)
+        kind = "file"
+    return {
+        "path": str(path),
+        "exists": True,
+        "kind": kind,
+        "sha256": hasher.hexdigest(),
+        "size_bytes": size,
+    }
 
 
 def ensure_branch_base_is_current_head(
@@ -321,6 +352,12 @@ class StateForkBackend:
         app_uvicorn_target_value: str | None = None,
         app_db_env_var: str = "DEMO_MAILBOX_DB_PATH",
         health_path: str = "/api/state",
+        runtime_command: str | None = None,
+        runtime_cwd: str = ".",
+        runtime_port_env: str = "PORT",
+        state_files: list[str] | tuple[str, ...] | None = None,
+        state_env: dict[str, str] | None = None,
+        manifest_path: Path | None = None,
         agent_demo_actions: list[dict[str, Any]] | None = None,
     ) -> None:
         self.project_root = project_root
@@ -336,6 +373,12 @@ class StateForkBackend:
         self.app_uvicorn_target = app_uvicorn_target_value or app_uvicorn_target()
         self.app_db_env_var = app_db_env_var
         self.health_path = health_path
+        self.runtime_command = runtime_command
+        self.runtime_cwd = runtime_cwd
+        self.runtime_port_env = runtime_port_env
+        self.state_files = tuple(state_files or [main_db_path.name])
+        self.state_env = dict(state_env or {})
+        self.manifest_path = manifest_path
         self.agent_demo_actions = list(AGENT_DEMO_ACTIONS if agent_demo_actions is None else agent_demo_actions)
         self.name = "statefork"
         self.bases: dict[str, BaseHandle] = {}
@@ -359,6 +402,13 @@ class StateForkBackend:
                 "app_label": getattr(self, "app_label", "Email Service"),
                 "app_uvicorn_target": getattr(self, "app_uvicorn_target", app_uvicorn_target()),
                 "app_db_env_var": getattr(self, "app_db_env_var", "DEMO_MAILBOX_DB_PATH"),
+                "runtime_command": getattr(self, "runtime_command", None),
+                "runtime_cwd": getattr(self, "runtime_cwd", "."),
+                "runtime_port_env": getattr(self, "runtime_port_env", "PORT"),
+                "manifest_path": (
+                    str(self.manifest_path) if getattr(self, "manifest_path", None) else None
+                ),
+                "state_files": self.state_file_fingerprints(),
                 "head_base_id": getattr(self, "head_base_id", None),
                 "statefork_root": str(self.statefork_root),
                 "statefork_cwd": str(self.statefork_cwd),
@@ -888,11 +938,44 @@ class StateForkBackend:
         cwd: Path,
     ) -> subprocess.Popen:
         env = os.environ.copy()
+        variables = self._runtime_variables(db_path=db_path, port=port, cwd=cwd)
         env[self.app_db_env_var] = str(db_path)
+        env[self.runtime_port_env] = str(port)
+        for key, value in self.state_env.items():
+            env[key] = interpolate_template(value, variables)
         env["PYTHONPATH"] = runtime_pythonpath_for(self.project_root, cwd)
 
+        runtime_cwd = self._runtime_cwd(cwd, variables)
+        command = self._runtime_command(variables)
         return subprocess.Popen(
-            [
+            command,
+            cwd=runtime_cwd,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    def _runtime_variables(self, *, db_path: Path, port: int, cwd: Path) -> dict[str, str]:
+        return {
+            "PORT": str(port),
+            "HOST": self.host,
+            "BRANCH_WORKDIR": str(cwd),
+            "PROJECT_ROOT": str(self.project_root),
+            "PRIMARY_STATE_PATH": str(db_path),
+        }
+
+    def _runtime_cwd(self, branch_workdir: Path, variables: dict[str, str]) -> Path:
+        raw_cwd = interpolate_template(self.runtime_cwd or ".", variables)
+        path = Path(raw_cwd)
+        if path.is_absolute():
+            return path
+        return branch_workdir / path
+
+    def _runtime_command(self, variables: dict[str, str]) -> list[str]:
+        if self.runtime_command:
+            command = shlex.split(interpolate_template(self.runtime_command, variables))
+        else:
+            command = [
                 sys.executable,
                 "-m",
                 "uvicorn",
@@ -900,13 +983,33 @@ class StateForkBackend:
                 "--host",
                 self.host,
                 "--port",
-                str(port),
-            ],
-            cwd=cwd,
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+                str(variables["PORT"]),
+            ]
+        if not command:
+            raise BranchError("Runtime command is empty")
+        return command
+
+    def state_file_fingerprints(self, work_dir: Path | None = None) -> list[dict[str, Any]]:
+        root = work_dir or self._active_state_root()
+        state_files = getattr(self, "state_files", None)
+        if not state_files:
+            main_db_path = getattr(self, "main_db_path", None)
+            state_files = (Path(main_db_path).name,) if main_db_path else ()
+        payload = []
+        for state_file in state_files:
+            path = Path(state_file)
+            if not path.is_absolute():
+                path = root / path
+            fingerprint = path_fingerprint(path)
+            fingerprint["name"] = state_file
+            payload.append(fingerprint)
+        return payload
+
+    def _active_state_root(self) -> Path:
+        for branch in getattr(self, "branches", {}).values():
+            if branch.status == "running" and branch.work_dir is not None:
+                return branch.work_dir
+        return getattr(self, "project_root", Path("."))
 
     def _post_json(self, base_url: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         import json

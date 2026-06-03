@@ -139,6 +139,18 @@ function renderBackendStatus(status, branch) {
       ),
     );
   }
+  const stateFiles = details.state_files || workspace?.workspace?.state_files || [];
+  if (stateFiles.length) {
+    cards.push(
+      statCard(
+        "State Files",
+        stateFiles.map((file) => file.name || file.path).join(", "),
+        stateFiles
+          .map((file) => (file.exists ? `${(file.sha256 || "").slice(0, 8)} ${file.size_bytes || 0}B` : "missing"))
+          .join(" · "),
+      ),
+    );
+  }
   cards.push(
     statCard("Runtime", branch.status, branch.id),
     statCard("Checkpoints", branch.snapshots?.length ?? 0, "manual save points"),
@@ -404,7 +416,7 @@ async function commitWorkspace() {
     return;
   }
   const app = activeApp();
-  const defaultLabel = `${app?.label || "App"} update`;
+  const defaultLabel = `${app?.label || "App"} app head promotion`;
   const label = window.prompt("Commit label", defaultLabel);
   if (label === null) {
     showResult("Commit canceled");

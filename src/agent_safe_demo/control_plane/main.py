@@ -16,7 +16,12 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from agent_safe_demo.control_plane.app_registry import AppSpec, get_app_spec, list_app_specs
+from agent_safe_demo.control_plane.app_registry import (
+    AppSpec,
+    get_app_spec,
+    list_app_specs,
+    list_manifest_errors,
+)
 from agent_safe_demo.control_plane.branching import (
     BranchError,
     DirtyBranchError,
@@ -72,6 +77,12 @@ def create_branch_backend(app_spec: AppSpec | None = None) -> StateForkBackend:
         app_uvicorn_target_value=selected_app.uvicorn_target,
         app_db_env_var=selected_app.db_env_var,
         health_path=selected_app.health_path,
+        runtime_command=selected_app.runtime_command,
+        runtime_cwd=selected_app.runtime_cwd,
+        runtime_port_env=selected_app.runtime_port_env,
+        state_files=list(selected_app.state_files),
+        state_env=dict(selected_app.state_env),
+        manifest_path=selected_app.manifest_path,
         agent_demo_actions=list(selected_app.agent_demo_actions or []),
     )
 
@@ -230,6 +241,10 @@ def workspace_payload(branch: dict) -> dict:
             "current_snapshot_id": branch.get("current_snapshot_id"),
             "dirty": branch.get("dirty", False),
             "head_commit_id": head_commit["id"] if head_commit and head_commit["active"] else None,
+            "runtime_command": CURRENT_APP.runtime_command,
+            "state_files": branch_backend.state_file_fingerprints(
+                Path(branch["work_dir"]) if branch.get("work_dir") else None
+            ),
         },
         "branch": branch,
         "backend": branch_backend.status(),
@@ -281,6 +296,7 @@ def app_selection_payload() -> dict:
     return {
         "current_app_id": CURRENT_APP.id,
         "apps": [spec.public_dict() for spec in list_app_specs()],
+        "manifest_errors": list_manifest_errors(),
     }
 
 

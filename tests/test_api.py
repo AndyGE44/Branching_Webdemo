@@ -11,11 +11,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from agent_safe_demo.control_plane.branching import (
+    BaseHandle,
     BranchError,
     BranchHandle,
     StateForkBackend,
 )
 from agent_safe_demo.control_plane.commit_store import CommitStore
+from agent_safe_demo.control_plane.manifest import interpolate_template, load_manifest
 
 
 RUN_STATEFORK_INTEGRATION = os.getenv("RUN_STATEFORK_INTEGRATION") == "1"
@@ -70,6 +72,7 @@ def load_controller_app(monkeypatch, tmp_path, auth_password=None):
     for module_name in [
         "agent_safe_demo.control_plane.main",
         "agent_safe_demo.control_plane.app_registry",
+        "agent_safe_demo.control_plane.manifest",
         "agent_safe_demo.app_plane.email_service.app",
         "agent_safe_demo.app_plane.inventory_service.app",
         "agent_safe_demo.main",
@@ -177,6 +180,78 @@ def test_commit_store_records_app_heads(tmp_path):
     assert store.list_commits("inventory") == []
 
 
+def test_statefork_manifest_loads_runtime_contract():
+    manifest = load_manifest(
+        Path("src/agent_safe_demo/app_plane/email_service/statefork.yaml")
+    )
+
+    assert manifest.id == "email"
+    assert manifest.name == "Email Service"
+    assert "agent_safe_demo.app_plane.email_service.app:app" in manifest.runtime.command
+    assert manifest.runtime.cwd == "${BRANCH_WORKDIR}"
+    assert manifest.runtime.port_env == "PORT"
+    assert manifest.state.files == ["demo_mailbox.db"]
+    assert manifest.state.env == {
+        "DEMO_MAILBOX_DB_PATH": "${BRANCH_WORKDIR}/demo_mailbox.db"
+    }
+    assert manifest.observability.state_summary_path == "/api/state"
+    assert (
+        interpolate_template(
+            "${BRANCH_WORKDIR}:${PORT}:${MISSING}",
+            {"BRANCH_WORKDIR": "/tmp/branch", "PORT": 8300},
+        )
+        == "/tmp/branch:8300:${MISSING}"
+    )
+
+
+def test_statefork_manifest_validation_errors_are_readable(tmp_path):
+    manifest_path = tmp_path / "statefork.yaml"
+    manifest_path.write_text("id: broken\nruntime: {}\n")
+
+    with pytest.raises(ValueError, match="Invalid manifest"):
+        load_manifest(manifest_path)
+
+
+def test_app_registry_discovers_manifests_and_reports_errors(tmp_path):
+    from agent_safe_demo.control_plane import app_registry
+
+    specs = app_registry.build_app_specs()
+    assert set(specs) == {"email", "inventory"}
+    assert specs["email"].manifest_path.name == "statefork.yaml"
+    assert specs["email"].state_files == ("demo_mailbox.db",)
+    assert "agent_safe_demo.app_plane.email_service.app:app" in specs["email"].runtime_command
+    assert app_registry.list_manifest_errors() == []
+
+    unsupported = tmp_path / "notes_service"
+    unsupported.mkdir()
+    (unsupported / "statefork.yaml").write_text(
+        """
+        id: notes
+        name: Notes
+        description: Unsupported app
+        runtime:
+          command: "python -m uvicorn notes:app --port ${PORT}"
+          cwd: "."
+          port_env: "PORT"
+          health_path: "/health"
+          ui_path: "/"
+        state:
+          files: ["notes.db"]
+          env: {}
+        observability:
+          state_summary_path: "/state"
+        """
+    )
+
+    fallback_specs = app_registry.build_app_specs(app_plane_dir=tmp_path)
+    errors = app_registry.list_manifest_errors(app_plane_dir=tmp_path)
+
+    assert set(fallback_specs) == {"email", "inventory"}
+    assert fallback_specs["email"].manifest_path is None
+    assert len(errors) == 1
+    assert "No Python adapter registered" in errors[0]["error"]
+
+
 def test_controller_lists_and_switches_registered_apps(monkeypatch, tmp_path):
     app = load_controller_app(monkeypatch, tmp_path)
     with TestClient(app) as client:
@@ -185,12 +260,22 @@ def test_controller_lists_and_switches_registered_apps(monkeypatch, tmp_path):
         backend = client.get("/api/backend")
 
     assert apps.status_code == 200
-    assert apps.json()["current_app_id"] == "email"
-    assert {app["id"] for app in apps.json()["apps"]} == {"email", "inventory"}
+    payload = apps.json()
+    assert payload["current_app_id"] == "email"
+    assert payload["manifest_errors"] == []
+    assert {app["id"] for app in payload["apps"]} == {"email", "inventory"}
+    email_app = next(app for app in payload["apps"] if app["id"] == "email")
+    assert email_app["manifest_loaded"] is True
+    assert email_app["state_files"] == ["demo_mailbox.db"]
+    assert "agent_safe_demo.app_plane.email_service.app:app" in email_app["runtime_command"]
     assert selected.status_code == 200
     assert selected.json()["current_app_id"] == "inventory"
-    assert backend.json()["details"]["app_id"] == "inventory"
-    assert backend.json()["details"]["app_db_env_var"] == "DEMO_INVENTORY_DB_PATH"
+    backend_details = backend.json()["details"]
+    assert backend_details["app_id"] == "inventory"
+    assert backend_details["app_db_env_var"] == "DEMO_INVENTORY_DB_PATH"
+    assert backend_details["manifest_path"].endswith("inventory_service/statefork.yaml")
+    assert backend_details["runtime_port_env"] == "PORT"
+    assert backend_details["state_files"][0]["name"] == "demo_inventory.db"
 
 
 def test_workspace_payload_uses_same_origin_runtime_proxy(monkeypatch, tmp_path):
@@ -712,6 +797,100 @@ def test_commit_rejects_branch_when_statefork_head_changed_after_base(monkeypatc
     assert "Committed StateFork head changed after this branch base was created" in commit.json()["detail"]
     assert [active["id"] for active in branches] == [branch["id"]]
     assert [base["id"] for base in bases if base["is_head"]] == [new_head["id"]]
+
+
+def test_statefork_backend_uses_manifest_runtime_command_and_env(monkeypatch, tmp_path):
+    branch_dir = tmp_path / "branch"
+    branch_dir.mkdir()
+    calls = {}
+
+    class FakeProcess:
+        pid = 4321
+
+        def poll(self):
+            return None
+
+    def fake_popen(command, *, cwd, env, stdout, stderr):
+        calls["command"] = command
+        calls["cwd"] = cwd
+        calls["env"] = env
+        calls["stdout"] = stdout
+        calls["stderr"] = stderr
+        return FakeProcess()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    backend = StateForkBackend(
+        tmp_path,
+        tmp_path / "demo.db",
+        tmp_path,
+        runtime_command="python -m uvicorn demo.app:app --host ${HOST} --port ${PORT}",
+        runtime_cwd="${BRANCH_WORKDIR}",
+        runtime_port_env="APP_PORT",
+        state_files=["demo.db"],
+        state_env={"DEMO_DB": "${BRANCH_WORKDIR}/demo.db"},
+    )
+
+    process = backend._start_branch_process(
+        db_path=branch_dir / "demo.db",
+        port=8765,
+        cwd=branch_dir,
+    )
+
+    assert process.pid == 4321
+    assert calls["command"] == [
+        "python",
+        "-m",
+        "uvicorn",
+        "demo.app:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8765",
+    ]
+    assert calls["cwd"] == branch_dir
+    assert calls["env"]["APP_PORT"] == "8765"
+    assert calls["env"]["DEMO_DB"] == str(branch_dir / "demo.db")
+    assert calls["env"]["DEMO_MAILBOX_DB_PATH"] == str(branch_dir / "demo.db")
+    assert calls["env"]["PYTHONPATH"].startswith(str(tmp_path / "src"))
+
+
+def test_statefork_backend_diff_still_uses_primary_sqlite_state_file(tmp_path):
+    base_db = tmp_path / "base.db"
+    branch_db = tmp_path / "branch.db"
+    for path, rows in [(base_db, ["seed"]), (branch_db, ["seed", "candidate"])]:
+        with sqlite3.connect(path) as conn:
+            conn.execute("CREATE TABLE marker (id TEXT PRIMARY KEY)")
+            conn.executemany("INSERT INTO marker(id) VALUES (?)", [(row,) for row in rows])
+
+    backend = StateForkBackend(
+        tmp_path,
+        base_db,
+        tmp_path,
+        state_files=["branch.db"],
+    )
+    backend.bases["base-1"] = BaseHandle(
+        id="base-1",
+        backend="statefork",
+        label="base",
+        checkpoint_id="checkpoint-1",
+        db_path=base_db,
+        state_summary=backend._read_summary(base_db),
+    )
+    backend.branches["branch-1"] = BranchHandle(
+        id="branch-1",
+        backend="statefork",
+        db_path=branch_db,
+        port=8300,
+        url="http://127.0.0.1:8300",
+        base_id="base-1",
+        work_dir=tmp_path,
+    )
+
+    diff = backend.diff("branch-1")
+
+    assert diff["tables"] == ["marker"]
+    assert diff["counts"]["marker"] == {"main": 1, "branch": 2, "delta": 1}
+    assert backend.state_file_fingerprints(tmp_path)[0]["name"] == "branch.db"
 
 
 def test_statefork_backend_rejects_concurrent_active_branch():

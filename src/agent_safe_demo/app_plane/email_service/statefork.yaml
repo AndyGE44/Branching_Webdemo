@@ -1,0 +1,19 @@
+id: email
+name: Email Service
+description: Mailbox, labels, folders, and draft replies.
+
+runtime:
+  command: "${PROJECT_ROOT}/.venv/bin/uvicorn agent_safe_demo.app_plane.email_service.app:app --host ${HOST} --port ${PORT}"
+  cwd: "${BRANCH_WORKDIR}"
+  port_env: "PORT"
+  health_path: "/api/state"
+  ui_path: "/"
+
+state:
+  files:
+    - "demo_mailbox.db"
+  env:
+    DEMO_MAILBOX_DB_PATH: "${BRANCH_WORKDIR}/demo_mailbox.db"
+
+observability:
+  state_summary_path: "/api/state"
