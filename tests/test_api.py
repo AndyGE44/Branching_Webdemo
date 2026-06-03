@@ -55,7 +55,6 @@ def configure_env(monkeypatch, tmp_path, auth_password=None) -> None:
 def load_mailbox_app(monkeypatch, tmp_path, auth_password=None):
     configure_env(monkeypatch, tmp_path, auth_password)
     sys.modules.pop("agent_safe_demo.app_plane.email_service.app", None)
-    sys.modules.pop("agent_safe_demo.mailbox_app", None)
     module = importlib.import_module("agent_safe_demo.app_plane.email_service.app")
     return module.app
 
@@ -75,8 +74,6 @@ def load_controller_app(monkeypatch, tmp_path, auth_password=None):
         "agent_safe_demo.control_plane.manifest",
         "agent_safe_demo.app_plane.email_service.app",
         "agent_safe_demo.app_plane.inventory_service.app",
-        "agent_safe_demo.main",
-        "agent_safe_demo.mailbox_app",
     ]:
         sys.modules.pop(module_name, None)
     module = importlib.import_module("agent_safe_demo.control_plane.main")
@@ -92,28 +89,6 @@ def mailbox_state() -> dict:
 def get_json(url: str) -> dict:
     with urlrequest.urlopen(url, timeout=10) as response:
         return json.loads(response.read().decode("utf-8"))
-
-
-def test_legacy_entrypoints_delegate_to_new_planes(monkeypatch, tmp_path):
-    configure_env(monkeypatch, tmp_path)
-    for module_name in [
-        "agent_safe_demo.main",
-        "agent_safe_demo.mailbox_app",
-        "agent_safe_demo.branching",
-        "agent_safe_demo.control_plane.main",
-        "agent_safe_demo.app_plane.email_service.app",
-    ]:
-        sys.modules.pop(module_name, None)
-
-    legacy_controller = importlib.import_module("agent_safe_demo.main")
-    control_plane = importlib.import_module("agent_safe_demo.control_plane.main")
-    legacy_mailbox = importlib.import_module("agent_safe_demo.mailbox_app")
-    email_service = importlib.import_module("agent_safe_demo.app_plane.email_service.app")
-    legacy_branching = importlib.import_module("agent_safe_demo.branching")
-
-    assert legacy_controller.app is control_plane.app
-    assert legacy_mailbox.app is email_service.app
-    assert legacy_branching.BranchError is BranchError
 
 
 def test_mailbox_seed_data(monkeypatch, tmp_path):

@@ -21,10 +21,9 @@ The demo is split into two API surfaces:
   controller. It owns app selection, snapshot, restore, runtime startup, and the
   checkpoint UI.
 
-Runtime branches are launched from the selected app registry entry, so the
-managed program does not know it has been branched. The old
-`agent_safe_demo.main`, `agent_safe_demo.mailbox_app`, and
-`agent_safe_demo.branching` modules remain as compatibility entrypoints.
+Runtime branches are launched from the selected app manifest and registry
+entry, so the managed program does not know it has been branched. Control
+plane and app-plane imports should use the package paths above directly.
 
 The app plane is intentionally directory-based: each child under
 `agent_safe_demo/app_plane/` owns one independent app. New apps are registered in
