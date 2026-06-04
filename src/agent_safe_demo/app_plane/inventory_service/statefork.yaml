@@ -3,17 +3,21 @@ name: Inventory Service
 description: Parts, stock levels, reservations, and reorder actions.
 
 runtime:
-  command: "${PROJECT_ROOT}/.venv/bin/uvicorn agent_safe_demo.app_plane.inventory_service.app:app --host ${HOST} --port ${PORT}"
-  cwd: "${BRANCH_WORKDIR}"
+  type: checkpoint_exec
+  command: "python -m uvicorn agent_safe_demo.app_plane.inventory_service.app:app --host ${HOST} --port ${PORT}"
+  cwd: "/"
   port_env: "PORT"
   health_path: "/api/state"
   ui_path: "/"
+
+build:
+  dockerfile_dir: "."
 
 state:
   files:
     - "demo_inventory.db"
   env:
-    DEMO_INVENTORY_DB_PATH: "${BRANCH_WORKDIR}/demo_inventory.db"
+    DEMO_INVENTORY_DB_PATH: "/demo_inventory.db"
 
 observability:
   state_summary_path: "/api/state"

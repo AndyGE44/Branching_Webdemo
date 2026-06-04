@@ -182,9 +182,14 @@ class CheckpointExecRuntimeManager(RuntimeProcessManager):
         return "RUNTIME_ALIVE=1" in stdout
 
     def stop(self, *, manager, pid: int) -> None:
+        pid = int(pid)
         script = (
-            f"kill -TERM {int(pid)} 2>/dev/null || true; "
-            f"for i in 1 2 3 4 5; do kill -0 {int(pid)} 2>/dev/null || exit 0; sleep 1; done; "
-            f"kill -KILL {int(pid)} 2>/dev/null || true"
+            f"kill -TERM {pid} 2>/dev/null || true; "
+            f"for i in 1 2 3 4 5; do "
+            f"if ! kill -0 {pid} 2>/dev/null; then break; fi; "
+            "sleep 1; "
+            "done; "
+            f"if kill -0 {pid} 2>/dev/null; then kill -KILL {pid} 2>/dev/null || true; fi; "
+            "echo RUNTIME_STOPPED=1"
         )
         manager.exec_command(script, timeout=10)

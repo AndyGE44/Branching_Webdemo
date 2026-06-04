@@ -10,6 +10,7 @@ from typing import Any
 from agent_safe_demo.control_plane.manifest import StateForkManifest, interpolate_template, load_manifest
 
 APP_PLANE_DIR = Path(__file__).resolve().parents[1] / "app_plane"
+USER_SELECTABLE_APP_IDS = frozenset({"email", "inventory"})
 
 
 @dataclass(frozen=True)
@@ -219,6 +220,7 @@ def _fallback_app_specs() -> dict[str, AppSpec]:
             agent_demo_actions=adapter.agent_demo_actions,
         )
         for app_id, adapter in APP_ADAPTERS.items()
+        if app_id in USER_SELECTABLE_APP_IDS
     ]
     return {spec.id: spec for spec in specs}
 
@@ -298,6 +300,8 @@ def _manifest_specs(app_plane_dir: Path) -> tuple[dict[str, AppSpec], list[dict[
     for path in _manifest_paths(app_plane_dir):
         try:
             manifest = load_manifest(path)
+            if manifest.id in APP_ADAPTERS and manifest.id not in USER_SELECTABLE_APP_IDS:
+                continue
             if manifest.id in specs:
                 raise ValueError(f"Duplicate manifest id: {manifest.id}")
             specs[manifest.id] = _spec_from_manifest(path, manifest)

@@ -211,6 +211,9 @@ def test_statefork_manifest_loads_runtime_contract():
     manifest = load_manifest(
         Path("src/agent_safe_demo/app_plane/email_service/statefork.yaml")
     )
+    inventory_manifest = load_manifest(
+        Path("src/agent_safe_demo/app_plane/inventory_service/statefork.yaml")
+    )
     kv_manifest = load_manifest(
         Path("src/agent_safe_demo/app_plane/kv_service/statefork.yaml")
     )
@@ -226,6 +229,13 @@ def test_statefork_manifest_loads_runtime_contract():
     assert manifest.state.files == ["demo_mailbox.db"]
     assert manifest.state.env == {"DEMO_MAILBOX_DB_PATH": "/demo_mailbox.db"}
     assert manifest.observability.state_summary_path == "/api/state"
+    assert inventory_manifest.id == "inventory"
+    assert inventory_manifest.runtime.type == "checkpoint_exec"
+    assert inventory_manifest.runtime.cwd == "/"
+    assert inventory_manifest.build is not None
+    assert inventory_manifest.build.dockerfile_dir == "."
+    assert inventory_manifest.state.files == ["demo_inventory.db"]
+    assert inventory_manifest.state.env == {"DEMO_INVENTORY_DB_PATH": "/demo_inventory.db"}
     assert kv_manifest.id == "kv"
     assert kv_manifest.runtime.command.startswith("bash ${PROJECT_ROOT}")
     assert kv_manifest.state.files == ["demo_kv.db"]
@@ -250,12 +260,15 @@ def test_app_registry_discovers_manifests_and_reports_errors(tmp_path):
     from agent_safe_demo.control_plane import app_registry
 
     specs = app_registry.build_app_specs()
-    assert set(specs) == {"email", "inventory", "kv"}
+    assert set(specs) == {"email", "inventory"}
     assert specs["email"].manifest_path.name == "statefork.yaml"
     assert specs["email"].runtime_type == "checkpoint_exec"
     assert specs["email"].build_dockerfile_dir.name == "email_service"
     assert specs["email"].state_files == ("demo_mailbox.db",)
     assert "agent_safe_demo.app_plane.email_service.app:app" in specs["email"].runtime_command
+    assert specs["inventory"].runtime_type == "checkpoint_exec"
+    assert specs["inventory"].build_dockerfile_dir.name == "inventory_service"
+    assert specs["inventory"].state_env == {"DEMO_INVENTORY_DB_PATH": "/demo_inventory.db"}
     assert app_registry.list_manifest_errors() == []
 
     unsupported = tmp_path / "notes_service"
@@ -282,7 +295,7 @@ def test_app_registry_discovers_manifests_and_reports_errors(tmp_path):
     fallback_specs = app_registry.build_app_specs(app_plane_dir=tmp_path)
     errors = app_registry.list_manifest_errors(app_plane_dir=tmp_path)
 
-    assert set(fallback_specs) == {"email", "inventory", "kv"}
+    assert set(fallback_specs) == {"email", "inventory"}
     assert fallback_specs["email"].manifest_path is None
     assert len(errors) == 1
     assert "No Python adapter registered" in errors[0]["error"]
@@ -299,22 +312,25 @@ def test_controller_lists_and_switches_registered_apps(monkeypatch, tmp_path):
     payload = apps.json()
     assert payload["current_app_id"] == "email"
     assert payload["manifest_errors"] == []
-    assert {app["id"] for app in payload["apps"]} == {"email", "inventory", "kv"}
+    assert {app["id"] for app in payload["apps"]} == {"email", "inventory"}
     email_app = next(app for app in payload["apps"] if app["id"] == "email")
     assert email_app["manifest_loaded"] is True
     assert email_app["runtime_type"] == "checkpoint_exec"
     assert email_app["build_dockerfile_dir"].endswith("email_service")
     assert email_app["state_files"] == ["demo_mailbox.db"]
     assert "agent_safe_demo.app_plane.email_service.app:app" in email_app["runtime_command"]
-    kv_app = next(app for app in payload["apps"] if app["id"] == "kv")
-    assert kv_app["agent_demo_enabled"] is False
-    assert "statefork-run.sh" in kv_app["runtime_command"]
+    inventory_app = next(app for app in payload["apps"] if app["id"] == "inventory")
+    assert inventory_app["runtime_type"] == "checkpoint_exec"
+    assert inventory_app["build_dockerfile_dir"].endswith("inventory_service")
+    assert inventory_app["state_files"] == ["demo_inventory.db"]
     assert selected.status_code == 200
     assert selected.json()["current_app_id"] == "inventory"
     backend_details = backend.json()["details"]
     assert backend_details["app_id"] == "inventory"
     assert backend_details["app_db_env_var"] == "DEMO_INVENTORY_DB_PATH"
     assert backend_details["manifest_path"].endswith("inventory_service/statefork.yaml")
+    assert backend_details["runtime_type"] == "checkpoint_exec"
+    assert backend_details["build_dockerfile_dir"].endswith("inventory_service")
     assert backend_details["runtime_port_env"] == "PORT"
     assert backend_details["state_files"][0]["name"] == "demo_inventory.db"
 
@@ -677,24 +693,19 @@ def test_workspace_starts_in_runtime_with_initial_checkpoint(monkeypatch, tmp_pa
     assert backend["totals"] == {"bases": 1, "branches": 1, "snapshots": 1}
 
 
-@requires_statefork_integration
-def test_workspace_supports_script_launched_kv_app(monkeypatch, tmp_path):
-    app = load_controller_app(monkeypatch, tmp_path, app_id="kv")
-    with TestClient(app) as client:
-        try:
-            response = client.get("/api/workspace")
-            assert response.status_code == 200
-            workspace = response.json()
-            branch = workspace["branch"]
-            runtime_state = get_json(f"{branch['url']}/api/state")
-        finally:
-            client.post("/api/reset")
+def test_kv_service_remains_but_is_not_user_selectable(monkeypatch, tmp_path):
+    app = load_kv_app(monkeypatch, tmp_path)
+    with TestClient(app) as kv_client:
+        assert kv_client.get("/api/state").json()["summary"]["entries"] == 3
 
-    assert workspace["app"]["id"] == "kv"
-    assert "statefork-run.sh" in workspace["workspace"]["runtime_command"]
-    assert branch["status"] == "running"
-    assert branch["dirty"] is False
-    assert runtime_state["summary"]["entries"] == 3
+    controller = load_controller_app(monkeypatch, tmp_path)
+    with TestClient(controller) as client:
+        apps = client.get("/api/apps").json()["apps"]
+        selected = client.post("/api/apps/kv/select")
+
+    assert "kv" not in {app["id"] for app in apps}
+    assert selected.status_code == 404
+    assert "Unknown app id" in selected.json()["detail"]
 
 
 @requires_statefork_integration
