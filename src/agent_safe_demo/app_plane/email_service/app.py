@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = Path(os.getenv("DEMO_PROJECT_ROOT", BASE_DIR.parents[3]))
 DB_PATH = Path(os.getenv("DEMO_MAILBOX_DB_PATH", PROJECT_ROOT / "demo_mailbox.db"))
+MEMORY_STATE = {"counter": 0}
 
 
 @asynccontextmanager
@@ -864,6 +865,7 @@ def state() -> dict:
         return {
             "runtime": {
                 "db_path": str(DB_PATH),
+                "memory": dict(MEMORY_STATE),
             },
             "mailbox": {
                 "folders": rows(
@@ -910,9 +912,21 @@ def state() -> dict:
         }
 
 
+@app.get("/api/memory")
+def memory_state() -> dict:
+    return {"memory": dict(MEMORY_STATE)}
+
+
+@app.post("/api/memory/increment")
+def increment_memory() -> dict:
+    MEMORY_STATE["counter"] += 1
+    return {"memory": dict(MEMORY_STATE)}
+
+
 @app.post("/api/reset")
 def reset() -> dict:
     if DB_PATH.exists():
         DB_PATH.unlink()
+    MEMORY_STATE["counter"] = 0
     init_db()
     return {"status": "reset"}

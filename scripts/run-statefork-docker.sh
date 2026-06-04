@@ -11,8 +11,8 @@ if [[ -f .env ]]; then
 fi
 
 export DEMO_STATEFORK_BUILD=1
-export DEMO_STATEFORK_ROOT="${DEMO_STATEFORK_ROOT:-/users/alexxjk/StateFork}"
-export DEMO_STATEFORK_CWD="${DEMO_STATEFORK_CWD:-/users/alexxjk/StateFork}"
+export DEMO_STATEFORK_ROOT="${DEMO_STATEFORK_ROOT:-/users/alexxjk/Andy_StateFork}"
+export DEMO_STATEFORK_CWD="${DEMO_STATEFORK_CWD:-/users/alexxjk/Andy_StateFork}"
 export DEMO_STATEFORK_METHOD="${DEMO_STATEFORK_METHOD:-ckpt_build}"
 export CHECKPOINT_SESSIONS_DIR="${CHECKPOINT_SESSIONS_DIR:-/tmp/checkpoint-sessions-agent-safe-demo}"
 export DEMO_BRANCH_HOST="${DEMO_BRANCH_HOST:-127.0.0.1}"

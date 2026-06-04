@@ -13,8 +13,8 @@ fi
 : "${DEMO_AUTH_PASSWORD:?Set DEMO_AUTH_PASSWORD in .env before starting a public demo}"
 
 export DEMO_AUTH_USER="${DEMO_AUTH_USER:-demo}"
-export DEMO_STATEFORK_ROOT="${DEMO_STATEFORK_ROOT:-/users/alexxjk/StateFork}"
-export DEMO_STATEFORK_CWD="${DEMO_STATEFORK_CWD:-/users/alexxjk/StateFork}"
+export DEMO_STATEFORK_ROOT="${DEMO_STATEFORK_ROOT:-/users/alexxjk/Andy_StateFork}"
+export DEMO_STATEFORK_CWD="${DEMO_STATEFORK_CWD:-/users/alexxjk/Andy_StateFork}"
 export DEMO_STATEFORK_METHOD="${DEMO_STATEFORK_METHOD:-ckpt_build}"
 export CHECKPOINT_SESSIONS_DIR="${CHECKPOINT_SESSIONS_DIR:-/tmp/checkpoint-sessions}"
 export DEMO_BRANCH_HOST="${DEMO_BRANCH_HOST:-127.0.0.1}"

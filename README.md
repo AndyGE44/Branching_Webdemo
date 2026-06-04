@@ -268,8 +268,8 @@ cd ~/Web_Demo_For_Checkpointlite
 . .venv/bin/activate
 
 export DEMO_STATEFORK_BUILD=1
-export DEMO_STATEFORK_ROOT=/users/alexxjk/StateFork
-export DEMO_STATEFORK_CWD=/users/alexxjk/StateFork
+export DEMO_STATEFORK_ROOT=/users/alexxjk/Andy_StateFork
+export DEMO_STATEFORK_CWD=/users/alexxjk/Andy_StateFork
 export DEMO_STATEFORK_METHOD=ckpt_build
 export CHECKPOINT_SESSIONS_DIR=/tmp/checkpoint-sessions-mailbox-demo
 export DEMO_BRANCH_HOST=127.0.0.1
@@ -379,10 +379,10 @@ Assumptions:
 - You can SSH to the VM with `ssh sf-exp`.
 - You have `sudo` on the VM.
 - Your GitHub SSH key can access this private repo.
-- The StateFork source is available at `/users/alexxjk/StateFork`, or you can
+- The StateFork source is available at `/users/alexxjk/Andy_StateFork`, or you can
   clone it there.
 - The checkpoint-lite source or binary is available at
-  `/users/alexxjk/checkpoint-lite`, or you can clone/build it there.
+  `/users/alexxjk/Andy_checkpoint-lite`, or you can clone/build it there.
 
 ### 1. Install System Packages
 
@@ -442,29 +442,29 @@ pytest -q
 
 ### 4. Prepare Checkpoint-Lite
 
-If `/users/alexxjk/checkpoint-lite/checkpoint-lite` already exists:
+If `/users/alexxjk/Andy_checkpoint-lite/checkpoint-lite` already exists:
 
 ```bash
-/users/alexxjk/checkpoint-lite/checkpoint-lite version
+/users/alexxjk/Andy_checkpoint-lite/checkpoint-lite version
 ```
 
 If checkpoint-lite is missing, clone/build it on the VM:
 
 ```bash
 cd /users/alexxjk
-git clone git@github.com:Alex-XJK/checkpoint-lite.git
-cd checkpoint-lite
-go build -o checkpoint-lite cmd/checkpoint-lite/main.go
+git clone git@github.com:AndyGE44/Andy_checkpoint-lite.git
+cd Andy_checkpoint-lite
+go build -o checkpoint-lite ./cmd/waypoint
 go build -o bash_init cmd/bash-init/main.go
 ./checkpoint-lite version
 ```
 
 ### 5. Prepare StateFork
 
-If `/users/alexxjk/StateFork` already exists:
+If `/users/alexxjk/Andy_StateFork` already exists:
 
 ```bash
-cd /users/alexxjk/StateFork
+cd /users/alexxjk/Andy_StateFork
 git pull --ff-only
 ```
 
@@ -472,8 +472,8 @@ If StateFork is missing, clone it on the VM:
 
 ```bash
 cd /users/alexxjk
-git clone git@github.com:Alex-XJK/StateFork.git
-cd StateFork
+git clone git@github.com:AndyGE44/Andy_StateFork.git
+cd Andy_StateFork
 ```
 
 The shared VM demo expects `DEMO_STATEFORK_ROOT` and `DEMO_STATEFORK_CWD` to point
@@ -491,7 +491,7 @@ mkdir -p /tmp/ckpt-lite-min
 echo hello > /tmp/ckpt-lite-min/hello.txt
 
 sudo env CHECKPOINT_SESSIONS_DIR=/tmp/checkpoint-sessions \
-  /users/alexxjk/checkpoint-lite/checkpoint-lite \
+  /users/alexxjk/Andy_checkpoint-lite/checkpoint-lite \
   init /tmp/ckpt-lite-min --quiet
 ```
 

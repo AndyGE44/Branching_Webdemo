@@ -16,7 +16,7 @@ from typing import Any, Callable, Iterator
 from urllib import request
 from urllib.error import HTTPError, URLError
 
-from agent_safe_demo.control_plane.runtime_manager import RuntimeProcessManager
+from agent_safe_demo.control_plane.runtime_manager import CheckpointExecRuntimeManager, RuntimeProcessManager
 
 
 class BranchError(RuntimeError):
@@ -300,6 +300,10 @@ class BranchHandle:
     last_saved_fingerprint: str | None = None
     dirty: bool = False
     process: subprocess.Popen | None = None
+    runtime_type: str = "process"
+    runtime_pid: int | None = None
+    runtime_log_path: str | None = None
+    checkpointing: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -317,7 +321,11 @@ class BranchHandle:
             "snapshots": [snapshot.to_dict() for snapshot in self.snapshots],
             "current_snapshot_id": self.current_snapshot_id,
             "dirty": self.dirty,
-            "pid": self.process.pid if self.process else None,
+            "runtime_type": self.runtime_type,
+            "runtime_pid": self.runtime_pid,
+            "runtime_log_path": self.runtime_log_path,
+            "checkpointing": self.checkpointing,
+            "pid": self.runtime_pid if self.runtime_pid is not None else (self.process.pid if self.process else None),
         }
 
 
@@ -342,6 +350,8 @@ class StateForkBackend:
         runtime_command: str | None = None,
         runtime_cwd: str = ".",
         runtime_port_env: str = "PORT",
+        runtime_type: str = "process",
+        build_dockerfile_dir: Path | None = None,
         state_files: list[str] | tuple[str, ...] | None = None,
         state_env: dict[str, str] | None = None,
         manifest_path: Path | None = None,
@@ -363,10 +373,17 @@ class StateForkBackend:
         self.runtime_command = runtime_command
         self.runtime_cwd = runtime_cwd
         self.runtime_port_env = runtime_port_env
+        self.runtime_type = runtime_type
+        self.build_dockerfile_dir = build_dockerfile_dir
         self.state_files = tuple(state_files or [main_db_path.name])
         self.state_env = dict(state_env or {})
         self.manifest_path = manifest_path
-        self.runtime_manager = RuntimeProcessManager(
+        runtime_manager_cls = (
+            CheckpointExecRuntimeManager
+            if runtime_type == "checkpoint_exec"
+            else RuntimeProcessManager
+        )
+        self.runtime_manager = runtime_manager_cls(
             project_root=project_root,
             host=host,
             app_uvicorn_target=self.app_uvicorn_target,
@@ -402,6 +419,12 @@ class StateForkBackend:
                 "runtime_command": getattr(self, "runtime_command", None),
                 "runtime_cwd": getattr(self, "runtime_cwd", "."),
                 "runtime_port_env": getattr(self, "runtime_port_env", "PORT"),
+                "runtime_type": getattr(self, "runtime_type", "process"),
+                "build_dockerfile_dir": (
+                    str(getattr(self, "build_dockerfile_dir", None))
+                    if getattr(self, "build_dockerfile_dir", None)
+                    else None
+                ),
                 "manifest_path": (
                     str(self.manifest_path) if getattr(self, "manifest_path", None) else None
                 ),
@@ -410,11 +433,9 @@ class StateForkBackend:
                 "statefork_root": str(self.statefork_root),
                 "statefork_cwd": str(self.statefork_cwd),
                 "statefork_method": self.statefork_method,
-                "statefork_build": bool(self.statefork_kwargs.get("build", False)),
+                "statefork_build": self._uses_statefork_build(),
                 "statefork_runtime_mode": (
-                    "docker-build"
-                    if self.statefork_kwargs.get("build", False)
-                    else "init"
+                    "docker-build" if self._uses_statefork_build() else "init"
                 ),
             },
         )
@@ -512,7 +533,9 @@ class StateForkBackend:
 
         branch_id = f"sf-{uuid.uuid4().hex[:8]}"
         port = self._next_port()
-        process = self._start_branch_process(
+        process, runtime_pid, runtime_log_path = self._start_branch_runtime(
+            manager=manager,
+            branch_id=branch_id,
             db_path=branch_db,
             port=port,
             cwd=work_dir,
@@ -529,6 +552,9 @@ class StateForkBackend:
             work_dir=work_dir,
             current_snapshot_id=base.checkpoint_id,
             process=process,
+            runtime_type=self.runtime_type,
+            runtime_pid=runtime_pid,
+            runtime_log_path=runtime_log_path,
         )
         self.branches[branch_id] = branch
         self.branch_environments[branch_id] = str(environment_name)
@@ -654,20 +680,31 @@ class StateForkBackend:
         if manager is None:
             raise BranchError(f"Base {branch.base_id} does not have a StateFork manager")
 
-        self._terminate(branch)
+        if branch.runtime_type != "checkpoint_exec":
+            self._terminate(branch)
 
         snapshot_started_at = time.time()
-        snapshot_id = self._call_statefork(manager.snapshot)
+        with self._quiesce_branch(branch):
+            snapshot_id = self._call_checkpoint_operation(branch, manager.snapshot, failure_value=None)
         if not snapshot_id:
             raise BranchError(f"StateFork commit snapshot failed for branch {branch_id}")
         snapshot_id = str(snapshot_id)
         record_operation(self.operation_stats, "snapshot", snapshot_started_at)
 
         restore_started_at = time.time()
-        ok = self._call_statefork(lambda: manager.restore(snapshot_id))
+        with self._quiesce_branch(branch):
+            ok = self._call_checkpoint_operation(
+                branch,
+                lambda: manager.restore(snapshot_id),
+                failure_value=False,
+            )
         if ok is False:
             raise BranchError(f"StateFork restore failed for committed snapshot {snapshot_id}")
         record_operation(self.operation_stats, "restore", restore_started_at)
+
+        if branch.runtime_type == "checkpoint_exec":
+            self._wait_until_ready(branch)
+            self._terminate(branch)
 
         fingerprint = sqlite_fingerprint(branch.db_path)
         state_summary = self._read_summary(branch.db_path)
@@ -729,6 +766,11 @@ class StateForkBackend:
                 f"Commit or discard the existing branch first: {', '.join(active_branches)}"
             )
 
+    def _uses_statefork_build(self) -> bool:
+        if "build" in self.statefork_kwargs:
+            return bool(self.statefork_kwargs["build"])
+        return self.runtime_type == "checkpoint_exec"
+
     def _create_statefork_manager(self) -> Any:
         if not self.statefork_root.exists():
             raise BranchError(f"StateFork root does not exist: {self.statefork_root}")
@@ -740,15 +782,18 @@ class StateForkBackend:
         except Exception as error:
             raise BranchError(f"Could not import StateFork controller: {error}") from error
 
+        dockerfile_dir = self.build_dockerfile_dir or self.project_root
         kwargs = {
-            "dockerfile_dir": str(self.project_root),
-            "build": False,
+            "dockerfile_dir": str(dockerfile_dir),
+            "build": self._uses_statefork_build(),
             **self.statefork_kwargs,
         }
+        if self.runtime_type == "checkpoint_exec" and not kwargs.get("build"):
+            raise BranchError("checkpoint_exec runtime requires StateFork/checkpoint-lite build mode")
         return self._call_statefork(lambda: create_env_manager(self.statefork_method, **kwargs))
 
     def _initial_build_snapshot_id(self, manager: Any) -> str | None:
-        if not self.statefork_kwargs.get("build"):
+        if not self._uses_statefork_build():
             return None
         for attr in ("last_snapshot_id", "current_snapshot_id"):
             value = getattr(manager, attr, None)
@@ -771,9 +816,12 @@ class StateForkBackend:
         if manager is None:
             raise BranchError(f"Base {branch.base_id} does not have a StateFork manager")
         started_at = time.time()
-        snapshot_id = self._call_statefork(manager.snapshot)
+        with self._quiesce_branch(branch):
+            snapshot_id = self._call_checkpoint_operation(branch, manager.snapshot, failure_value=None)
         if not snapshot_id:
             raise BranchError(f"StateFork snapshot failed after {action}")
+        if branch.runtime_type == "checkpoint_exec":
+            self._wait_until_ready(branch)
         snapshot_id = str(snapshot_id)
         record_operation(self.operation_stats, "snapshot", started_at)
         parent_id = branch.current_snapshot_id or branch.base_checkpoint_id
@@ -799,17 +847,30 @@ class StateForkBackend:
         manager = self.base_managers.get(branch.base_id)
         if manager is None:
             raise BranchError(f"Base {branch.base_id} does not have a StateFork manager")
-        self._terminate(branch)
         started_at = time.time()
-        ok = self._call_statefork(lambda: manager.restore(snapshot.id))
-        if ok is False:
-            raise BranchError(f"StateFork restore failed for snapshot {snapshot.id}")
-        record_operation(self.operation_stats, "restore", started_at)
-        branch.process = self._start_branch_process(
-            db_path=branch.db_path,
-            port=branch.port,
-            cwd=branch.work_dir,
-        )
+        if branch.runtime_type == "checkpoint_exec":
+            with self._quiesce_branch(branch):
+                ok = self._call_checkpoint_operation(
+                    branch,
+                    lambda: manager.restore(snapshot.id),
+                    failure_value=False,
+                )
+            if ok is False:
+                raise BranchError(f"StateFork restore failed for snapshot {snapshot.id}")
+            record_operation(self.operation_stats, "restore", started_at)
+        else:
+            self._terminate(branch)
+            ok = self._call_statefork(lambda: manager.restore(snapshot.id))
+            if ok is False:
+                raise BranchError(f"StateFork restore failed for snapshot {snapshot.id}")
+            record_operation(self.operation_stats, "restore", started_at)
+            branch.process, _, _ = self._start_branch_runtime(
+                manager=manager,
+                branch_id=branch.id,
+                db_path=branch.db_path,
+                port=branch.port,
+                cwd=branch.work_dir,
+            )
         branch.status = "running"
         branch.current_snapshot_id = snapshot.id
         branch.last_saved_fingerprint = snapshot.fingerprint or sqlite_fingerprint(branch.db_path)
@@ -824,6 +885,23 @@ class StateForkBackend:
             self._call_statefork(manager.cleanup)
         except Exception:
             pass
+
+    def _call_checkpoint_operation(
+        self,
+        branch: BranchHandle,
+        fn: Callable[[], Any],
+        *,
+        failure_value: Any,
+    ) -> Any:
+        attempts = 2 if branch.runtime_type == "checkpoint_exec" else 1
+        result = failure_value
+        for attempt in range(attempts):
+            result = self._call_statefork(fn)
+            if result != failure_value:
+                return result
+            if attempt + 1 < attempts:
+                time.sleep(0.75)
+        return result
 
     def _call_statefork(self, fn: Callable[[], Any]) -> Any:
         with self._statefork_working_directory():
@@ -879,7 +957,16 @@ class StateForkBackend:
     def _refresh_status(self, branch: BranchHandle) -> None:
         if branch.status in {"committed", "discarded"}:
             return
-        if branch.process and branch.process.poll() is not None:
+        if branch.runtime_type == "checkpoint_exec":
+            manager = self._manager_for_branch(branch)
+            if manager is not None and branch.runtime_pid is not None:
+                is_running = self._call_statefork(
+                    lambda: self.runtime_manager.is_running(manager=manager, pid=branch.runtime_pid)
+                )
+                if not is_running:
+                    branch.status = "exited"
+                    return
+        elif branch.process and branch.process.poll() is not None:
             branch.status = "exited"
             return
         self._branch_is_dirty(branch)
@@ -919,6 +1006,13 @@ class StateForkBackend:
         return self._require_base(base["id"])
 
     def _terminate(self, branch: BranchHandle) -> None:
+        if branch.runtime_type == "checkpoint_exec":
+            manager = self._manager_for_branch(branch)
+            if manager is not None and branch.runtime_pid is not None:
+                self._call_statefork(
+                    lambda: self.runtime_manager.stop(manager=manager, pid=branch.runtime_pid)
+                )
+            return
         if branch.process and branch.process.poll() is None:
             self._signal_runtime(branch.process, signal.SIGTERM)
             try:
@@ -936,6 +1030,45 @@ class StateForkBackend:
             else:
                 process.kill()
 
+    def _manager_for_branch(self, branch: BranchHandle) -> Any | None:
+        if not branch.base_id:
+            return None
+        return self.base_managers.get(branch.base_id)
+
+    @contextmanager
+    def _quiesce_branch(self, branch: BranchHandle) -> Iterator[None]:
+        if branch.runtime_type != "checkpoint_exec":
+            yield
+            return
+        branch.checkpointing = True
+        try:
+            yield
+        finally:
+            branch.checkpointing = False
+
+    def _start_branch_runtime(
+        self,
+        *,
+        manager: Any,
+        branch_id: str,
+        db_path: Path,
+        port: int,
+        cwd: Path,
+    ) -> tuple[subprocess.Popen | None, int | None, str | None]:
+        if self.runtime_type == "checkpoint_exec":
+            handle = self._call_statefork(
+                lambda: self.runtime_manager.start(
+                    manager=manager,
+                    db_path=db_path,
+                    port=port,
+                    work_dir=cwd,
+                    branch_id=branch_id,
+                )
+            )
+            return None, handle.pid, handle.log_path
+        process = self.runtime_manager.start(db_path=db_path, port=port, work_dir=cwd)
+        return process, None, None
+
     def _start_branch_process(
         self,
         *,
@@ -943,7 +1076,16 @@ class StateForkBackend:
         port: int,
         cwd: Path,
     ) -> subprocess.Popen:
-        return self.runtime_manager.start(db_path=db_path, port=port, work_dir=cwd)
+        process, _, _ = self._start_branch_runtime(
+            manager=None,
+            branch_id="manual",
+            db_path=db_path,
+            port=port,
+            cwd=cwd,
+        )
+        if process is None:
+            raise BranchError("checkpoint_exec runtime requires _start_branch_runtime")
+        return process
 
     def state_file_fingerprints(self, work_dir: Path | None = None) -> list[dict[str, Any]]:
         root = work_dir or self._active_state_root()

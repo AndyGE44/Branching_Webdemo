@@ -61,14 +61,14 @@ def statefork_kwargs_from_env() -> dict:
 
 def create_branch_backend(app_spec: AppSpec | None = None) -> StateForkBackend:
     selected_app = app_spec or CURRENT_APP
+    default_statefork_root = selected_app.project_root.parent / "Andy_StateFork"
+    statefork_root = Path(os.getenv("DEMO_STATEFORK_ROOT", default_statefork_root))
     return StateForkBackend(
         selected_app.project_root,
         selected_app.db_path,
-        statefork_root=Path(
-            os.getenv("DEMO_STATEFORK_ROOT", selected_app.project_root.parent / "StateFork")
-        ),
+        statefork_root=statefork_root,
         statefork_method=os.getenv("DEMO_STATEFORK_METHOD", "ckpt_build"),
-        statefork_cwd=Path(os.getenv("DEMO_STATEFORK_CWD", str(selected_app.project_root))),
+        statefork_cwd=Path(os.getenv("DEMO_STATEFORK_CWD", str(statefork_root))),
         statefork_kwargs=statefork_kwargs_from_env(),
         host=os.getenv("DEMO_BRANCH_HOST", "127.0.0.1"),
         port_start=int(os.getenv("DEMO_BRANCH_PORT_START", "8300")),
@@ -80,6 +80,8 @@ def create_branch_backend(app_spec: AppSpec | None = None) -> StateForkBackend:
         runtime_command=selected_app.runtime_command,
         runtime_cwd=selected_app.runtime_cwd,
         runtime_port_env=selected_app.runtime_port_env,
+        runtime_type=selected_app.runtime_type,
+        build_dockerfile_dir=selected_app.build_dockerfile_dir,
         state_files=list(selected_app.state_files),
         state_env=dict(selected_app.state_env),
         manifest_path=selected_app.manifest_path,
@@ -342,6 +344,9 @@ async def runtime_proxy(request: Request, path: str = "") -> Response:
         branch = ensure_workspace()["branch"]
     except BranchError as error:
         return branch_error(error)
+
+    if branch.get("checkpointing"):
+        return JSONResponse({"detail": "Runtime is checkpointing; retry shortly."}, status_code=503)
 
     body = await request.body()
     target = runtime_target_url(branch, path, request.scope.get("query_string", b""))

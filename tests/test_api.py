@@ -18,13 +18,18 @@ from agent_safe_demo.control_plane.branching import (
 )
 from agent_safe_demo.control_plane.commit_store import CommitStore
 from agent_safe_demo.control_plane.manifest import interpolate_template, load_manifest
-from agent_safe_demo.control_plane.runtime_manager import RuntimeProcessManager
+from agent_safe_demo.control_plane.runtime_manager import CheckpointExecRuntimeManager, RuntimeProcessManager
 
 
 RUN_STATEFORK_INTEGRATION = os.getenv("RUN_STATEFORK_INTEGRATION") == "1"
+RUN_LIVE_MEMORY_INTEGRATION = os.getenv("RUN_LIVE_MEMORY_INTEGRATION") == "1"
 requires_statefork_integration = pytest.mark.skipif(
     not RUN_STATEFORK_INTEGRATION,
     reason="requires real StateFork integration",
+)
+requires_live_memory_integration = pytest.mark.skipif(
+    not RUN_LIVE_MEMORY_INTEGRATION,
+    reason="requires real live uvicorn memory checkpoint integration",
 )
 
 def configure_env(monkeypatch, tmp_path, auth_password=None) -> None:
@@ -39,11 +44,11 @@ def configure_env(monkeypatch, tmp_path, auth_password=None) -> None:
     monkeypatch.delenv("DEMO_APP_ID", raising=False)
     monkeypatch.setenv(
         "DEMO_STATEFORK_ROOT",
-        os.getenv("DEMO_STATEFORK_ROOT", "/users/alexxjk/StateFork"),
+        os.getenv("DEMO_STATEFORK_ROOT", "/users/alexxjk/Andy_StateFork"),
     )
     monkeypatch.setenv(
         "DEMO_STATEFORK_CWD",
-        os.getenv("DEMO_STATEFORK_CWD", "/users/alexxjk/StateFork"),
+        os.getenv("DEMO_STATEFORK_CWD", "/users/alexxjk/Andy_StateFork"),
     )
     monkeypatch.setenv("DEMO_STATEFORK_METHOD", os.getenv("DEMO_STATEFORK_METHOD", "ckpt_build"))
     monkeypatch.setenv("DEMO_BRANCH_PORT_START", os.getenv("DEMO_BRANCH_PORT_START", "8300"))
@@ -116,6 +121,22 @@ def test_mailbox_seed_data(monkeypatch, tmp_path):
     assert mailbox["unread"] == 3
     assert mailbox["drafts"] == 1
     assert {"folder": "Inbox", "count": 4} in mailbox["folders"]
+
+
+def test_mailbox_memory_state_is_process_local(monkeypatch, tmp_path):
+    app = load_mailbox_app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        before = client.get("/api/memory")
+        incremented = client.post("/api/memory/increment")
+        state = client.get("/api/state")
+        reset = client.post("/api/reset")
+        after_reset = client.get("/api/memory")
+
+    assert before.json()["memory"] == {"counter": 0}
+    assert incremented.json()["memory"] == {"counter": 1}
+    assert state.json()["runtime"]["memory"] == {"counter": 1}
+    assert reset.status_code == 200
+    assert after_reset.json()["memory"] == {"counter": 0}
 
 
 def test_inventory_app_seed_and_reservation(monkeypatch, tmp_path):
@@ -196,13 +217,14 @@ def test_statefork_manifest_loads_runtime_contract():
 
     assert manifest.id == "email"
     assert manifest.name == "Email Service"
+    assert manifest.runtime.type == "checkpoint_exec"
     assert "agent_safe_demo.app_plane.email_service.app:app" in manifest.runtime.command
-    assert manifest.runtime.cwd == "${BRANCH_WORKDIR}"
+    assert manifest.runtime.cwd == "/"
     assert manifest.runtime.port_env == "PORT"
+    assert manifest.build is not None
+    assert manifest.build.dockerfile_dir == "."
     assert manifest.state.files == ["demo_mailbox.db"]
-    assert manifest.state.env == {
-        "DEMO_MAILBOX_DB_PATH": "${BRANCH_WORKDIR}/demo_mailbox.db"
-    }
+    assert manifest.state.env == {"DEMO_MAILBOX_DB_PATH": "/demo_mailbox.db"}
     assert manifest.observability.state_summary_path == "/api/state"
     assert kv_manifest.id == "kv"
     assert kv_manifest.runtime.command.startswith("bash ${PROJECT_ROOT}")
@@ -230,6 +252,8 @@ def test_app_registry_discovers_manifests_and_reports_errors(tmp_path):
     specs = app_registry.build_app_specs()
     assert set(specs) == {"email", "inventory", "kv"}
     assert specs["email"].manifest_path.name == "statefork.yaml"
+    assert specs["email"].runtime_type == "checkpoint_exec"
+    assert specs["email"].build_dockerfile_dir.name == "email_service"
     assert specs["email"].state_files == ("demo_mailbox.db",)
     assert "agent_safe_demo.app_plane.email_service.app:app" in specs["email"].runtime_command
     assert app_registry.list_manifest_errors() == []
@@ -278,6 +302,8 @@ def test_controller_lists_and_switches_registered_apps(monkeypatch, tmp_path):
     assert {app["id"] for app in payload["apps"]} == {"email", "inventory", "kv"}
     email_app = next(app for app in payload["apps"] if app["id"] == "email")
     assert email_app["manifest_loaded"] is True
+    assert email_app["runtime_type"] == "checkpoint_exec"
+    assert email_app["build_dockerfile_dir"].endswith("email_service")
     assert email_app["state_files"] == ["demo_mailbox.db"]
     assert "agent_safe_demo.app_plane.email_service.app:app" in email_app["runtime_command"]
     kv_app = next(app for app in payload["apps"] if app["id"] == "kv")
@@ -1079,3 +1105,35 @@ def test_reset_clears_bases_branches_and_mailbox_state(monkeypatch, tmp_path):
     assert len(state["messages"]) == 5
     assert len(state["drafts"]) == 1
     assert len(state["audit_log"]) == 1
+
+
+@requires_live_memory_integration
+def test_live_uvicorn_memory_counter_survives_checkpoint_restore(monkeypatch, tmp_path):
+    monkeypatch.setenv("DEMO_BRANCH_PORT_START", os.getenv("DEMO_BRANCH_PORT_START", "18400"))
+    monkeypatch.setenv(
+        "CHECKPOINT_SESSIONS_DIR",
+        os.getenv("CHECKPOINT_SESSIONS_DIR", "/tmp/checkpoint-sessions-live-memory-test"),
+    )
+    app = load_controller_app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        try:
+            workspace = client.get("/api/workspace")
+            assert workspace.status_code == 200
+            assert workspace.json()["branch"]["runtime_type"] == "checkpoint_exec"
+
+            assert client.get("/runtime/api/memory").json()["memory"] == {"counter": 0}
+            assert client.post("/runtime/api/memory/increment").json()["memory"] == {"counter": 1}
+            snapshot = client.post(
+                "/api/workspace/snapshots",
+                json={"label": "memory counter one"},
+            ).json()["snapshot"]
+            assert client.post("/runtime/api/memory/increment").json()["memory"] == {"counter": 2}
+
+            restored = client.post(
+                "/api/workspace/restore",
+                json={"snapshot_id": snapshot["id"], "force": True},
+            )
+            assert restored.status_code == 200
+            assert client.get("/runtime/api/memory").json()["memory"] == {"counter": 1}
+        finally:
+            client.post("/api/workspace/reset")

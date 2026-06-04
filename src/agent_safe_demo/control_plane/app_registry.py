@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from agent_safe_demo.control_plane.manifest import StateForkManifest, load_manifest
+from agent_safe_demo.control_plane.manifest import StateForkManifest, interpolate_template, load_manifest
 
 APP_PLANE_DIR = Path(__file__).resolve().parents[1] / "app_plane"
 
@@ -33,6 +33,8 @@ class AppSpec:
     runtime_command: str | None = None
     runtime_cwd: str = "."
     runtime_port_env: str = "PORT"
+    runtime_type: str = "process"
+    build_dockerfile_dir: Path | None = None
     state_files: tuple[str, ...] = field(default_factory=tuple)
     state_env: dict[str, str] = field(default_factory=dict)
 
@@ -54,6 +56,8 @@ class AppSpec:
             "runtime_command": self.runtime_command,
             "runtime_cwd": self.runtime_cwd,
             "runtime_port_env": self.runtime_port_env,
+            "runtime_type": self.runtime_type,
+            "build_dockerfile_dir": str(self.build_dockerfile_dir) if self.build_dockerfile_dir else None,
             "state_files": list(self.state_files),
             "state_env_keys": sorted(self.state_env),
         }
@@ -229,6 +233,23 @@ def _primary_env_var(manifest: StateForkManifest, adapter: PythonAppAdapter) -> 
     return adapter.db_env_var
 
 
+def _build_dockerfile_dir(path: Path, manifest: StateForkManifest, module: Any) -> Path | None:
+    if manifest.build is None:
+        return None
+    project_root = Path(module.PROJECT_ROOT)
+    raw = interpolate_template(
+        manifest.build.dockerfile_dir,
+        {
+            "APP_DIR": str(path.parent),
+            "PROJECT_ROOT": str(project_root),
+        },
+    )
+    dockerfile_dir = Path(raw)
+    if not dockerfile_dir.is_absolute():
+        dockerfile_dir = path.parent / dockerfile_dir
+    return dockerfile_dir.resolve()
+
+
 def _spec_from_manifest(path: Path, manifest: StateForkManifest) -> AppSpec:
     adapter = APP_ADAPTERS.get(manifest.id)
     if adapter is None:
@@ -258,6 +279,8 @@ def _spec_from_manifest(path: Path, manifest: StateForkManifest) -> AppSpec:
         runtime_command=manifest.runtime.command,
         runtime_cwd=manifest.runtime.cwd,
         runtime_port_env=manifest.runtime.port_env,
+        runtime_type=manifest.runtime.type,
+        build_dockerfile_dir=_build_dockerfile_dir(path, manifest, module),
         state_files=tuple(manifest.state.files),
         state_env=dict(manifest.state.env),
     )

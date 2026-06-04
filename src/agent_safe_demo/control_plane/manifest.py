@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -14,6 +14,7 @@ _TEMPLATE_RE = re.compile(r"\$\{([A-Z0-9_]+)\}")
 class RuntimeManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    type: Literal["process", "checkpoint_exec"] = "process"
     command: str = Field(min_length=1)
     cwd: str = "."
     port_env: str = "PORT"
@@ -56,6 +57,20 @@ class StateManifest(BaseModel):
         return normalized
 
 
+class BuildManifest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dockerfile_dir: str = "."
+
+    @field_validator("dockerfile_dir")
+    @classmethod
+    def dockerfile_dir_not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("value cannot be blank")
+        return stripped
+
+
 class ObservabilityManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -79,6 +94,7 @@ class StateForkManifest(BaseModel):
     runtime: RuntimeManifest
     state: StateManifest
     observability: ObservabilityManifest
+    build: BuildManifest | None = None
 
     @field_validator("id", "name")
     @classmethod

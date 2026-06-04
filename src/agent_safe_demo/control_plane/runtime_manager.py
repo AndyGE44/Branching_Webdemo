@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -16,6 +17,12 @@ class RuntimeLaunch:
     cwd: Path
     env: dict[str, str]
     variables: dict[str, str]
+
+
+@dataclass(frozen=True)
+class CheckpointRuntimeHandle:
+    pid: int
+    log_path: str
 
 
 def pythonpath_for(root: Path) -> str:
@@ -115,3 +122,69 @@ class RuntimeProcessManager:
         if not command:
             raise ValueError("Runtime command is empty")
         return command
+
+
+class CheckpointExecRuntimeManager(RuntimeProcessManager):
+    """Starts app runtimes as children of checkpoint-lite's managed shell."""
+
+    def build_launch(self, *, db_path: Path, port: int, work_dir: Path) -> RuntimeLaunch:
+        variables = self.runtime_variables(db_path=db_path, port=port, work_dir=work_dir)
+        env = {}
+        env[self.app_db_env_var] = f"/{db_path.name}"
+        env[self.runtime_port_env] = str(port)
+        for key, value in self.state_env.items():
+            env[key] = interpolate_template(value, variables)
+        env["PYTHONPATH"] = "/src"
+        return RuntimeLaunch(
+            command=self.runtime_command_args(variables),
+            cwd=self.runtime_working_directory(work_dir, variables),
+            env=env,
+            variables=variables,
+        )
+
+    def runtime_working_directory(self, work_dir: Path, variables: dict[str, str]) -> Path:
+        raw_cwd = interpolate_template(self.runtime_cwd or "/", variables)
+        return Path(raw_cwd)
+
+    def start(
+        self,
+        *,
+        manager,
+        db_path: Path,
+        port: int,
+        work_dir: Path,
+        branch_id: str,
+    ) -> CheckpointRuntimeHandle:
+        launch = self.build_launch(db_path=db_path, port=port, work_dir=work_dir)
+        log_path = f"/tmp/{branch_id}-runtime.log"
+        assignments = " ".join(
+            f"{shlex.quote(key)}={shlex.quote(value)}"
+            for key, value in sorted(launch.env.items())
+        )
+        command = shlex.join(launch.command)
+        cwd = shlex.quote(str(launch.cwd))
+        script = (
+            f"cd {cwd} && "
+            f"{assignments} {command} > {shlex.quote(log_path)} 2>&1 & "
+            "printf 'RUNTIME_PID=%s\\n' \"$!\""
+        )
+        returncode, stdout, stderr = manager.exec_command(script, timeout=10)
+        if returncode != 0:
+            raise RuntimeError(f"checkpoint exec launch failed: {stderr or stdout}")
+        match = re.search(r"RUNTIME_PID=(\d+)", stdout)
+        if match is None:
+            raise RuntimeError(f"checkpoint exec launch did not return a runtime PID: {stdout!r}")
+        return CheckpointRuntimeHandle(pid=int(match.group(1)), log_path=log_path)
+
+    def is_running(self, *, manager, pid: int) -> bool:
+        script = f"if kill -0 {int(pid)} 2>/dev/null; then echo RUNTIME_ALIVE=1; else echo RUNTIME_ALIVE=0; fi"
+        _, stdout, _ = manager.exec_command(script, timeout=5)
+        return "RUNTIME_ALIVE=1" in stdout
+
+    def stop(self, *, manager, pid: int) -> None:
+        script = (
+            f"kill -TERM {int(pid)} 2>/dev/null || true; "
+            f"for i in 1 2 3 4 5; do kill -0 {int(pid)} 2>/dev/null || exit 0; sleep 1; done; "
+            f"kill -KILL {int(pid)} 2>/dev/null || true"
+        )
+        manager.exec_command(script, timeout=10)
