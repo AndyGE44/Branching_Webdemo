@@ -54,6 +54,12 @@ button.danger { color: var(--danger); border-color: #e4b8b8; }
 .snapshot-tree ol { list-style: none; padding: 10px 0 0; margin: 10px 0 0; border-top: 1px solid var(--line); display: grid; gap: 12px; }
 .snapshot-tree p { color: var(--muted); font-size: 12px; margin-top: 3px; overflow-wrap: anywhere; }
 .checkpoint-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.state-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+.memory-control { min-height: 38px; display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 8px; padding: 4px 4px 4px 10px; background: #fbfcfa; }
+.memory-control[hidden] { display: none; }
+.memory-control span { color: var(--muted); font-size: 12px; font-weight: 700; }
+.memory-control strong { min-width: 2ch; font-size: 18px; line-height: 1; }
+.memory-control button { min-height: 30px; padding: 0 9px; }
 .state-dashboard { display: grid; gap: 12px; }
 .state-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .state-summary div { border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: #fbfcfa; }

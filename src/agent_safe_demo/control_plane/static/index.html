@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Agent-Safe Workspace</title>
-    <link rel="stylesheet" href="/static/styles.css?v=21" />
+    <link rel="stylesheet" href="/static/styles.css?v=22" />
   </head>
   <body>
     <header class="topbar">
@@ -79,12 +79,19 @@
       <section class="panel state-panel">
         <div class="panel-header">
           <h2>Runtime State</h2>
-          <span id="lastResult" class="result-pill">Ready</span>
+          <div class="state-actions">
+            <div id="memoryControl" class="memory-control" hidden>
+              <span>Memory</span>
+              <strong id="memoryCounter">0</strong>
+              <button id="incrementMemoryBtn" type="button">+1</button>
+            </div>
+            <span id="lastResult" class="result-pill">Ready</span>
+          </div>
         </div>
         <div id="stateView" class="state-dashboard"></div>
       </section>
     </main>
 
-    <script src="/static/app.js?v=21"></script>
+    <script src="/static/app.js?v=22"></script>
   </body>
 </html>

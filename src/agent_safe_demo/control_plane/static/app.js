@@ -15,6 +15,9 @@ const commitHistoryEl = document.querySelector("#commitHistory");
 const snapshotLabelInput = document.querySelector("#snapshotLabelInput");
 const commitBtn = document.querySelector("#commitBtn");
 const runAgentBtn = document.querySelector("#runAgentBtn");
+const memoryControlEl = document.querySelector("#memoryControl");
+const memoryCounterEl = document.querySelector("#memoryCounter");
+const incrementMemoryBtn = document.querySelector("#incrementMemoryBtn");
 
 let apps = [];
 let currentAppId = null;
@@ -375,11 +378,33 @@ async function refreshState() {
   return state;
 }
 
+function renderMemory(payload) {
+  const counter = payload?.memory?.counter;
+  if (counter === undefined || counter === null) {
+    memoryControlEl.hidden = true;
+    return;
+  }
+  memoryCounterEl.textContent = counter;
+  memoryControlEl.hidden = false;
+}
+
+async function refreshMemory() {
+  try {
+    const payload = await runtimeRequest("/api/memory");
+    renderMemory(payload);
+    return payload;
+  } catch {
+    memoryControlEl.hidden = true;
+    return null;
+  }
+}
+
 async function refresh() {
   if (!apps.length) {
     await refreshApps();
   }
   await refreshWorkspace();
+  await refreshMemory();
   try {
     await refreshState();
   } catch (error) {
@@ -511,6 +536,13 @@ runAgentBtn.addEventListener("click", async () => {
     showResult(error.message, false);
     await refreshWorkspace();
   }
+});
+
+incrementMemoryBtn.addEventListener("click", async () => {
+  await mutate("Memory incremented", async () => {
+    const payload = await runtimeRequest("/api/memory/increment", { method: "POST" });
+    renderMemory(payload);
+  });
 });
 
 document.querySelector("#resetBtn").addEventListener("click", async () => {
