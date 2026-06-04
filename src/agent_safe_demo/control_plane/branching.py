@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-import shlex
+import signal
 import socket
 import sqlite3
 import subprocess
@@ -16,7 +16,7 @@ from typing import Any, Callable, Iterator
 from urllib import request
 from urllib.error import HTTPError, URLError
 
-from agent_safe_demo.control_plane.manifest import interpolate_template
+from agent_safe_demo.control_plane.runtime_manager import RuntimeProcessManager
 
 
 class BranchError(RuntimeError):
@@ -74,19 +74,6 @@ def ensure_branch_base_is_current_head(
             "Committed StateFork head changed after this branch base was created. "
             "Discard this branch or create a new branch from the current head before committing."
         )
-
-
-def pythonpath_for(root: Path) -> str:
-    src_path = str(root / "src")
-    existing = os.environ.get("PYTHONPATH")
-    if existing:
-        return f"{src_path}{os.pathsep}{existing}"
-    return src_path
-
-
-def runtime_pythonpath_for(project_root: Path, work_dir: Path) -> str:
-    root = work_dir if (work_dir / "src").exists() else project_root
-    return pythonpath_for(root)
 
 
 DEFAULT_APP_UVICORN_TARGET = "agent_safe_demo.app_plane.email_service.app:app"
@@ -379,6 +366,16 @@ class StateForkBackend:
         self.state_files = tuple(state_files or [main_db_path.name])
         self.state_env = dict(state_env or {})
         self.manifest_path = manifest_path
+        self.runtime_manager = RuntimeProcessManager(
+            project_root=project_root,
+            host=host,
+            app_uvicorn_target=self.app_uvicorn_target,
+            app_db_env_var=app_db_env_var,
+            runtime_command=runtime_command,
+            runtime_cwd=runtime_cwd,
+            runtime_port_env=runtime_port_env,
+            state_env=self.state_env,
+        )
         self.agent_demo_actions = list(AGENT_DEMO_ACTIONS if agent_demo_actions is None else agent_demo_actions)
         self.name = "statefork"
         self.bases: dict[str, BaseHandle] = {}
@@ -923,12 +920,21 @@ class StateForkBackend:
 
     def _terminate(self, branch: BranchHandle) -> None:
         if branch.process and branch.process.poll() is None:
-            branch.process.terminate()
+            self._signal_runtime(branch.process, signal.SIGTERM)
             try:
                 branch.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                branch.process.kill()
+                self._signal_runtime(branch.process, signal.SIGKILL)
                 branch.process.wait(timeout=5)
+
+    def _signal_runtime(self, process: subprocess.Popen, sig: int) -> None:
+        try:
+            os.killpg(os.getpgid(process.pid), sig)
+        except (AttributeError, ProcessLookupError, OSError):
+            if sig == signal.SIGTERM:
+                process.terminate()
+            else:
+                process.kill()
 
     def _start_branch_process(
         self,
@@ -937,57 +943,7 @@ class StateForkBackend:
         port: int,
         cwd: Path,
     ) -> subprocess.Popen:
-        env = os.environ.copy()
-        variables = self._runtime_variables(db_path=db_path, port=port, cwd=cwd)
-        env[self.app_db_env_var] = str(db_path)
-        env[self.runtime_port_env] = str(port)
-        for key, value in self.state_env.items():
-            env[key] = interpolate_template(value, variables)
-        env["PYTHONPATH"] = runtime_pythonpath_for(self.project_root, cwd)
-
-        runtime_cwd = self._runtime_cwd(cwd, variables)
-        command = self._runtime_command(variables)
-        return subprocess.Popen(
-            command,
-            cwd=runtime_cwd,
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-
-    def _runtime_variables(self, *, db_path: Path, port: int, cwd: Path) -> dict[str, str]:
-        return {
-            "PORT": str(port),
-            "HOST": self.host,
-            "BRANCH_WORKDIR": str(cwd),
-            "PROJECT_ROOT": str(self.project_root),
-            "PRIMARY_STATE_PATH": str(db_path),
-        }
-
-    def _runtime_cwd(self, branch_workdir: Path, variables: dict[str, str]) -> Path:
-        raw_cwd = interpolate_template(self.runtime_cwd or ".", variables)
-        path = Path(raw_cwd)
-        if path.is_absolute():
-            return path
-        return branch_workdir / path
-
-    def _runtime_command(self, variables: dict[str, str]) -> list[str]:
-        if self.runtime_command:
-            command = shlex.split(interpolate_template(self.runtime_command, variables))
-        else:
-            command = [
-                sys.executable,
-                "-m",
-                "uvicorn",
-                self.app_uvicorn_target,
-                "--host",
-                self.host,
-                "--port",
-                str(variables["PORT"]),
-            ]
-        if not command:
-            raise BranchError("Runtime command is empty")
-        return command
+        return self.runtime_manager.start(db_path=db_path, port=port, work_dir=cwd)
 
     def state_file_fingerprints(self, work_dir: Path | None = None) -> list[dict[str, Any]]:
         root = work_dir or self._active_state_root()

@@ -65,6 +65,8 @@ class PythonAppAdapter:
     uvicorn_target: str
     db_env_var: str
     db_filename: str
+    label: str
+    description: str
     agent_demo_label: str
     agent_demo_actions: Sequence[dict[str, Any]] | None
 
@@ -140,6 +142,8 @@ APP_ADAPTERS = {
         uvicorn_target="agent_safe_demo.app_plane.email_service.app:app",
         db_env_var="DEMO_MAILBOX_DB_PATH",
         db_filename="demo_mailbox.db",
+        label="Email Service",
+        description="Mailbox, labels, folders, and draft replies.",
         agent_demo_label="Run Email Agent",
         agent_demo_actions=EMAIL_AGENT_ACTIONS,
     ),
@@ -148,8 +152,20 @@ APP_ADAPTERS = {
         uvicorn_target="agent_safe_demo.app_plane.inventory_service.app:app",
         db_env_var="DEMO_INVENTORY_DB_PATH",
         db_filename="demo_inventory.db",
+        label="Inventory Service",
+        description="Parts, stock levels, reservations, and reorder actions.",
         agent_demo_label="Run Inventory Agent",
         agent_demo_actions=INVENTORY_AGENT_ACTIONS,
+    ),
+    "kv": PythonAppAdapter(
+        module_name="agent_safe_demo.app_plane.kv_service.app",
+        uvicorn_target="agent_safe_demo.app_plane.kv_service.app:app",
+        db_env_var="DEMO_KV_DB_PATH",
+        db_filename="demo_kv.db",
+        label="KV Store",
+        description="Tiny key-value service launched through a wrapper script.",
+        agent_demo_label="Run Agent",
+        agent_demo_actions=None,
     ),
 }
 
@@ -188,27 +204,17 @@ def _module_spec(
 def _fallback_app_specs() -> dict[str, AppSpec]:
     specs = [
         _module_spec(
-            id="email",
-            label="Email Service",
-            description="Mailbox, labels, folders, and draft replies.",
-            module_name=APP_ADAPTERS["email"].module_name,
-            uvicorn_target=APP_ADAPTERS["email"].uvicorn_target,
-            db_env_var=APP_ADAPTERS["email"].db_env_var,
-            db_filename=APP_ADAPTERS["email"].db_filename,
-            agent_demo_label=APP_ADAPTERS["email"].agent_demo_label,
-            agent_demo_actions=APP_ADAPTERS["email"].agent_demo_actions,
-        ),
-        _module_spec(
-            id="inventory",
-            label="Inventory Service",
-            description="Parts, stock levels, reservations, and reorder actions.",
-            module_name=APP_ADAPTERS["inventory"].module_name,
-            uvicorn_target=APP_ADAPTERS["inventory"].uvicorn_target,
-            db_env_var=APP_ADAPTERS["inventory"].db_env_var,
-            db_filename=APP_ADAPTERS["inventory"].db_filename,
-            agent_demo_label=APP_ADAPTERS["inventory"].agent_demo_label,
-            agent_demo_actions=APP_ADAPTERS["inventory"].agent_demo_actions,
-        ),
+            id=app_id,
+            label=adapter.label,
+            description=adapter.description,
+            module_name=adapter.module_name,
+            uvicorn_target=adapter.uvicorn_target,
+            db_env_var=adapter.db_env_var,
+            db_filename=adapter.db_filename,
+            agent_demo_label=adapter.agent_demo_label,
+            agent_demo_actions=adapter.agent_demo_actions,
+        )
+        for app_id, adapter in APP_ADAPTERS.items()
     ]
     return {spec.id: spec for spec in specs}
 

@@ -18,6 +18,7 @@ from agent_safe_demo.control_plane.branching import (
 )
 from agent_safe_demo.control_plane.commit_store import CommitStore
 from agent_safe_demo.control_plane.manifest import interpolate_template, load_manifest
+from agent_safe_demo.control_plane.runtime_manager import RuntimeProcessManager
 
 
 RUN_STATEFORK_INTEGRATION = os.getenv("RUN_STATEFORK_INTEGRATION") == "1"
@@ -29,9 +30,11 @@ requires_statefork_integration = pytest.mark.skipif(
 def configure_env(monkeypatch, tmp_path, auth_password=None) -> None:
     db_path = tmp_path / "demo_mailbox.db"
     inventory_db_path = tmp_path / "demo_inventory.db"
+    kv_db_path = tmp_path / "demo_kv.db"
     control_plane_db_path = tmp_path / "control_plane_metadata.db"
     monkeypatch.setenv("DEMO_MAILBOX_DB_PATH", str(db_path))
     monkeypatch.setenv("DEMO_INVENTORY_DB_PATH", str(inventory_db_path))
+    monkeypatch.setenv("DEMO_KV_DB_PATH", str(kv_db_path))
     monkeypatch.setenv("DEMO_CONTROL_PLANE_DB_PATH", str(control_plane_db_path))
     monkeypatch.delenv("DEMO_APP_ID", raising=False)
     monkeypatch.setenv(
@@ -66,14 +69,24 @@ def load_inventory_app(monkeypatch, tmp_path, auth_password=None):
     return module.app
 
 
-def load_controller_app(monkeypatch, tmp_path, auth_password=None):
+def load_kv_app(monkeypatch, tmp_path, auth_password=None):
     configure_env(monkeypatch, tmp_path, auth_password)
+    sys.modules.pop("agent_safe_demo.app_plane.kv_service.app", None)
+    module = importlib.import_module("agent_safe_demo.app_plane.kv_service.app")
+    return module.app
+
+
+def load_controller_app(monkeypatch, tmp_path, auth_password=None, app_id=None):
+    configure_env(monkeypatch, tmp_path, auth_password)
+    if app_id is not None:
+        monkeypatch.setenv("DEMO_APP_ID", app_id)
     for module_name in [
         "agent_safe_demo.control_plane.main",
         "agent_safe_demo.control_plane.app_registry",
         "agent_safe_demo.control_plane.manifest",
         "agent_safe_demo.app_plane.email_service.app",
         "agent_safe_demo.app_plane.inventory_service.app",
+        "agent_safe_demo.app_plane.kv_service.app",
     ]:
         sys.modules.pop(module_name, None)
     module = importlib.import_module("agent_safe_demo.control_plane.main")
@@ -122,6 +135,24 @@ def test_inventory_app_seed_and_reservation(monkeypatch, tmp_path):
     assert state.json()["summary"]["reservations"] == 1
 
 
+def test_kv_app_seed_and_update(monkeypatch, tmp_path):
+    app = load_kv_app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        before = client.get("/api/state")
+        update = client.post(
+            "/api/kv/status",
+            json={"value": "updated", "actor": "tester"},
+        )
+        after = client.get("/api/state")
+
+    assert before.status_code == 200
+    assert before.json()["summary"]["entries"] == 3
+    assert update.status_code == 200
+    assert update.json()["entry"]["value"] == "updated"
+    assert after.json()["summary"]["entries"] == 3
+    assert any(event["action"] == "set" for event in after.json()["audit_log"])
+
+
 def test_commit_store_records_app_heads(tmp_path):
     store = CommitStore(tmp_path / "metadata.db")
 
@@ -159,6 +190,9 @@ def test_statefork_manifest_loads_runtime_contract():
     manifest = load_manifest(
         Path("src/agent_safe_demo/app_plane/email_service/statefork.yaml")
     )
+    kv_manifest = load_manifest(
+        Path("src/agent_safe_demo/app_plane/kv_service/statefork.yaml")
+    )
 
     assert manifest.id == "email"
     assert manifest.name == "Email Service"
@@ -170,6 +204,9 @@ def test_statefork_manifest_loads_runtime_contract():
         "DEMO_MAILBOX_DB_PATH": "${BRANCH_WORKDIR}/demo_mailbox.db"
     }
     assert manifest.observability.state_summary_path == "/api/state"
+    assert kv_manifest.id == "kv"
+    assert kv_manifest.runtime.command.startswith("bash ${PROJECT_ROOT}")
+    assert kv_manifest.state.files == ["demo_kv.db"]
     assert (
         interpolate_template(
             "${BRANCH_WORKDIR}:${PORT}:${MISSING}",
@@ -191,7 +228,7 @@ def test_app_registry_discovers_manifests_and_reports_errors(tmp_path):
     from agent_safe_demo.control_plane import app_registry
 
     specs = app_registry.build_app_specs()
-    assert set(specs) == {"email", "inventory"}
+    assert set(specs) == {"email", "inventory", "kv"}
     assert specs["email"].manifest_path.name == "statefork.yaml"
     assert specs["email"].state_files == ("demo_mailbox.db",)
     assert "agent_safe_demo.app_plane.email_service.app:app" in specs["email"].runtime_command
@@ -221,7 +258,7 @@ def test_app_registry_discovers_manifests_and_reports_errors(tmp_path):
     fallback_specs = app_registry.build_app_specs(app_plane_dir=tmp_path)
     errors = app_registry.list_manifest_errors(app_plane_dir=tmp_path)
 
-    assert set(fallback_specs) == {"email", "inventory"}
+    assert set(fallback_specs) == {"email", "inventory", "kv"}
     assert fallback_specs["email"].manifest_path is None
     assert len(errors) == 1
     assert "No Python adapter registered" in errors[0]["error"]
@@ -238,11 +275,14 @@ def test_controller_lists_and_switches_registered_apps(monkeypatch, tmp_path):
     payload = apps.json()
     assert payload["current_app_id"] == "email"
     assert payload["manifest_errors"] == []
-    assert {app["id"] for app in payload["apps"]} == {"email", "inventory"}
+    assert {app["id"] for app in payload["apps"]} == {"email", "inventory", "kv"}
     email_app = next(app for app in payload["apps"] if app["id"] == "email")
     assert email_app["manifest_loaded"] is True
     assert email_app["state_files"] == ["demo_mailbox.db"]
     assert "agent_safe_demo.app_plane.email_service.app:app" in email_app["runtime_command"]
+    kv_app = next(app for app in payload["apps"] if app["id"] == "kv")
+    assert kv_app["agent_demo_enabled"] is False
+    assert "statefork-run.sh" in kv_app["runtime_command"]
     assert selected.status_code == 200
     assert selected.json()["current_app_id"] == "inventory"
     backend_details = backend.json()["details"]
@@ -612,6 +652,26 @@ def test_workspace_starts_in_runtime_with_initial_checkpoint(monkeypatch, tmp_pa
 
 
 @requires_statefork_integration
+def test_workspace_supports_script_launched_kv_app(monkeypatch, tmp_path):
+    app = load_controller_app(monkeypatch, tmp_path, app_id="kv")
+    with TestClient(app) as client:
+        try:
+            response = client.get("/api/workspace")
+            assert response.status_code == 200
+            workspace = response.json()
+            branch = workspace["branch"]
+            runtime_state = get_json(f"{branch['url']}/api/state")
+        finally:
+            client.post("/api/reset")
+
+    assert workspace["app"]["id"] == "kv"
+    assert "statefork-run.sh" in workspace["workspace"]["runtime_command"]
+    assert branch["status"] == "running"
+    assert branch["dirty"] is False
+    assert runtime_state["summary"]["entries"] == 3
+
+
+@requires_statefork_integration
 def test_workspace_commit_records_metadata_and_reopens_from_head(monkeypatch, tmp_path):
     app = load_controller_app(monkeypatch, tmp_path)
     with TestClient(app) as client:
@@ -774,6 +834,39 @@ def test_commit_rejects_branch_when_statefork_head_changed_after_base(monkeypatc
     assert [base["id"] for base in bases if base["is_head"]] == [new_head["id"]]
 
 
+def test_runtime_manager_builds_script_launcher_command(tmp_path):
+    branch_dir = tmp_path / "branch"
+    branch_dir.mkdir()
+    manager = RuntimeProcessManager(
+        project_root=tmp_path,
+        host="127.0.0.1",
+        app_uvicorn_target="unused:app",
+        app_db_env_var="DEMO_KV_DB_PATH",
+        runtime_command="bash ${PROJECT_ROOT}/run.sh --host ${HOST} --port ${PORT}",
+        runtime_cwd="${BRANCH_WORKDIR}",
+        runtime_port_env="PORT",
+        state_env={"DEMO_KV_DB_PATH": "${BRANCH_WORKDIR}/demo_kv.db"},
+    )
+
+    launch = manager.build_launch(
+        db_path=branch_dir / "demo_kv.db",
+        port=8456,
+        work_dir=branch_dir,
+    )
+
+    assert launch.command == [
+        "bash",
+        str(tmp_path / "run.sh"),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8456",
+    ]
+    assert launch.cwd == branch_dir
+    assert launch.env["PORT"] == "8456"
+    assert launch.env["DEMO_KV_DB_PATH"] == str(branch_dir / "demo_kv.db")
+
+
 def test_statefork_backend_uses_manifest_runtime_command_and_env(monkeypatch, tmp_path):
     branch_dir = tmp_path / "branch"
     branch_dir.mkdir()
@@ -785,12 +878,13 @@ def test_statefork_backend_uses_manifest_runtime_command_and_env(monkeypatch, tm
         def poll(self):
             return None
 
-    def fake_popen(command, *, cwd, env, stdout, stderr):
+    def fake_popen(command, *, cwd, env, stdout, stderr, start_new_session):
         calls["command"] = command
         calls["cwd"] = cwd
         calls["env"] = env
         calls["stdout"] = stdout
         calls["stderr"] = stderr
+        calls["start_new_session"] = start_new_session
         return FakeProcess()
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
@@ -827,6 +921,7 @@ def test_statefork_backend_uses_manifest_runtime_command_and_env(monkeypatch, tm
     assert calls["env"]["DEMO_DB"] == str(branch_dir / "demo.db")
     assert calls["env"]["DEMO_MAILBOX_DB_PATH"] == str(branch_dir / "demo.db")
     assert calls["env"]["PYTHONPATH"].startswith(str(tmp_path / "src"))
+    assert calls["start_new_session"] is True
 
 
 def test_statefork_backend_diff_still_uses_primary_sqlite_state_file(tmp_path):

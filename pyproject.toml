@@ -29,6 +29,7 @@ where = ["src"]
 "agent_safe_demo.control_plane" = ["static/*.html", "static/*.css", "static/*.js"]
 "agent_safe_demo.app_plane.email_service" = ["statefork.yaml"]
 "agent_safe_demo.app_plane.inventory_service" = ["statefork.yaml"]
+"agent_safe_demo.app_plane.kv_service" = ["statefork.yaml", "*.sh"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

@@ -14,9 +14,10 @@ that workspace controller.
 
 The demo is split into two API surfaces:
 
-- `agent_safe_demo.app_plane.email_service.app:app` and
-  `agent_safe_demo.app_plane.inventory_service.app:app` are ordinary business
-  apps. They expose their own runtime UI plus app-specific APIs.
+- `agent_safe_demo.app_plane.email_service.app:app`,
+  `agent_safe_demo.app_plane.inventory_service.app:app`, and
+  `agent_safe_demo.app_plane.kv_service.app:app` are ordinary business apps.
+  They expose their own runtime UI plus app-specific APIs.
 - `agent_safe_demo.control_plane.main:app` is the StateFork workspace
   controller. It owns app selection, snapshot, restore, runtime startup, and the
   checkpoint UI.
@@ -26,9 +27,11 @@ entry, so the managed program does not know it has been branched. Control
 plane and app-plane imports should use the package paths above directly.
 
 The app plane is intentionally directory-based: each child under
-`agent_safe_demo/app_plane/` owns one independent app. New apps are registered in
-`agent_safe_demo.control_plane.app_registry` with an app id, uvicorn target, DB
-env var, DB filename, health path, and optional agent-demo actions.
+`agent_safe_demo/app_plane/` owns one independent app. New apps are primarily
+registered with `statefork.yaml`; the Python registry only supplies local demo
+adapters such as seed initialization and optional agent-demo actions. The KV
+service is launched through a wrapper script to exercise the generic runtime
+launcher path.
 
 The repo now exposes a single backend: `StateForkBackend`. StateFork uses its
 controller API to call snapshot, restore, create-env, and cleanup operations.

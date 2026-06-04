@@ -1,0 +1,19 @@
+id: kv
+name: KV Store
+description: Tiny key-value service launched through a wrapper script.
+
+runtime:
+  command: "bash ${PROJECT_ROOT}/src/agent_safe_demo/app_plane/kv_service/statefork-run.sh --host ${HOST} --port ${PORT}"
+  cwd: "${BRANCH_WORKDIR}"
+  port_env: "PORT"
+  health_path: "/api/state"
+  ui_path: "/"
+
+state:
+  files:
+    - "demo_kv.db"
+  env:
+    DEMO_KV_DB_PATH: "${BRANCH_WORKDIR}/demo_kv.db"
+
+observability:
+  state_summary_path: "/api/state"
