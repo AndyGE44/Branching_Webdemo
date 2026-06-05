@@ -432,24 +432,24 @@ def root() -> str:
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>Email Runtime</title>
         <style>
-          body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #f7f8f6; color: #18211c; }
+          body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #f6faff; color: #102033; }
           main { padding: 18px; display: grid; grid-template-columns: minmax(240px, 0.85fr) minmax(320px, 1.2fr); gap: 14px; }
           header { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 12px; align-items: center; }
           h1 { font-size: 20px; margin: 0; }
           h2 { font-size: 15px; margin: 0 0 8px; }
-          p { margin: 4px 0 0; color: #5d6a62; }
-          button { border: 1px solid #b7c4bb; background: #fff; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
-          button.primary { background: #174938; color: white; border-color: #174938; }
-          .panel { background: white; border: 1px solid #d8dfd9; border-radius: 8px; padding: 12px; min-height: 120px; }
+          p { margin: 4px 0 0; color: #5e7089; }
+          button { border: 1px solid #c8d9ee; background: #fff; padding: 8px 10px; border-radius: 6px; cursor: pointer; color: #102033; }
+          button.primary { background: #2d62ad; color: white; border-color: #2d62ad; }
+          .panel { background: white; border: 1px solid #c8d9ee; border-radius: 8px; padding: 12px; min-height: 120px; }
           .message { width: 100%; text-align: left; display: grid; gap: 4px; margin-bottom: 8px; }
           .message strong { font-size: 13px; }
-          .message span, .muted { color: #68756d; font-size: 12px; }
+          .message span, .muted { color: #5e7089; font-size: 12px; }
           .pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-          .pill { background: #eef3ef; color: #34443b; border-radius: 999px; padding: 3px 8px; font-size: 12px; }
+          .pill { background: #e7f1ff; color: #173f7a; border-radius: 999px; padding: 3px 8px; font-size: 12px; }
           form { display: grid; gap: 8px; margin-top: 12px; }
-          input, select, textarea { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #c8d0ca; border-radius: 6px; }
-          label { display: grid; gap: 4px; font-size: 12px; color: #5d6a62; }
-          .result { color: #174938; font-size: 13px; }
+          input, select, textarea { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #c8d9ee; border-radius: 6px; color: #102033; }
+          label { display: grid; gap: 4px; font-size: 12px; color: #5e7089; }
+          .result { color: #173f7a; font-size: 13px; }
         </style>
       </head>
       <body>
