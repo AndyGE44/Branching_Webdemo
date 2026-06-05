@@ -55,8 +55,8 @@ function runtimeRequest(path, options = {}) {
 
 function showResult(text, ok = true) {
   resultPill.textContent = text;
-  resultPill.style.background = ok ? "#e8f1ec" : "#f8e7df";
-  resultPill.style.color = ok ? "#174938" : "#8a341f";
+  resultPill.style.background = ok ? "#e7f1ff" : "#f8e7df";
+  resultPill.style.color = ok ? "#173f7a" : "#8a341f";
 }
 
 function badge(value) {

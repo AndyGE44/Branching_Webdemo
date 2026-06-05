@@ -3,32 +3,24 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Agent-Safe Workspace</title>
-    <link rel="stylesheet" href="/static/styles.css?v=22" />
+    <title>State-Fork Workspace</title>
+    <link rel="stylesheet" href="/static/styles.css?v=23" />
   </head>
   <body>
     <header class="topbar">
-      <div>
-        <h1>Agent-Safe Workspace</h1>
-        <p id="appDescription">StateFork app runtime</p>
+      <div class="brand-block">
+        <div class="brand-row">
+          <div>
+            <h1>State-Fork Workspace</h1>
+            <p id="appDescription">StateFork app runtime</p>
+          </div>
+          <label class="app-select-label top-app-select">
+            App
+            <select id="appSelect"></select>
+          </label>
+        </div>
       </div>
-      <div class="actions">
-        <label class="app-select-label">
-          App
-          <select id="appSelect"></select>
-        </label>
-        <span id="workspaceState" class="backend-pill">Starting...</span>
-        <label class="snapshot-input">
-          Snapshot
-          <input id="snapshotLabelInput" type="text" maxlength="80" placeholder="before agent" />
-        </label>
-        <button id="snapshotBtn" class="primary" type="button">Snapshot</button>
-        <button id="commitBtn" type="button">Commit</button>
-        <button id="runAgentBtn" type="button">Run Agent</button>
-        <span id="backendMode" class="backend-pill">Backend...</span>
-        <a class="icon-link" href="/docs" title="Open API docs">API</a>
-        <button id="resetBtn" class="danger" type="button">Reset</button>
-      </div>
+      <img class="lab-logo" src="/static/daplab_logo_horiz.png?v=1" alt="DAP Lab" />
     </header>
 
     <main class="layout">
@@ -38,20 +30,34 @@
             <h2 id="runtimeTitle">Runtime</h2>
             <p id="runtimeUrl" class="muted">Waiting for workspace</p>
           </div>
-          <button id="refreshBtn" type="button">Refresh</button>
         </div>
         <iframe id="runtimeFrame" title="App runtime"></iframe>
       </section>
 
       <aside class="side-column">
-        <section class="panel status-panel">
+        <section class="panel control-panel">
           <div class="panel-header">
             <div>
-              <h2>Runtime & Checkpoint Stats</h2>
+              <h2>Control</h2>
               <p id="snapshotMode" class="muted">Workspace control</p>
             </div>
           </div>
-          <div id="backendStats" class="status-grid"></div>
+          <div class="control-status">
+            <span id="workspaceState" class="backend-pill">Starting...</span>
+            <span id="backendMode" class="backend-pill">Backend...</span>
+          </div>
+          <label class="snapshot-input">
+            Snapshot
+            <input id="snapshotLabelInput" type="text" maxlength="80" placeholder="before agent" />
+          </label>
+          <div class="control-actions">
+            <button id="snapshotBtn" class="primary" type="button">Snapshot</button>
+            <button id="commitBtn" type="button">Commit</button>
+            <button id="runAgentBtn" type="button">Run Agent</button>
+            <button id="resetBtn" class="danger" type="button">Reset</button>
+            <button id="refreshBtn" type="button">Refresh</button>
+            <a class="icon-link" href="/docs" title="Open API docs">API</a>
+          </div>
         </section>
 
         <section class="panel branch-panel">
@@ -76,6 +82,16 @@
         </section>
       </aside>
 
+      <section class="panel status-panel">
+        <div class="panel-header">
+          <div>
+            <h2>Runtime & Checkpoint Stats</h2>
+            <p class="muted">Live runtime metrics and checkpoint operations</p>
+          </div>
+        </div>
+        <div id="backendStats" class="status-grid"></div>
+      </section>
+
       <section class="panel state-panel">
         <div class="panel-header">
           <h2>Runtime State</h2>
@@ -92,6 +108,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=22"></script>
+    <script src="/static/app.js?v=23"></script>
   </body>
 </html>
