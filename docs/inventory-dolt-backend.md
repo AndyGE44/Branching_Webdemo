@@ -49,14 +49,56 @@ export DEMO_INVENTORY_DOLT_DIR=/tmp/demo_inventory_dolt   # outside the checkpoi
 python -m uvicorn agent_safe_demo.app_plane.inventory_service.app:app --port 8300
 ```
 
-## Not yet wired (next step)
+## Running the full control-plane UI on architecture A
 
-The control plane's dirty/diff/fingerprint logic
-(`control_plane/branching.py`) still reads the SQLite file directly
-(`sqlite_fingerprint`, `_read_summary`). For a full UI demo on Dolt, that layer
-should switch to `dolt diff` / `dolt status` and the base/branch/commit/discard
-lifecycle should drive `DoltController` directly. The current change keeps the
-app + data tier (architecture A) provable in isolation via the script above.
+The control plane is now Dolt-aware. When the inventory app's data backend is
+`dolt`, `StateForkBackend`:
+
+- routes dirty/diff/fingerprint/summary through a `DoltDataTier`
+  (`control_plane/data_tier.py`) instead of reading a SQLite file, and
+- passes `dolt_repo=` into `create_env_manager`, so the StateFork manager's
+  `snapshot()`/`restore()` commit + branch + reset the external Dolt repo **in
+  lockstep** with the app checkpoint (via `Andy_StateFork`'s `DoltController`).
+
+Start the controller with the Dolt backend selected (process runtime mode):
+
+```bash
+cd Branching_Webdemo
+. .venv/bin/activate
+export PATH="$HOME/.local/bin:$PATH"             # dolt
+export DEMO_APP_ID=inventory
+export DEMO_INVENTORY_DB_BACKEND=dolt
+export DEMO_INVENTORY_DOLT_DIR="$HOME/demo_inventory_dolt"   # OUTSIDE any checkpoint workdir
+export DEMO_STATEFORK_ROOT=/path/to/Andy_StateFork
+python -m uvicorn agent_safe_demo.control_plane.main:app --host 127.0.0.1 --port 8000
+```
+
+Both the control plane and the in-runtime inventory app read the same
+`DEMO_INVENTORY_*` vars, so they share one external Dolt repo. The UI's
+snapshot / restore / commit / diff now operate on that Dolt tier.
+
+### ⚠️ Constraints / caveats
+
+- **Process runtime mode only.** Architecture A needs the in-runtime app to
+  reach the external host Dolt dir + `dolt` binary. StateFork's
+  docker-build / `checkpoint_exec` modes run the app in an isolated environment
+  (the runtime env even forces the DB path to `/<name>`), so the external repo
+  is not reachable there. Use the default `runtime_type: process` manifest path.
+- **Keep `DEMO_INVENTORY_DOLT_DIR` outside the branch workdir** or the checkpoint
+  would capture it too, defeating the split.
+- **Set `DEMO_INVENTORY_DOLT_DIR` explicitly** so the control plane and the app
+  agree on the repo location (both default to `<db stem>_dolt`, but being
+  explicit avoids surprises).
+
+### What was verified vs. not
+
+Unit-tested against real Dolt (no FastAPI / checkpoint-lite needed):
+`DoltDataTier` summary/fingerprint, and `StateForkBackend`'s data-tier routing
+(summary/fingerprint/dirty + the lockstep `dolt_repo` kwarg), plus that the
+default `sqlite` path is unchanged. The **full UI flow** (checkpoint-lite
+driving `manager.snapshot()/restore()` + the runtime process reaching the host
+Dolt repo) must be validated on the VM, since checkpoint-lite/CRIU is not
+available in every dev environment.
 
 ## Notes / limitations
 

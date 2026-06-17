@@ -59,10 +59,39 @@ def statefork_kwargs_from_env() -> dict:
     return kwargs
 
 
+def data_backend_config(app_spec: AppSpec) -> tuple[str, Path | None, dict[str, str]]:
+    """Resolve the data-tier backend for an app from the environment.
+
+    Returns (backend, dolt_dir, extra_runtime_env). For the Dolt backend
+    (architecture A) the same external repo is used by both the control plane's
+    data tier and the in-runtime app, so the runtime env is augmented to point
+    the app at it. The repo MUST live outside the per-branch checkpoint workdir.
+    """
+    # db_env_var looks like "DEMO_INVENTORY_DB_PATH"; derive the sibling vars.
+    db_env_var = app_spec.db_env_var
+    prefix = db_env_var[: -len("_DB_PATH")] if db_env_var.endswith("_DB_PATH") else db_env_var
+    backend = os.getenv(
+        f"{prefix}_DB_BACKEND", os.getenv("DEMO_DATA_BACKEND", "sqlite")
+    ).lower()
+    if backend != "dolt":
+        return backend, None, {}
+
+    # Default matches the app store's own default (DB_PATH stem + "_dolt").
+    default_dir = app_spec.db_path.with_name(app_spec.db_path.stem + "_dolt")
+    dolt_dir = Path(os.getenv(f"{prefix}_DOLT_DIR", str(default_dir))).resolve()
+    extra_env = {
+        f"{prefix}_DB_BACKEND": "dolt",
+        f"{prefix}_DOLT_DIR": str(dolt_dir),
+    }
+    return backend, dolt_dir, extra_env
+
+
 def create_branch_backend(app_spec: AppSpec | None = None) -> StateForkBackend:
     selected_app = app_spec or CURRENT_APP
     default_statefork_root = selected_app.project_root.parent / "Andy_StateFork"
     statefork_root = Path(os.getenv("DEMO_STATEFORK_ROOT", default_statefork_root))
+    data_backend, dolt_dir, extra_runtime_env = data_backend_config(selected_app)
+    state_env = {**dict(selected_app.state_env), **extra_runtime_env}
     return StateForkBackend(
         selected_app.project_root,
         selected_app.db_path,
@@ -83,9 +112,12 @@ def create_branch_backend(app_spec: AppSpec | None = None) -> StateForkBackend:
         runtime_type=selected_app.runtime_type,
         build_dockerfile_dir=selected_app.build_dockerfile_dir,
         state_files=list(selected_app.state_files),
-        state_env=dict(selected_app.state_env),
+        state_env=state_env,
         manifest_path=selected_app.manifest_path,
         agent_demo_actions=list(selected_app.agent_demo_actions or []),
+        data_backend=data_backend,
+        dolt_dir=dolt_dir,
+        dolt_bin=os.getenv("DEMO_DOLT_BIN", "dolt"),
     )
 
 

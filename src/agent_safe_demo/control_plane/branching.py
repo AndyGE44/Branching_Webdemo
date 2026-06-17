@@ -16,6 +16,7 @@ from typing import Any, Callable, Iterator
 from urllib import request
 from urllib.error import HTTPError, URLError
 
+from agent_safe_demo.control_plane.data_tier import DataTier, build_data_tier
 from agent_safe_demo.control_plane.runtime_manager import CheckpointExecRuntimeManager, RuntimeProcessManager
 
 
@@ -356,6 +357,9 @@ class StateForkBackend:
         state_env: dict[str, str] | None = None,
         manifest_path: Path | None = None,
         agent_demo_actions: list[dict[str, Any]] | None = None,
+        data_backend: str = "sqlite",
+        dolt_dir: Path | None = None,
+        dolt_bin: str = "dolt",
     ) -> None:
         self.project_root = project_root
         self.main_db_path = main_db_path
@@ -401,6 +405,13 @@ class StateForkBackend:
         self.branch_environments: dict[str, str] = {}
         self.head_base_id: str | None = None
         self.operation_stats = new_operation_stats()
+
+        # Optional external data tier (architecture A). None => the original
+        # SQLite-file-in-checkpoint path (architecture B), unchanged.
+        self.data_backend = data_backend
+        self.data_tier: DataTier | None = build_data_tier(
+            data_backend, dolt_dir=dolt_dir, dolt_bin=dolt_bin
+        )
 
     def status(self) -> dict[str, Any]:
         return build_status(
@@ -450,7 +461,11 @@ class StateForkBackend:
         return bases
 
     def create_base(self, label: str | None = None) -> dict[str, Any]:
-        if not self.main_db_path.exists():
+        if self.data_tier is not None:
+            # Architecture A: the data lives in the external Dolt repo, not a
+            # SQLite file. Make sure the repo exists; the app seeds it.
+            self.data_tier.prepare()
+        elif not self.main_db_path.exists():
             raise BranchError(f"Main database does not exist: {self.main_db_path}")
 
         started_at = time.time()
@@ -477,8 +492,8 @@ class StateForkBackend:
             session_id=getattr(manager, "session_id", snapshot_id),
             db_path=base_db_path,
             work_dir=work_dir,
-            main_fingerprint=sqlite_fingerprint(base_db_path),
-            state_summary=self._safe_read_summary(base_db_path),
+            main_fingerprint=self._data_fingerprint(base_db_path),
+            state_summary=self._safe_data_summary(base_db_path),
         )
         self.bases[base_id] = base
         self.base_managers[base_id] = manager
@@ -559,9 +574,9 @@ class StateForkBackend:
         self.branches[branch_id] = branch
         self.branch_environments[branch_id] = str(environment_name)
         self._wait_until_ready(branch)
-        if not branch_db.exists():
+        if self.data_tier is None and not branch_db.exists():
             raise BranchError(f"App runtime did not create its database: {branch_db}")
-        branch.last_saved_fingerprint = sqlite_fingerprint(branch_db)
+        branch.last_saved_fingerprint = self._data_fingerprint(branch_db)
         branch.dirty = False
         return branch.to_dict()
 
@@ -643,7 +658,7 @@ class StateForkBackend:
     def diff(self, branch_id: str) -> dict[str, Any]:
         branch = self._require_branch(branch_id)
         main = self._summary_for_branch_base(branch)
-        candidate = self._read_summary(branch.db_path)
+        candidate = self._data_summary(branch.db_path)
         all_tables = sorted(set(main["counts"]) | set(candidate["counts"]))
         counts = {
             table: {
@@ -706,8 +721,8 @@ class StateForkBackend:
             self._wait_until_ready(branch)
             self._terminate(branch)
 
-        fingerprint = sqlite_fingerprint(branch.db_path)
-        state_summary = self._read_summary(branch.db_path)
+        fingerprint = self._data_fingerprint(branch.db_path)
+        state_summary = self._data_summary(branch.db_path)
         base.checkpoint_id = snapshot_id
         base.label = f"Committed {branch.id}"
         base.session_id = getattr(manager, "session_id", base.session_id)
@@ -750,6 +765,8 @@ class StateForkBackend:
         self.base_managers.clear()
         self.head_base_id = None
         self.operation_stats = new_operation_stats()
+        if self.data_tier is not None:
+            self.data_tier.cleanup()
         return {"branches_deleted": branch_count, "bases_deleted": base_count}
 
     def _ensure_single_active_branch(self) -> None:
@@ -788,6 +805,11 @@ class StateForkBackend:
             "build": self._uses_statefork_build(),
             **self.statefork_kwargs,
         }
+        # Architecture A: make the StateFork manager version the external Dolt
+        # data tier in lockstep with the app checkpoint (snapshot -> commit +
+        # branch sf_<id>; restore -> reset working set to sf_<id>).
+        if self.data_tier is not None:
+            kwargs.update(self.data_tier.statefork_kwargs())
         if self.runtime_type == "checkpoint_exec" and not kwargs.get("build"):
             raise BranchError("checkpoint_exec runtime requires StateFork/checkpoint-lite build mode")
         return self._call_statefork(lambda: create_env_manager(self.statefork_method, **kwargs))
@@ -831,7 +853,7 @@ class StateForkBackend:
             label=label,
             action=action,
             parent_id=parent_id,
-            fingerprint=sqlite_fingerprint(branch.db_path),
+            fingerprint=self._data_fingerprint(branch.db_path),
         )
         branch.snapshots.append(snapshot)
         branch.current_snapshot_id = snapshot.id
@@ -985,6 +1007,10 @@ class StateForkBackend:
         raise BranchError(f"Unknown snapshot for {branch.id}: {snapshot_id}")
 
     def _branch_is_dirty(self, branch: BranchHandle) -> bool:
+        if self.data_tier is not None:
+            if branch.last_saved_fingerprint:
+                branch.dirty = self.data_tier.fingerprint() != branch.last_saved_fingerprint
+            return branch.dirty
         if branch.last_saved_fingerprint and branch.db_path.exists():
             branch.dirty = sqlite_fingerprint(branch.db_path) != branch.last_saved_fingerprint
         return branch.dirty
@@ -1135,7 +1161,7 @@ class StateForkBackend:
             base = self.bases.get(branch.base_id)
             if base and base.state_summary is not None:
                 return base.state_summary
-        summary = self._safe_read_summary(self.main_db_path)
+        summary = self._safe_data_summary(self.main_db_path)
         if summary is None:
             raise BranchError(f"Could not read base database summary for branch {branch.id}")
         return summary
@@ -1144,6 +1170,25 @@ class StateForkBackend:
         try:
             return self._read_summary(db_path)
         except sqlite3.Error:
+            return None
+
+    # ---- data-tier-aware fingerprint/summary ----------------------------- #
+    # When self.data_tier is set (architecture A), data lives in an external
+    # Dolt repo, not the SQLite file at db_path; route through the tier.
+    def _data_fingerprint(self, db_path: Path) -> str:
+        if self.data_tier is not None:
+            return self.data_tier.fingerprint()
+        return sqlite_fingerprint(db_path)
+
+    def _data_summary(self, db_path: Path) -> dict[str, Any]:
+        if self.data_tier is not None:
+            return self.data_tier.summary()
+        return self._read_summary(db_path)
+
+    def _safe_data_summary(self, db_path: Path) -> dict[str, Any] | None:
+        try:
+            return self._data_summary(db_path)
+        except (sqlite3.Error, RuntimeError):
             return None
 
     def _quote_identifier(self, name: str) -> str:

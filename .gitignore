@@ -3,7 +3,10 @@ __pycache__/
 *.pyc
 demo_mailbox.db
 demo_inventory.db
+demo_kv.db
 control_plane_metadata.db
+# external Dolt data-tier repos (architecture A)
+*_dolt/
 .branches/
 build/
 dist/
