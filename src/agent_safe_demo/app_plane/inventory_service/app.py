@@ -1,19 +1,41 @@
 from __future__ import annotations
 
 import os
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator, Iterator
-import sqlite3
+from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
+from agent_safe_demo.app_plane.inventory_service.store import (
+    InsufficientStock,
+    InventoryStore,
+    UnknownPart,
+    create_store,
+)
+
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = Path(os.getenv("DEMO_PROJECT_ROOT", BASE_DIR.parents[3]))
 DB_PATH = Path(os.getenv("DEMO_INVENTORY_DB_PATH", PROJECT_ROOT / "demo_inventory.db"))
+
+# Lazily-built data tier (SQLite by default, Dolt when DEMO_INVENTORY_DB_BACKEND=dolt).
+# Lazy so merely importing this module (e.g. the control plane reading DB_PATH)
+# has no side effects on the configured backend.
+_store: InventoryStore | None = None
+
+
+def get_store() -> InventoryStore:
+    global _store
+    if _store is None:
+        _store = create_store(sqlite_path=DB_PATH)
+    return _store
+
+
+def init_db() -> None:
+    get_store().init()
 
 
 @asynccontextmanager
@@ -48,146 +70,6 @@ class InventoryActionRequest(BaseModel):
     part_id: str
     quantity: int = Field(gt=0)
     actor: str = "user"
-
-
-@contextmanager
-def db() -> Iterator[sqlite3.Connection]:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def rows(cursor: sqlite3.Cursor) -> list[dict]:
-    return [dict(row) for row in cursor.fetchall()]
-
-
-def audit(conn: sqlite3.Connection, actor: str, action: str, detail: str) -> None:
-    conn.execute(
-        "INSERT INTO audit_log(actor, action, detail) VALUES (?, ?, ?)",
-        (actor, action, detail),
-    )
-
-
-def ensure_part(conn: sqlite3.Connection, part_id: str) -> sqlite3.Row:
-    part = conn.execute("SELECT * FROM parts WHERE id = ?", (part_id,)).fetchone()
-    if part is None:
-        raise HTTPException(status_code=404, detail=f"Unknown part: {part_id}")
-    return part
-
-
-def available_quantity(conn: sqlite3.Connection, part_id: str) -> int:
-    row = conn.execute(
-        """
-        SELECT p.on_hand - COALESCE(SUM(r.quantity), 0) AS available
-        FROM parts p
-        LEFT JOIN reservations r ON r.part_id = p.id AND r.status = 'active'
-        WHERE p.id = ?
-        GROUP BY p.id
-        """,
-        (part_id,),
-    ).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"Unknown part: {part_id}")
-    return int(row["available"])
-
-
-def inventory_item(conn: sqlite3.Connection, part_id: str) -> dict:
-    row = conn.execute(
-        """
-        SELECT
-            p.id,
-            p.name,
-            p.location,
-            p.on_hand,
-            p.reorder_point,
-            p.on_hand - COALESCE(SUM(r.quantity), 0) AS available,
-            COALESCE(SUM(r.quantity), 0) AS reserved
-        FROM parts p
-        LEFT JOIN reservations r ON r.part_id = p.id AND r.status = 'active'
-        WHERE p.id = ?
-        GROUP BY p.id
-        """,
-        (part_id,),
-    ).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"Unknown part: {part_id}")
-    return dict(row)
-
-
-def inventory_items(conn: sqlite3.Connection) -> list[dict]:
-    return rows(
-        conn.execute(
-            """
-            SELECT
-                p.id,
-                p.name,
-                p.location,
-                p.on_hand,
-                p.reorder_point,
-                p.on_hand - COALESCE(SUM(r.quantity), 0) AS available,
-                COALESCE(SUM(r.quantity), 0) AS reserved
-            FROM parts p
-            LEFT JOIN reservations r ON r.part_id = p.id AND r.status = 'active'
-            GROUP BY p.id
-            ORDER BY p.id
-            """
-        )
-    )
-
-
-def init_db() -> None:
-    with db() as conn:
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS parts (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                location TEXT NOT NULL,
-                on_hand INTEGER NOT NULL CHECK(on_hand >= 0),
-                reorder_point INTEGER NOT NULL CHECK(reorder_point >= 0)
-            );
-
-            CREATE TABLE IF NOT EXISTS reservations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                part_id TEXT NOT NULL,
-                quantity INTEGER NOT NULL CHECK(quantity > 0),
-                status TEXT NOT NULL,
-                actor TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(part_id) REFERENCES parts(id)
-            );
-
-            CREATE TABLE IF NOT EXISTS audit_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                actor TEXT NOT NULL,
-                action TEXT NOT NULL,
-                detail TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-            """
-        )
-        part_count = conn.execute("SELECT COUNT(*) AS count FROM parts").fetchone()["count"]
-        if not part_count:
-            conn.executemany(
-                """
-                INSERT INTO parts(id, name, location, on_hand, reorder_point)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                [
-                    ("MCU-100", "Control board", "Aisle 1 / Bin 02", 8, 4),
-                    ("MCU-ALT", "Backup control board", "Aisle 1 / Bin 08", 4, 2),
-                    ("SENSOR-9", "Temperature sensor", "Aisle 3 / Bin 11", 2, 5),
-                    ("CASE-42", "Aluminum enclosure", "Aisle 4 / Bin 01", 12, 4),
-                    ("WIRE-RED", "Red harness wire", "Aisle 2 / Bin 05", 50, 10),
-                ],
-            )
-        if not conn.execute("SELECT COUNT(*) AS count FROM audit_log").fetchone()["count"]:
-            audit(conn, "system", "seed", "Loaded sample inventory data")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -271,84 +153,56 @@ def root() -> str:
     """
 
 
+def _map_inventory_error(error: Exception) -> HTTPException:
+    if isinstance(error, UnknownPart):
+        return HTTPException(status_code=404, detail=str(error))
+    if isinstance(error, InsufficientStock):
+        return HTTPException(status_code=409, detail=str(error))
+    return HTTPException(status_code=500, detail=str(error))
+
+
 @app.get("/api/inventory")
 def inventory() -> dict:
-    with db() as conn:
-        return {"items": inventory_items(conn)}
+    return {"items": get_store().inventory_items()}
 
 
 @app.post("/api/inventory/buy")
 def buy_stock(payload: InventoryActionRequest) -> dict:
-    with db() as conn:
-        ensure_part(conn, payload.part_id)
-        conn.execute(
-            "UPDATE parts SET on_hand = on_hand + ? WHERE id = ?",
-            (payload.quantity, payload.part_id),
-        )
-        audit(conn, payload.actor, "buy", f"Bought {payload.quantity} units of {payload.part_id}")
-        return {"status": "bought", "part": inventory_item(conn, payload.part_id)}
+    try:
+        part = get_store().buy(payload.part_id, payload.quantity, payload.actor)
+    except (UnknownPart, InsufficientStock) as error:
+        raise _map_inventory_error(error) from error
+    return {"status": "bought", "part": part}
 
 
 @app.post("/api/inventory/sell")
 def sell_stock(payload: InventoryActionRequest) -> dict:
-    with db() as conn:
-        part = ensure_part(conn, payload.part_id)
-        available = available_quantity(conn, payload.part_id)
-        if payload.quantity > available:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Only {available} units of {part['id']} are available to sell",
-            )
-        conn.execute(
-            "UPDATE parts SET on_hand = on_hand - ? WHERE id = ?",
-            (payload.quantity, payload.part_id),
-        )
-        audit(conn, payload.actor, "sell", f"Sold {payload.quantity} units of {payload.part_id}")
-        return {"status": "sold", "part": inventory_item(conn, payload.part_id)}
+    try:
+        part = get_store().sell(payload.part_id, payload.quantity, payload.actor)
+    except (UnknownPart, InsufficientStock) as error:
+        raise _map_inventory_error(error) from error
+    return {"status": "sold", "part": part}
 
 
 @app.post("/api/reservations")
 def reserve_stock(payload: ReserveRequest) -> dict:
-    with db() as conn:
-        part = ensure_part(conn, payload.part_id)
-        available = available_quantity(conn, payload.part_id)
-        if payload.quantity > available:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Only {available} units of {part['id']} are available",
-            )
-        cursor = conn.execute(
-            """
-            INSERT INTO reservations(part_id, quantity, status, actor)
-            VALUES (?, ?, 'active', ?)
-            """,
-            (payload.part_id, payload.quantity, payload.actor),
-        )
-        audit(conn, payload.actor, "reserve", f"Reserved {payload.quantity} units of {payload.part_id}")
-        return {"reservation_id": cursor.lastrowid, "status": "active"}
+    try:
+        return get_store().reserve(payload.part_id, payload.quantity, payload.actor)
+    except (UnknownPart, InsufficientStock) as error:
+        raise _map_inventory_error(error) from error
 
 
 @app.get("/api/state")
 def state() -> dict:
-    with db() as conn:
-        inventory_rows = inventory_items(conn)
-        reservations = rows(conn.execute("SELECT * FROM reservations ORDER BY id DESC"))
-        return {
-            "runtime": {"db_path": str(DB_PATH)},
-            "summary": {
-                "items": len(inventory_rows),
-                "reservations": len(reservations),
-                "low_stock": sum(1 for item in inventory_rows if item["available"] < item["reorder_point"]),
-            },
-            "inventory": inventory_rows,
-            "reservations": reservations,
-            "audit_log": rows(conn.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT 25")),
-        }
+    store = get_store()
+    payload = store.state()
+    return {
+        "runtime": {"db_path": store.location_label, "backend": store.backend},
+        **payload,
+    }
 
 
 @app.post("/api/reset")
 def reset() -> dict:
-    if DB_PATH.exists():
-        DB_PATH.unlink()
-    init_db()
+    get_store().reset()
     return {"status": "reset"}
