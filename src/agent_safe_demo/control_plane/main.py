@@ -59,13 +59,30 @@ def statefork_kwargs_from_env() -> dict:
     return kwargs
 
 
-def data_backend_config(app_spec: AppSpec) -> tuple[str, Path | None, dict[str, str]]:
+class DataBackendConfig:
+    """Resolved data-tier configuration for an app."""
+
+    def __init__(
+        self,
+        backend: str,
+        dolt_dir: Path | None = None,
+        runtime_env: dict[str, str] | None = None,
+        server_params: dict | None = None,
+    ) -> None:
+        self.backend = backend
+        self.dolt_dir = dolt_dir
+        self.runtime_env = runtime_env or {}
+        self.server_params = server_params
+
+
+def data_backend_config(app_spec: AppSpec) -> DataBackendConfig:
     """Resolve the data-tier backend for an app from the environment.
 
-    Returns (backend, dolt_dir, extra_runtime_env). For the Dolt backend
-    (architecture A) the same external repo is used by both the control plane's
-    data tier and the in-runtime app, so the runtime env is augmented to point
-    the app at it. The repo MUST live outside the per-branch checkpoint workdir.
+    For the Dolt backends (architecture A) the same external repo is shared by
+    the control plane's data tier and the in-runtime app, so the runtime env is
+    augmented to point the app at it. The repo MUST live outside the per-branch
+    checkpoint workdir. ``dolt_server`` adds a long-lived ``dolt sql-server``
+    (managed in lifespan) and connection parameters.
     """
     # db_env_var looks like "DEMO_INVENTORY_DB_PATH"; derive the sibling vars.
     db_env_var = app_spec.db_env_var
@@ -73,25 +90,43 @@ def data_backend_config(app_spec: AppSpec) -> tuple[str, Path | None, dict[str, 
     backend = os.getenv(
         f"{prefix}_DB_BACKEND", os.getenv("DEMO_DATA_BACKEND", "sqlite")
     ).lower()
-    if backend != "dolt":
-        return backend, None, {}
+
+    if backend not in ("dolt", "dolt_server"):
+        return DataBackendConfig("sqlite")
 
     # Default matches the app store's own default (DB_PATH stem + "_dolt").
     default_dir = app_spec.db_path.with_name(app_spec.db_path.stem + "_dolt")
     dolt_dir = Path(os.getenv(f"{prefix}_DOLT_DIR", str(default_dir))).resolve()
-    extra_env = {
-        f"{prefix}_DB_BACKEND": "dolt",
-        f"{prefix}_DOLT_DIR": str(dolt_dir),
+
+    if backend == "dolt":
+        runtime_env = {
+            f"{prefix}_DB_BACKEND": "dolt",
+            f"{prefix}_DOLT_DIR": str(dolt_dir),
+        }
+        return DataBackendConfig("dolt", dolt_dir=dolt_dir, runtime_env=runtime_env)
+
+    # dolt_server: a persistent MySQL-protocol server over the same repo.
+    host = os.getenv(f"{prefix}_DOLT_HOST", "127.0.0.1")
+    port = int(os.getenv(f"{prefix}_DOLT_PORT", "3306"))
+    database = os.getenv(f"{prefix}_DOLT_DB", dolt_dir.name)  # dolt db name = repo dir name
+    server_params = {"host": host, "port": port, "database": database}
+    runtime_env = {
+        f"{prefix}_DB_BACKEND": "dolt_server",
+        f"{prefix}_DOLT_HOST": host,
+        f"{prefix}_DOLT_PORT": str(port),
+        f"{prefix}_DOLT_DB": database,
     }
-    return backend, dolt_dir, extra_env
+    return DataBackendConfig(
+        "dolt_server", dolt_dir=dolt_dir, runtime_env=runtime_env, server_params=server_params
+    )
 
 
 def create_branch_backend(app_spec: AppSpec | None = None) -> StateForkBackend:
     selected_app = app_spec or CURRENT_APP
     default_statefork_root = selected_app.project_root.parent / "Andy_StateFork"
     statefork_root = Path(os.getenv("DEMO_STATEFORK_ROOT", default_statefork_root))
-    data_backend, dolt_dir, extra_runtime_env = data_backend_config(selected_app)
-    state_env = {**dict(selected_app.state_env), **extra_runtime_env}
+    cfg = data_backend_config(selected_app)
+    state_env = {**dict(selected_app.state_env), **cfg.runtime_env}
     return StateForkBackend(
         selected_app.project_root,
         selected_app.db_path,
@@ -115,20 +150,61 @@ def create_branch_backend(app_spec: AppSpec | None = None) -> StateForkBackend:
         state_env=state_env,
         manifest_path=selected_app.manifest_path,
         agent_demo_actions=list(selected_app.agent_demo_actions or []),
-        data_backend=data_backend,
-        dolt_dir=dolt_dir,
+        data_backend=cfg.backend,
+        dolt_dir=cfg.dolt_dir,
         dolt_bin=os.getenv("DEMO_DOLT_BIN", "dolt"),
+        server_params=cfg.server_params,
     )
 
 
 branch_backend = create_branch_backend(CURRENT_APP)
 
 
+dolt_sql_server = None  # set when the current app uses the dolt_server backend
+
+
+def start_dolt_server_if_needed() -> None:
+    """Start a long-lived dolt sql-server for the current app's data tier.
+
+    Must run before CURRENT_APP.init_db() so the app seeds via the server. The
+    server connection env is exported so the in-process app store connects to
+    the same server the control plane manages.
+    """
+    global dolt_sql_server
+    cfg = data_backend_config(CURRENT_APP)
+    if cfg.backend != "dolt_server" or cfg.server_params is None:
+        return
+    from agent_safe_demo.control_plane.dolt_server import DoltSqlServer
+
+    server = DoltSqlServer(
+        cfg.dolt_dir,
+        host=cfg.server_params["host"],
+        port=cfg.server_params["port"],
+        dolt_bin=os.getenv("DEMO_DOLT_BIN", "dolt"),
+    )
+    server.start()
+    dolt_sql_server = server
+    # Export connection env so CURRENT_APP.init_db()'s store reaches the server.
+    for key, value in cfg.runtime_env.items():
+        os.environ[key] = value
+
+
+def stop_dolt_server_if_needed() -> None:
+    global dolt_sql_server
+    if dolt_sql_server is not None:
+        dolt_sql_server.stop()
+        dolt_sql_server = None
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    start_dolt_server_if_needed()
     CURRENT_APP.init_db()
     commit_store.init_db()
-    yield
+    try:
+        yield
+    finally:
+        stop_dolt_server_if_needed()
 
 
 app = FastAPI(

@@ -27,7 +27,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-# Seed data shared by both backends so they start from an identical state.
+# Seed data shared by all backends so they start from an identical state.
 SEED_PARTS: tuple[tuple[str, str, str, int, int], ...] = (
     ("MCU-100", "Control board", "Aisle 1 / Bin 02", 8, 4),
     ("MCU-ALT", "Backup control board", "Aisle 1 / Bin 08", 4, 2),
@@ -35,6 +35,50 @@ SEED_PARTS: tuple[tuple[str, str, str, int, int], ...] = (
     ("CASE-42", "Aluminum enclosure", "Aisle 4 / Bin 01", 12, 4),
     ("WIRE-RED", "Red harness wire", "Aisle 2 / Bin 05", 50, 10),
 )
+
+# MySQL-dialect schema shared by the Dolt CLI and Dolt sql-server backends.
+DOLT_TABLE_DDL: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS parts (
+        id VARCHAR(64) PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        location VARCHAR(255) NOT NULL,
+        on_hand INT NOT NULL CHECK (on_hand >= 0),
+        reorder_point INT NOT NULL CHECK (reorder_point >= 0)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS reservations (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        part_id VARCHAR(64) NOT NULL,
+        quantity INT NOT NULL CHECK (quantity > 0),
+        status VARCHAR(32) NOT NULL,
+        actor VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (part_id) REFERENCES parts(id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS audit_log (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        actor VARCHAR(255) NOT NULL,
+        action VARCHAR(255) NOT NULL,
+        detail TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+)
+
+# Shared item query (computed available/reserved via active reservations).
+_ITEM_SELECT = """
+    SELECT
+        p.id, p.name, p.location, p.on_hand, p.reorder_point,
+        p.on_hand - COALESCE(SUM(r.quantity), 0) AS available,
+        COALESCE(SUM(r.quantity), 0) AS reserved
+    FROM parts p
+    LEFT JOIN reservations r ON r.part_id = p.id AND r.status = 'active'
+"""
+_ITEM_GROUP = " GROUP BY p.id, p.name, p.location, p.on_hand, p.reorder_point"
 
 
 class InventoryError(Exception):
@@ -330,41 +374,8 @@ class DoltInventoryStore(InventoryStore):
                 cwd=self.repo_dir, capture_output=True, text=True, check=True,
             )
 
-        self._sql(
-            """
-            CREATE TABLE IF NOT EXISTS parts (
-                id VARCHAR(64) PRIMARY KEY,
-                name VARCHAR(255) NOT NULL,
-                location VARCHAR(255) NOT NULL,
-                on_hand INT NOT NULL CHECK (on_hand >= 0),
-                reorder_point INT NOT NULL CHECK (reorder_point >= 0)
-            )
-            """
-        )
-        self._sql(
-            """
-            CREATE TABLE IF NOT EXISTS reservations (
-                id INT PRIMARY KEY AUTO_INCREMENT,
-                part_id VARCHAR(64) NOT NULL,
-                quantity INT NOT NULL CHECK (quantity > 0),
-                status VARCHAR(32) NOT NULL,
-                actor VARCHAR(255) NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (part_id) REFERENCES parts(id)
-            )
-            """
-        )
-        self._sql(
-            """
-            CREATE TABLE IF NOT EXISTS audit_log (
-                id INT PRIMARY KEY AUTO_INCREMENT,
-                actor VARCHAR(255) NOT NULL,
-                action VARCHAR(255) NOT NULL,
-                detail TEXT NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
+        for ddl in DOLT_TABLE_DDL:
+            self._sql(ddl)
         self._seed_if_empty()
 
     def _seed_if_empty(self) -> None:
@@ -483,6 +494,182 @@ class DoltInventoryStore(InventoryStore):
         self._seed_if_empty()
 
 
+# --------------------------------------------------------------------------- #
+# Dolt sql-server backend (architecture A, realistic steady-state perf)
+# --------------------------------------------------------------------------- #
+class DoltServerInventoryStore(InventoryStore):
+    """Talks to a long-lived ``dolt sql-server`` over the MySQL protocol.
+
+    Unlike ``DoltInventoryStore`` (which spawns a ``dolt`` process per query),
+    this opens a real MySQL connection to a persistent server and uses **bind
+    parameters** (no string interpolation). This is the path that yields
+    meaningful steady-state throughput numbers; data versioning (commit/branch/
+    reset) is driven by the control plane via ``CALL DOLT_*`` procedures, not by
+    this store.
+    """
+
+    backend = "dolt_server"
+
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 3306,
+        database: str = "inventory",
+        user: str = "root",
+        password: str = "",
+    ) -> None:
+        self.host = host
+        self.port = int(port)
+        self.database = database
+        self.user = user
+        self.password = password
+
+    @property
+    def location_label(self) -> str:
+        return f"{self.host}:{self.port}/{self.database} (dolt-server)"
+
+    def _connect(self):
+        import pymysql  # lazy: only needed for the server backend
+        return pymysql.connect(
+            host=self.host, port=self.port, user=self.user, password=self.password,
+            database=self.database, autocommit=True,
+            cursorclass=pymysql.cursors.DictCursor,
+        )
+
+    @contextmanager
+    def _cursor(self):
+        conn = self._connect()
+        try:
+            with conn.cursor() as cur:
+                yield cur
+        finally:
+            conn.close()
+
+    def _query(self, sql: str, args: tuple = ()) -> list[dict[str, Any]]:
+        with self._cursor() as cur:
+            cur.execute(sql, args)
+            rows = cur.fetchall()
+        return list(rows or [])
+
+    def _execute(self, sql: str, args: tuple = ()) -> None:
+        with self._cursor() as cur:
+            cur.execute(sql, args)
+
+    @staticmethod
+    def _coerce_item(row: dict[str, Any]) -> dict[str, Any]:
+        for key in ("on_hand", "reorder_point", "available", "reserved"):
+            if row.get(key) is not None:
+                row[key] = int(row[key])
+        return row
+
+    def init(self) -> None:
+        with self._cursor() as cur:
+            for ddl in DOLT_TABLE_DDL:
+                cur.execute(ddl)
+            cur.execute("SELECT COUNT(*) AS c FROM parts")
+            if int(cur.fetchone()["c"]) == 0:
+                cur.executemany(
+                    "INSERT INTO parts(id, name, location, on_hand, reorder_point) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    list(SEED_PARTS),
+                )
+            cur.execute("SELECT COUNT(*) AS c FROM audit_log")
+            if int(cur.fetchone()["c"]) == 0:
+                cur.execute(
+                    "INSERT INTO audit_log(actor, action, detail) VALUES (%s, %s, %s)",
+                    ("system", "seed", "Loaded sample inventory data"),
+                )
+
+    def _audit(self, actor: str, action: str, detail: str) -> None:
+        self._execute(
+            "INSERT INTO audit_log(actor, action, detail) VALUES (%s, %s, %s)",
+            (actor, action, detail),
+        )
+
+    def inventory_items(self) -> list[dict[str, Any]]:
+        rows = self._query(_ITEM_SELECT + _ITEM_GROUP + " ORDER BY p.id")
+        return [self._coerce_item(row) for row in rows]
+
+    def inventory_item(self, part_id: str) -> dict[str, Any]:
+        rows = self._query(
+            _ITEM_SELECT + " WHERE p.id = %s" + _ITEM_GROUP, (part_id,)
+        )
+        if not rows:
+            raise UnknownPart(part_id)
+        return self._coerce_item(rows[0])
+
+    def _ensure_part(self, part_id: str) -> None:
+        if not self._query("SELECT id FROM parts WHERE id = %s", (part_id,)):
+            raise UnknownPart(part_id)
+
+    def buy(self, part_id: str, quantity: int, actor: str) -> dict[str, Any]:
+        self._ensure_part(part_id)
+        self._execute(
+            "UPDATE parts SET on_hand = on_hand + %s WHERE id = %s", (int(quantity), part_id)
+        )
+        self._audit(actor, "buy", f"Bought {quantity} units of {part_id}")
+        return self.inventory_item(part_id)
+
+    def sell(self, part_id: str, quantity: int, actor: str) -> dict[str, Any]:
+        item = self.inventory_item(part_id)
+        if quantity > item["available"]:
+            raise InsufficientStock(
+                f"Only {item['available']} units of {part_id} are available to sell"
+            )
+        self._execute(
+            "UPDATE parts SET on_hand = on_hand - %s WHERE id = %s", (int(quantity), part_id)
+        )
+        self._audit(actor, "sell", f"Sold {quantity} units of {part_id}")
+        return self.inventory_item(part_id)
+
+    def reserve(self, part_id: str, quantity: int, actor: str) -> dict[str, Any]:
+        item = self.inventory_item(part_id)
+        if quantity > item["available"]:
+            raise InsufficientStock(
+                f"Only {item['available']} units of {part_id} are available"
+            )
+        with self._cursor() as cur:
+            cur.execute(
+                "INSERT INTO reservations(part_id, quantity, status, actor) "
+                "VALUES (%s, %s, 'active', %s)",
+                (part_id, int(quantity), actor),
+            )
+            cur.execute("SELECT LAST_INSERT_ID() AS id")
+            reservation_id = int(cur.fetchone()["id"])
+            cur.execute(
+                "INSERT INTO audit_log(actor, action, detail) VALUES (%s, %s, %s)",
+                (actor, "reserve", f"Reserved {quantity} units of {part_id}"),
+            )
+        return {"reservation_id": reservation_id, "status": "active"}
+
+    def state(self) -> dict[str, Any]:
+        items = self.inventory_items()
+        reservations = self._query(
+            "SELECT id, part_id, quantity, status, actor, created_at "
+            "FROM reservations ORDER BY id DESC"
+        )
+        audit_log = self._query(
+            "SELECT id, actor, action, detail, created_at "
+            "FROM audit_log ORDER BY id DESC LIMIT 25"
+        )
+        return _state_payload(items, reservations, audit_log)
+
+    def reset(self) -> None:
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM reservations")
+            cur.execute("DELETE FROM audit_log")
+            cur.execute("DELETE FROM parts")
+            cur.executemany(
+                "INSERT INTO parts(id, name, location, on_hand, reorder_point) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                list(SEED_PARTS),
+            )
+            cur.execute(
+                "INSERT INTO audit_log(actor, action, detail) VALUES (%s, %s, %s)",
+                ("system", "seed", "Loaded sample inventory data"),
+            )
+
+
 def _state_payload(
     items: list[dict[str, Any]],
     reservations: list[dict[str, Any]],
@@ -522,6 +709,14 @@ def create_store(
         )
         return DoltInventoryStore(
             Path(repo), dolt_bin=dolt_bin or os.getenv("DEMO_DOLT_BIN", "dolt")
+        )
+    if backend == "dolt_server":
+        return DoltServerInventoryStore(
+            host=os.getenv("DEMO_INVENTORY_DOLT_HOST", "127.0.0.1"),
+            port=int(os.getenv("DEMO_INVENTORY_DOLT_PORT", "3306")),
+            database=os.getenv("DEMO_INVENTORY_DOLT_DB", "inventory"),
+            user=os.getenv("DEMO_INVENTORY_DOLT_USER", "root"),
+            password=os.getenv("DEMO_INVENTORY_DOLT_PASSWORD", ""),
         )
     if backend != "sqlite":
         raise InventoryError(f"Unknown inventory backend: {backend!r}")

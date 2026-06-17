@@ -360,6 +360,7 @@ class StateForkBackend:
         data_backend: str = "sqlite",
         dolt_dir: Path | None = None,
         dolt_bin: str = "dolt",
+        server_params: dict[str, Any] | None = None,
     ) -> None:
         self.project_root = project_root
         self.main_db_path = main_db_path
@@ -410,7 +411,8 @@ class StateForkBackend:
         # SQLite-file-in-checkpoint path (architecture B), unchanged.
         self.data_backend = data_backend
         self.data_tier: DataTier | None = build_data_tier(
-            data_backend, dolt_dir=dolt_dir, dolt_bin=dolt_bin
+            data_backend, dolt_dir=dolt_dir, dolt_bin=dolt_bin,
+            server_params=server_params,
         )
 
     def status(self) -> dict[str, Any]:
@@ -478,6 +480,7 @@ class StateForkBackend:
             raise BranchError("StateFork snapshot failed")
         snapshot_id = str(snapshot_id)
         record_operation(self.operation_stats, "snapshot", started_at)
+        self._data_on_snapshot(snapshot_id)
 
         base_id = f"sfbase-{snapshot_id}"
         work_dir = Path(getattr(manager, "work_dir", self.project_root))
@@ -534,6 +537,7 @@ class StateForkBackend:
         if ok is False:
             raise BranchError(f"StateFork restore failed for base {base.id}")
         record_operation(self.operation_stats, "restore", restore_started_at)
+        self._data_on_restore(base.checkpoint_id)
 
         env_started_at = time.time()
         environment_name = self._call_statefork(
@@ -705,6 +709,7 @@ class StateForkBackend:
             raise BranchError(f"StateFork commit snapshot failed for branch {branch_id}")
         snapshot_id = str(snapshot_id)
         record_operation(self.operation_stats, "snapshot", snapshot_started_at)
+        self._data_on_snapshot(snapshot_id)
 
         restore_started_at = time.time()
         with self._quiesce_branch(branch):
@@ -716,6 +721,7 @@ class StateForkBackend:
         if ok is False:
             raise BranchError(f"StateFork restore failed for committed snapshot {snapshot_id}")
         record_operation(self.operation_stats, "restore", restore_started_at)
+        self._data_on_restore(snapshot_id)
 
         if branch.runtime_type == "checkpoint_exec":
             self._wait_until_ready(branch)
@@ -846,6 +852,7 @@ class StateForkBackend:
             self._wait_until_ready(branch)
         snapshot_id = str(snapshot_id)
         record_operation(self.operation_stats, "snapshot", started_at)
+        self._data_on_snapshot(snapshot_id)
         parent_id = branch.current_snapshot_id or branch.base_checkpoint_id
         snapshot = SnapshotHandle(
             id=snapshot_id,
@@ -880,12 +887,15 @@ class StateForkBackend:
             if ok is False:
                 raise BranchError(f"StateFork restore failed for snapshot {snapshot.id}")
             record_operation(self.operation_stats, "restore", started_at)
+            self._data_on_restore(snapshot.id)
         else:
             self._terminate(branch)
             ok = self._call_statefork(lambda: manager.restore(snapshot.id))
             if ok is False:
                 raise BranchError(f"StateFork restore failed for snapshot {snapshot.id}")
             record_operation(self.operation_stats, "restore", started_at)
+            # Roll the data tier back before the app runtime comes back up.
+            self._data_on_restore(snapshot.id)
             branch.process, _, _ = self._start_branch_runtime(
                 manager=manager,
                 branch_id=branch.id,
@@ -1190,6 +1200,17 @@ class StateForkBackend:
             return self._data_summary(db_path)
         except (sqlite3.Error, RuntimeError):
             return None
+
+    # Version the data tier alongside each StateFork checkpoint. No-op for the
+    # CLI Dolt tier (the manager drives Dolt via dolt_repo) and for SQLite; the
+    # dolt-server tier commits/branches/resets via CALL DOLT_* over the server.
+    def _data_on_snapshot(self, snapshot_id: str) -> None:
+        if self.data_tier is not None:
+            self.data_tier.on_snapshot(snapshot_id)
+
+    def _data_on_restore(self, snapshot_id: str) -> None:
+        if self.data_tier is not None:
+            self.data_tier.on_restore(snapshot_id)
 
     def _quote_identifier(self, name: str) -> str:
         return '"' + name.replace('"', '""') + '"'

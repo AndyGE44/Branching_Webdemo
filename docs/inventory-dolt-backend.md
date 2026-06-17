@@ -100,11 +100,50 @@ driving `manager.snapshot()/restore()` + the runtime process reaching the host
 Dolt repo) must be validated on the VM, since checkpoint-lite/CRIU is not
 available in every dev environment.
 
+## Dolt sql-server backend (`dolt_server`) — realistic steady-state perf
+
+The `dolt` backend spawns one `dolt` process per query, which is fine for
+correctness but useless for throughput numbers. `DEMO_INVENTORY_DB_BACKEND=dolt_server`
+runs the external Dolt repo as a long-lived **`dolt sql-server`** over the MySQL
+protocol instead:
+
+- the app store (`DoltServerInventoryStore`) connects with **PyMySQL + bind
+  parameters** (no string-literal interpolation), and
+- the control plane manages the server lifecycle (`control_plane/dolt_server.py`)
+  and versions data **server-natively** via `CALL DOLT_ADD/COMMIT/BRANCH/RESET`
+  (`DoltServerDataTier`) — the CLI `DoltController` is **not** used here, because
+  running CLI write commands against a live server would fight its in-memory
+  working set.
+
+Run the UI on it (process runtime mode):
+
+```bash
+export DEMO_APP_ID=inventory
+export DEMO_INVENTORY_DB_BACKEND=dolt_server
+export DEMO_INVENTORY_DOLT_DIR="$HOME/demo_inventory_dolt"   # repo dir; db name = its basename
+export DEMO_INVENTORY_DOLT_PORT=3306                          # control plane starts the server here
+export DEMO_STATEFORK_ROOT=/path/to/Andy_StateFork
+export PATH="$HOME/.local/bin:$PATH"
+python -m uvicorn agent_safe_demo.control_plane.main:app --host 127.0.0.1 --port 8000
+```
+
+The control plane starts the server in its lifespan, seeds it, and exports
+`DEMO_INVENTORY_DOLT_HOST/PORT/DB` so the in-runtime app connects to the same
+server. Standalone proof:
+
+```bash
+python scripts/inventory-dolt-server-demo.py
+```
+
+Caveat: with a running server, snapshot/restore no longer go through the CLI, so
+`DoltServerDataTier.statefork_kwargs()` is empty and the control plane calls
+`on_snapshot`/`on_restore` explicitly at each StateFork checkpoint.
+
 ## Notes / limitations
 
-- The Dolt backend uses the `dolt sql -q` CLI with quoted string literals (no
-  bind parameters). This is the correctness-first path; the benchmark path
-  should move to `dolt sql-server` + a driver for realistic throughput numbers.
+- The `dolt` (CLI) backend uses `dolt sql -q` with quoted string literals (no
+  bind parameters) — correctness-first. The `dolt_server` backend supersedes it
+  for performance: PyMySQL bind parameters + a long-lived server.
 - SQL dialect differences handled: `AUTOINCREMENT`→`AUTO_INCREMENT`,
   `TEXT PRIMARY KEY`→`VARCHAR`, `lastrowid`→`SELECT MAX(id)`, explicit
   `GROUP BY` of all non-aggregated columns.
