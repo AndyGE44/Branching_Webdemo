@@ -38,9 +38,27 @@ def init_db() -> None:
     get_store().init()
 
 
+_ballast: bytearray | None = None
+
+
+def _alloc_ballast() -> None:
+    """Hold a fixed resident working set so the app-tier CRIU checkpoint has a
+    realistic memory footprint to capture (build-mode benchmark knob). Touches
+    every page so the bytes are resident (RSS), not lazily mapped. No-op when
+    DEMO_INVENTORY_BALLAST_MB is unset/0."""
+    global _ballast
+    mb = int(os.getenv("DEMO_INVENTORY_BALLAST_MB", "0") or "0")
+    if mb > 0:
+        buf = bytearray(mb * 1024 * 1024)
+        for i in range(0, len(buf), 4096):
+            buf[i] = 1
+        _ballast = buf
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     init_db()
+    _alloc_ballast()
     yield
 
 

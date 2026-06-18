@@ -127,6 +127,10 @@ def create_branch_backend(app_spec: AppSpec | None = None) -> StateForkBackend:
     statefork_root = Path(os.getenv("DEMO_STATEFORK_ROOT", default_statefork_root))
     cfg = data_backend_config(selected_app)
     state_env = {**dict(selected_app.state_env), **cfg.runtime_env}
+    # Benchmark knob: forward an in-memory ballast size to the runtime app so the
+    # app-tier CRIU checkpoint (build mode) has a realistic memory footprint.
+    if os.getenv("DEMO_INVENTORY_BALLAST_MB"):
+        state_env["DEMO_INVENTORY_BALLAST_MB"] = os.environ["DEMO_INVENTORY_BALLAST_MB"]
     return StateForkBackend(
         selected_app.project_root,
         selected_app.db_path,

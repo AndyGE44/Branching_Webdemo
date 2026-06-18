@@ -10,9 +10,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends bash ca-certificates procps \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir fastapi uvicorn pydantic
+RUN pip install --no-cache-dir fastapi uvicorn pydantic PyMySQL
 
 RUN mkdir -p /src/agent_safe_demo/app_plane/inventory_service
 COPY app.py /src/agent_safe_demo/app_plane/inventory_service/app.py
+COPY store.py /src/agent_safe_demo/app_plane/inventory_service/store.py
 COPY __init__.py /src/agent_safe_demo/app_plane/inventory_service/__init__.py
 RUN touch /src/agent_safe_demo/__init__.py /src/agent_safe_demo/app_plane/__init__.py
