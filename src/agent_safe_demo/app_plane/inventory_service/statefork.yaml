@@ -3,9 +3,9 @@ name: Inventory Service
 description: Parts, stock levels, reservations, and reorder actions.
 
 runtime:
-  type: checkpoint_exec
+  type: process
   command: "python -m uvicorn agent_safe_demo.app_plane.inventory_service.app:app --host ${HOST} --port ${PORT}"
-  cwd: "/"
+  cwd: "${BRANCH_WORKDIR}"
   port_env: "PORT"
   health_path: "/api/state"
   ui_path: "/"

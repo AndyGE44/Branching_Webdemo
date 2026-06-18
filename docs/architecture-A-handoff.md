@@ -17,10 +17,12 @@ Status date: 2026-06-17.
   CLI), `dolt_server` (arch A, long-lived `dolt sql-server`).
 - The control-plane UI is wired so snapshot / restore / commit / diff operate on
   the Dolt data tier in lockstep with the app checkpoint.
-- **Blocked here:** the StateFork **app-tier checkpoint** needs **CRIU** (via
-  Waypoint / `ckpt_build`), which is not installable on this Ubuntu 24.04 / AWS
-  VM (no `criu` apt package; Waypoint is an unbuilt Go source repo). Continue on
-  a CRIU-capable physical node — see "Remaining work".
+- **App tier (StateFork/Waypoint) now runs on a CRIU-capable node.** CRIU 4.2
+  (criu PPA) + the prebuilt Waypoint v0.6.0 binary are present, and the full UI
+  flow was driven end-to-end with **both tiers moving in lockstep**: a
+  snapshot/restore through the control-plane API rolls the Dolt data tier
+  back/forward together with the app checkpoint. See "Verified run on the CRIU
+  node" for the exact config.
 
 ## Two repos / branches involved
 
@@ -96,9 +98,12 @@ does, via the StateFork manager's `dolt_repo` kwarg.
 - `pytest tests/test_api.py -k "inventory or kv or mailbox_seed"` → 4 passed.
 - `control_plane.main` imports cleanly; `controller` imports in the venv.
 
-**NOT verified here (needs a CRIU node):**
-- The full UI flow with real StateFork **app-tier checkpoints** (Waypoint/CRIU),
-  i.e. clicking Snapshot/Restore/Commit in the browser and seeing both tiers move.
+**Verified on the CRIU node (2026-06-17):**
+- The full UI flow with real StateFork **app-tier checkpoints** (Waypoint/CRIU):
+  workspace → Run Agent → Snapshot → edit → Restore via the control-plane API,
+  with the Dolt data tier rolling back/forward in lockstep. Confirmed two ways —
+  inventory counts/items returned to the snapshot's values, and the external repo
+  carried a per-snapshot `sf_<id>` branch (`dolt branch` in the Dolt dir).
 
 ## Environment already set up on this VM
 
@@ -115,31 +120,63 @@ python scripts/inventory-dolt-ab-demo.py        # arch A, CLI (needs DEMO_STATEF
 python scripts/inventory-dolt-server-demo.py    # arch A, sql-server
 ```
 
-## Remaining work (on a CRIU-capable physical node)
+## Verified run on the CRIU node (2026-06-17)
 
-1. **Install CRIU** and confirm it works (`criu check`). On Ubuntu where the apt
-   package is gone, build from source or use a distro/PPA that ships it; the
-   kernel must have CRIU support.
-2. **Build Waypoint** (`Andy_Waypoint`, Go project, needs Go 1.25):
-   produce the `waypoint` binary and symlink it into `Andy_StateFork/waypoint`
-   (see `Andy_StateFork/README.md` → Waypoint method).
-3. **Check out both feature branches** and set `DEMO_STATEFORK_ROOT` to the
-   `Andy_StateFork` checkout.
-4. **Run the control plane on architecture A** (process runtime mode):
-   ```bash
-   cd Branching_Webdemo && . .venv/bin/activate && export PATH="$HOME/.local/bin:$PATH"
-   export DEMO_APP_ID=inventory
-   export DEMO_INVENTORY_DB_BACKEND=dolt_server          # or: dolt
-   export DEMO_INVENTORY_DOLT_DIR="$HOME/demo_inventory_dolt"   # OUTSIDE any checkpoint workdir
-   export DEMO_INVENTORY_DOLT_PORT=3306
-   export DEMO_STATEFORK_ROOT=/path/to/Andy_StateFork
-   # use a process-mode StateFork method (NOT docker/checkpoint_exec — they
-   # isolate the app so it can't reach the external Dolt dir):
-   export DEMO_STATEFORK_METHOD=criu_build               # or the waypoint/process method that works
-   python -m uvicorn agent_safe_demo.control_plane.main:app --host 127.0.0.1 --port 8000
-   ```
-   Then in the browser: Run Agent → Snapshot → make edits → Restore, and confirm
-   the inventory data rolls back (data tier) alongside the app.
+This node (CloudLab, Ubuntu 24.04, kernel 6.8) already had the prerequisites the
+old VM lacked — plus two regressions to repair:
+
+- **CRIU 4.2** from the criu PPA (`/usr/sbin/criu`; `sudo criu check` → "Looks
+  good"). Unprivileged use needs `CAP_CHECKPOINT_RESTORE`; we just run the
+  control plane under `sudo`, since Waypoint (CRIU + OverlayFS) needs root anyway.
+- **Waypoint v0.6.0** binary already built at `Andy_Waypoint/waypoint`, symlinked
+  from `Andy_StateFork/waypoint`.
+- Regressions vs. the old VM: `dolt` was gone (reinstalled **2.1.8** to
+  `/usr/local/bin`, identity set for both users) and the venv was gone (recreated
+  from Python 3.13 via `pip install -e ".[dev]"`).
+
+**Process runtime mode is required** — the doc's earlier `criu_build` guess does
+not fit the branching flow (CRIUBuildManager launches/own-checkpoints its own
+process and has no `exec`). The inventory manifest shipped as
+`runtime.type: checkpoint_exec`, which isolates the app (DB forced to `/<name>`,
+run via `waypoint exec` inside a Dockerfile env that has no PyMySQL). Arch A needs
+the app on the host so it can reach the external Dolt repo, so change
+`app_plane/inventory_service/statefork.yaml`:
+
+    runtime:
+      type: process            # was: checkpoint_exec
+      cwd: "${BRANCH_WORKDIR}"  # was: "/"
+
+With `runtime.type: process`, `ckpt_build` resolves to
+`WaypointBuildManager(build=False)` → `waypoint init` (a filesystem checkpoint of
+the work_dir); the app is launched on the host by `RuntimeProcessManager`; and the
+manager's `snapshot()/restore()` drive the attached `DoltController` (CLI `dolt`)
+in lockstep.
+
+Launch (root for Waypoint; put the venv on PATH so the app subprocess and `dolt`
+resolve):
+
+```bash
+sudo env \
+  DEMO_APP_ID=inventory \
+  DEMO_INVENTORY_DB_BACKEND=dolt \
+  DEMO_INVENTORY_DOLT_DIR=/users/alexxjk/demo_inventory_dolt \
+  DEMO_STATEFORK_ROOT=/users/alexxjk/Andy_StateFork \
+  DEMO_STATEFORK_METHOD=ckpt_build \
+  DEMO_DOLT_BIN=dolt \
+  PATH=/users/alexxjk/Branching_Webdemo/.venv/bin:/usr/local/bin:/usr/bin:/bin \
+  /users/alexxjk/Branching_Webdemo/.venv/bin/python -m uvicorn \
+  agent_safe_demo.control_plane.main:app --host 127.0.0.1 --port 8000
+```
+
+Then drive Run Agent → Snapshot → edit → Restore (browser, or the API:
+`/api/workspace`, `/api/workspace/run-agent`, `/api/workspace/snapshots`,
+`/api/workspace/restore`; runtime proxied under `/runtime`). Observed: inventory
+counts and each item's available/reserved rolled back with the app checkpoint, and
+the external repo gained an `sf_<snapshot_id>` branch per snapshot.
+
+`dolt_server` also works in process mode (started in the FastAPI lifespan; the app
+uses PyMySQL over `127.0.0.1:3306` — Waypoint does **not** namespace the network).
+Prefer it for benchmarks; the CLI `dolt` backend spawns a process per query.
 
 ## Constraints / gotchas
 
@@ -151,9 +188,10 @@ python scripts/inventory-dolt-server-demo.py    # arch A, sql-server
   app checkpoint would capture it and defeat the split.
 - **Stateless-app note.** `inventory` keeps all state in Dolt, so its app-tier
   checkpoint is largely redundant — architecture A's value is concentrated in the
-  data tier. A "no-op / process-only" StateFork backend (no CRIU) would let the
-  full UI run without CRIU and is a legitimate variant to benchmark; not built
-  yet (decided to defer to the CRIU node instead).
+  data tier. We run it in **process** runtime mode (`waypoint init`, a
+  filesystem checkpoint of the work_dir) with the app on the host; the Dolt data
+  tier does the real versioning. This is the no-op-ish/process variant the doc
+  previously deferred.
 - **CLI vs server.** `dolt` (CLI) spawns a process per query — fine for
   correctness, useless for throughput. Use `dolt_server` for any benchmark
   numbers.
