@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 700" width="1040" height="700">
+<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5f6b7a"/></marker></defs>
+<rect x="0" y="0" width="1040" height="700" rx="0" fill="#ffffff" stroke="#ffffff" stroke-width="0"/>
+<text x="520.0" y="34" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="600" text-anchor="middle" fill="#1f2933">Branching_Webdemo - build-mode architecture</text>
+<text x="520.0" y="58" font-family="Helvetica, Arial, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#5f6b7a">StateFork checkpoints the app tier (Waypoint: CRIU memory + filesystem); Dolt is the data tier</text>
+<rect x="445" y="80" width="150" height="40" rx="8" fill="#e8f1fb" stroke="#2f6fb0" stroke-width="1.5"/>
+<text x="520" y="105" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="400" text-anchor="middle" fill="#1f2933">Browser / API client</text>
+<line x1="520" y1="120" x2="520" y2="150" stroke="#5f6b7a" stroke-width="1.6" marker-end="url(#ah)"/>
+<rect x="370" y="150" width="300" height="58" rx="8" fill="#e8f1fb" stroke="#2f6fb0" stroke-width="1.5"/>
+<text x="520" y="175" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="500" text-anchor="middle" fill="#1f2933">Control Plane - FastAPI :8000 (host, sudo)</text>
+<text x="520" y="195" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="middle" fill="#5f6b7a">drives StateFork / Waypoint; versions Dolt for arch A</text>
+<line x1="465" y1="208" x2="285" y2="256" stroke="#5f6b7a" stroke-width="1.6" marker-end="url(#ah)"/>
+<line x1="575" y1="208" x2="760" y2="256" stroke="#5f6b7a" stroke-width="1.6" marker-end="url(#ah)"/>
+<text x="270" y="248" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="500" text-anchor="middle" fill="#1d9e75">Arch B - data inside the checkpoint</text>
+<rect x="70" y="262" width="400" height="196" rx="8" fill="#fbfbfa" stroke="#8a8a8a" stroke-width="1.5" stroke-dasharray="6 5"/>
+<text x="270" y="285" font-family="Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" text-anchor="middle" fill="#5f6b7a">Waypoint sandbox  (fs isolated via OverlayFS; network shared)</text>
+<rect x="110" y="300" width="320" height="56" rx="8" fill="#e8f1fb" stroke="#2f6fb0" stroke-width="1.5"/>
+<text x="270" y="323" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="400" text-anchor="middle" fill="#1f2933">inventory app (uvicorn)</text>
+<text x="270" y="343" font-family="Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" text-anchor="middle" fill="#5f6b7a">+ RSS = process memory (CRIU dumps this)</text>
+<rect x="110" y="376" width="320" height="48" rx="8" fill="#e1f5ee" stroke="#1d9e75" stroke-width="1.5"/>
+<text x="270" y="400" font-family="Helvetica, Arial, sans-serif" font-size="13.5" font-weight="400" text-anchor="middle" fill="#1f2933">SQLite  /demo_inventory.db</text>
+<text x="270" y="417" font-family="Helvetica, Arial, sans-serif" font-size="11" font-weight="400" text-anchor="middle" fill="#1d9e75">(lives in the checkpoint)</text>
+<text x="270" y="482" font-family="Helvetica, Arial, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#1f2933">checkpoint = app memory + the DB file</text>
+<text x="770" y="248" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="500" text-anchor="middle" fill="#c0532a">Arch A - external Dolt data tier</text>
+<rect x="570" y="262" width="400" height="130" rx="8" fill="#fbfbfa" stroke="#8a8a8a" stroke-width="1.5" stroke-dasharray="6 5"/>
+<text x="770" y="285" font-family="Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" text-anchor="middle" fill="#5f6b7a">Waypoint sandbox  (fs isolated; network shared)</text>
+<rect x="610" y="300" width="320" height="56" rx="8" fill="#e8f1fb" stroke="#2f6fb0" stroke-width="1.5"/>
+<text x="770" y="323" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="400" text-anchor="middle" fill="#1f2933">inventory app (uvicorn)  + PyMySQL</text>
+<text x="770" y="343" font-family="Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" text-anchor="middle" fill="#5f6b7a">+ RSS = process memory (CRIU dumps this)</text>
+<rect x="610" y="410" width="320" height="50" rx="8" fill="#faece7" stroke="#c0532a" stroke-width="1.5"/>
+<text x="770" y="431" font-family="Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" text-anchor="middle" fill="#1f2933">Dolt sql-server (host, OUTSIDE sandbox)</text>
+<text x="770" y="449" font-family="Helvetica, Arial, sans-serif" font-size="10.5" font-weight="400" text-anchor="middle" fill="#c0532a">versioned by CALL DOLT_COMMIT / BRANCH / RESET</text>
+<line x1="770" y1="356" x2="770" y2="410" stroke="#c0532a" stroke-width="1.6" marker-end="url(#ah)"/>
+<text x="905" y="388" font-family="Helvetica, Arial, sans-serif" font-size="11" font-weight="400" text-anchor="end" fill="#5f6b7a">TCP :3306</text>
+<text x="770" y="482" font-family="Helvetica, Arial, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#1f2933">checkpoint = app memory + tiny fs (data is external)</text>
+<rect x="70" y="506" width="900" height="158" rx="8" fill="#f3f4f6" stroke="#9aa3ad" stroke-width="1.5"/>
+<text x="92" y="534" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="500" text-anchor="start" fill="#1f2933">Snapshot / restore (paired across both tiers)</text>
+<text x="92" y="562" font-family="Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" text-anchor="start" fill="#1f2933">snapshot(id) = waypoint create : CRIU memory + OverlayFS upper    [arch A also: dolt commit + branch sf_ID]</text>
+<text x="92" y="586" font-family="Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" text-anchor="start" fill="#1f2933">restore(id)  = waypoint restore : CRIU memory + fs, SAME PID     [arch A also: dolt reset --hard sf_ID]</text>
+<text x="92" y="620" font-family="Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" text-anchor="start" fill="#5f6b7a">Process mode (alternative): app runs on the host; Waypoint stores the filesystem only (no memory capture).</text>
+<text x="92" y="642" font-family="Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" text-anchor="start" fill="#5f6b7a">Build mode (shown) captures memory, so snapshot/restore cost is dominated by RSS - see docs/benchmark-build-mode.md</text>
+</svg>

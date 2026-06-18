@@ -1,0 +1,42 @@
+{
+  "rss50_d0": {
+    "rss_mb": 50,
+    "n_rows": 0,
+    "snapshot_ms_med": 245.0,
+    "restore_ms_med": 216.7,
+    "criu_mem_bytes": 62443629,
+    "fs_upper_bytes": 208621
+  },
+  "rss200_d0": {
+    "rss_mb": 200,
+    "n_rows": 0,
+    "snapshot_ms_med": 498.5,
+    "restore_ms_med": 269.2,
+    "criu_mem_bytes": 217329808,
+    "fs_upper_bytes": 1
+  },
+  "rss800_d0": {
+    "rss_mb": 800,
+    "n_rows": 0,
+    "snapshot_ms_med": 1553.6,
+    "restore_ms_med": 462.2,
+    "criu_mem_bytes": 846699886,
+    "fs_upper_bytes": 1
+  },
+  "rss200_100k": {
+    "rss_mb": 200,
+    "n_rows": 100000,
+    "snapshot_ms_med": 506.4,
+    "restore_ms_med": 269.5,
+    "criu_mem_bytes": 217908210,
+    "fs_upper_bytes": 5742593
+  },
+  "rss200_1M": {
+    "rss_mb": 200,
+    "n_rows": 1000000,
+    "snapshot_ms_med": 513.6,
+    "restore_ms_med": 267.6,
+    "criu_mem_bytes": 218089069,
+    "fs_upper_bytes": 58433537
+  }
+}
