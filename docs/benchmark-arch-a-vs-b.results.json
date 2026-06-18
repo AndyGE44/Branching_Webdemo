@@ -1,0 +1,92 @@
+{
+  "app_tier_const": {
+    "snapshot_ms_med": 14.58,
+    "restore_ms_med": 14.42
+  },
+  "sizes": {
+    "1000": {
+      "B": {
+        "snapshot_ms_med": 14.17,
+        "snapshot_ms_mean": 14.09,
+        "restore_ms_med": 14.71,
+        "restore_ms_mean": 14.7,
+        "db_bytes": 81920,
+        "snap_upper_bytes": 81920,
+        "store_total_bytes": 72057594801319880
+      },
+      "A_server": {
+        "snapshot_ms_med": 24.33,
+        "snapshot_ms_mean": 24.5,
+        "restore_ms_med": 21.41,
+        "restore_ms_mean": 21.33,
+        "dolt_bytes": 191515
+      },
+      "A_cli": {
+        "snapshot_ms_med": 144.32,
+        "snapshot_ms_mean": 140.47,
+        "restore_ms_med": 138.59,
+        "restore_ms_mean": 138.58,
+        "dolt_bytes": 174265,
+        "snap_delta_bytes": 130155
+      }
+    },
+    "100000": {
+      "B": {
+        "snapshot_ms_med": 15.66,
+        "snapshot_ms_mean": 15.35,
+        "restore_ms_med": 14.88,
+        "restore_ms_mean": 14.43,
+        "db_bytes": 7454720,
+        "snap_upper_bytes": 7454720,
+        "store_total_bytes": 72057594867667208
+      },
+      "A_server": {
+        "snapshot_ms_med": 24.79,
+        "snapshot_ms_mean": 24.41,
+        "restore_ms_med": 21.68,
+        "restore_ms_mean": 21.3,
+        "dolt_bytes": 3524522,
+        "throughput_ops_s": 1209.9
+      },
+      "A_cli": {
+        "snapshot_ms_med": 148.27,
+        "snapshot_ms_mean": 150.44,
+        "restore_ms_med": 155.69,
+        "restore_ms_mean": 154.09,
+        "dolt_bytes": 3509410,
+        "snap_delta_bytes": 162109
+      },
+      "throughput": {
+        "sqlite_ops_s": 6523.9,
+        "dolt_server_ops_s": 1209.9,
+        "dolt_cli_ops_s": 20.3
+      }
+    },
+    "1000000": {
+      "B": {
+        "snapshot_ms_med": 15.76,
+        "snapshot_ms_mean": 15.2,
+        "restore_ms_med": 13.99,
+        "restore_ms_mean": 14.27,
+        "db_bytes": 75886592,
+        "snap_upper_bytes": 75886592,
+        "store_total_bytes": 72057595255899807
+      },
+      "A_server": {
+        "snapshot_ms_med": 25.69,
+        "snapshot_ms_mean": 25.5,
+        "restore_ms_med": 20.27,
+        "restore_ms_mean": 20.26,
+        "dolt_bytes": 33535677
+      },
+      "A_cli": {
+        "snapshot_ms_med": 161.44,
+        "snapshot_ms_mean": 161.81,
+        "restore_ms_med": 163.36,
+        "restore_ms_mean": 164.38,
+        "dolt_bytes": 33519070,
+        "snap_delta_bytes": 99292
+      }
+    }
+  }
+}
