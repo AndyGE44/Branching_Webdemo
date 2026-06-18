@@ -29,7 +29,6 @@ sizes = sorted(proc["sizes"], key=int)
 labels = ["1k", "100k", "1M"][: len(sizes)]
 B_snap = [proc["sizes"][s]["B"]["snapshot_ms_med"] for s in sizes]
 As_snap = [proc["sizes"][s]["A_server"]["snapshot_ms_med"] + const for s in sizes]
-Ac_snap = [proc["sizes"][s]["A_cli"]["snapshot_ms_med"] + const for s in sizes]
 B_store = [kfmt(proc["sizes"][s]["B"]["snap_upper_bytes"]) for s in sizes]
 A_store = [kfmt(proc["sizes"][s]["A_cli"]["snap_delta_bytes"]) for s in sizes]
 tp = proc["sizes"]["100000"]["throughput"]
@@ -38,22 +37,20 @@ fig, ax = plt.subplots(1, 3, figsize=(15, 4.3))
 fig.suptitle("Architecture A (external Dolt) vs B (SQLite-in-checkpoint) - process mode (filesystem-only)",
              fontsize=13, weight="bold")
 ax[0].plot(labels, B_snap, "-o", color=BLUE, label="B (SQLite-in-Waypoint)")
-ax[0].plot(labels, As_snap, "--s", color=TEAL, label="A (dolt-server)")
-ax[0].plot(labels, Ac_snap, ":^", color=CORAL, label="A (dolt-cli)")
+ax[0].plot(labels, As_snap, "--s", color=TEAL, label="A (external Dolt)")
 ax[0].set_title("Snapshot latency vs data size (end-to-end)")
 ax[0].set_xlabel("rows"); ax[0].set_ylabel("milliseconds"); ax[0].set_ylim(bottom=0); ax[0].legend()
 ax[1].plot(labels, B_store, "-o", color=BLUE, label="B (full DB / snapshot)")
-ax[1].plot(labels, A_store, "--s", color=TEAL, label="A (Dolt delta / snapshot)")
+ax[1].plot(labels, A_store, "--s", color=TEAL, label="A (external Dolt, delta / snapshot)")
 ax[1].set_yscale("log"); ax[1].set_title("Storage per snapshot vs data size")
 ax[1].set_xlabel("rows"); ax[1].set_ylabel("KB per snapshot (log)"); ax[1].legend()
-tps = [("SQLite (B)", tp["sqlite_ops_s"], BLUE), ("dolt-server (A)", tp["dolt_server_ops_s"], TEAL),
-       ("dolt-cli (A)", tp["dolt_cli_ops_s"], CORAL)]
-ax[2].bar([t[0] for t in tps], [t[1] for t in tps], color=[t[2] for t in tps], width=0.6)
+tps = [("SQLite (B)", tp["sqlite_ops_s"], BLUE), ("Dolt server (A)", tp["dolt_server_ops_s"], TEAL)]
+ax[2].bar([t[0] for t in tps], [t[1] for t in tps], color=[t[2] for t in tps], width=0.5)
 ax[2].set_yscale("log"); ax[2].set_title("Point-write throughput @100k rows")
 ax[2].set_ylabel("updates / sec (log)")
 for i, t in enumerate(tps):
     ax[2].text(i, t[1] * 1.1, f"{t[1]:,.0f}", ha="center", va="bottom", fontsize=9)
-fig.savefig(DOCS / "benchmark-arch-a-vs-b.svg")
+fig.savefig(DOCS / "benchmark-arch-a-vs-b.svg", metadata={"Date": None})
 plt.close(fig)
 
 # ---------------- build mode ---------------- #
@@ -85,7 +82,7 @@ ax[2].plot(labels, B_snap, "-o", color=TEAL, label="process mode (fs-only)")
 ax[2].plot(labels, b_build, ":^", color=CORAL, label="build mode (memory, 200 MB RSS)")
 ax[2].set_yscale("log"); ax[2].set_title("Cost of capturing memory: B snapshot")
 ax[2].set_xlabel("rows"); ax[2].set_ylabel("ms (log)"); ax[2].legend()
-fig.savefig(DOCS / "benchmark-build-mode.svg")
+fig.savefig(DOCS / "benchmark-build-mode.svg", metadata={"Date": None})
 plt.close(fig)
 
 print("wrote", DOCS / "benchmark-arch-a-vs-b.svg", "and", DOCS / "benchmark-build-mode.svg")
