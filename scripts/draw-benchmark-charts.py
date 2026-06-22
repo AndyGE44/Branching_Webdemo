@@ -45,12 +45,21 @@ ax[1].plot(labels, B_store, "-o", color=BLUE, label="B (full DB / snapshot)")
 ax[1].plot(labels, A_store, "--s", color=TEAL, label="A (external Dolt, delta / snapshot)")
 ax[1].set_yscale("log"); ax[1].set_title("Storage per snapshot vs data size")
 ax[1].set_xlabel("rows"); ax[1].set_ylabel("KB per snapshot (log)"); ax[1].legend()
-tps = [("SQLite (B)", tp["sqlite_ops_s"], BLUE), ("Dolt server (A)", tp["dolt_server_ops_s"], TEAL)]
-ax[2].bar([t[0] for t in tps], [t[1] for t in tps], color=[t[2] for t in tps], width=0.5)
-ax[2].set_yscale("log"); ax[2].set_title("Point-write throughput @100k rows")
-ax[2].set_ylabel("updates / sec (log)")
+# Throughput: single point-UPDATE ops/s. B = in-process SQLite; A = external dolt-server,
+# pooled (realistic) vs connect-per-query. A numbers come from the pool benchmark when present.
+tps = [("SQLite (B)", tp["sqlite_ops_s"], BLUE)]
+_pool_path = DOCS / "benchmark-pool.results.json"
+if _pool_path.exists():
+    _p = json.loads(_pool_path.read_text())
+    tps += [("Dolt pooled (A)", _p["5"]["single_update_ops_s"], TEAL),
+            ("Dolt per-query (A)", _p["0"]["single_update_ops_s"], CORAL)]
+else:
+    tps += [("Dolt server (A)", tp["dolt_server_ops_s"], TEAL)]
+ax[2].bar([t[0] for t in tps], [t[1] for t in tps], color=[t[2] for t in tps], width=0.6)
+ax[2].set_yscale("log"); ax[2].set_title("Point-write throughput (single UPDATE)")
+ax[2].set_ylabel("updates / sec (log)"); ax[2].tick_params(axis="x", labelrotation=12)
 for i, t in enumerate(tps):
-    ax[2].text(i, t[1] * 1.1, f"{t[1]:,.0f}", ha="center", va="bottom", fontsize=9)
+    ax[2].text(i, t[1] * 1.13, f"{t[1]:,.0f}", ha="center", va="bottom", fontsize=8.5)
 fig.savefig(DOCS / "benchmark-arch-a-vs-b.svg", metadata={"Date": None})
 plt.close(fig)
 
