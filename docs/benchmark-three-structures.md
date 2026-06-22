@@ -1,72 +1,72 @@
-# Three placements of a Dolt data tier — benchmark (2026-06-22)
+# Placements of a Dolt data tier — benchmark (2026-06-22)
 
-Same data engine (**Dolt**), three placements relative to the StateFork checkpoint
-boundary. This isolates "where the DB sits" from "which engine," extending the
-SQLite(B)-vs-external-Dolt(A) study.
+Same data engine (**Dolt**), different placements relative to the StateFork checkpoint
+boundary. Extends the SQLite(B)-vs-external-Dolt(A) study and adds a **fair control**:
+#1 measured in *both* process (fs-only) and build (CRIU) mode, so #1 and #2 can be
+compared under the identical checkpoint machinery.
 
-| | placement | what versions the data | what the checkpoint captures |
+| | placement / mode | versioning | checkpoint captures |
 |---|---|---|---|
-| **#1 coupled** | Dolt repo files **inside** the checkpoint (no DB process) | StateFork **fs** snapshot (Waypoint, fs-only) | app fs incl. the whole repo |
-| **#2 full-system** | `dolt sql-server` **inside** the sandbox | StateFork **CRIU** checkpoint | app + **DB-server memory** + repo |
-| **#3 external (arch A)** | `dolt sql-server` **outside** | **Dolt's own** commit/branch/reset | only the (tiny) app |
+| **#1 coupled, fs-only** | Dolt repo files in the checkpoint, process mode (`waypoint init`) | StateFork fs | repo files (no memory) |
+| **#1 coupled, build/CRIU** | same files, build mode (`waypoint build` + CRIU), **no DB server** | StateFork CRIU+fs | repo files + **idle shell** memory |
+| **#2 full-system** | `dolt sql-server` **inside** the sandbox, build mode | StateFork CRIU+fs | repo + **DB-server** memory |
+| **#3 external (arch A)** | `dolt sql-server` **outside** | **Dolt's own** branches | only the (tiny) app |
 
-Harness: `scripts/bench-three-structures.py`. Each snapshot follows a 200-row UPDATE
-(the delta). Medians of k=3 after a warmup. App-tier Waypoint constant (added to #3):
-snapshot 13.4 ms / restore 14.0 ms.
+Harness: `scripts/bench-three-structures.py` (self-contained — builds its own dolt
+sandbox image). Each snapshot follows a 200-row UPDATE. Medians of k=3 after a warmup.
 
-## Results
+## Snapshot latency (ms)
 
-### Snapshot / restore latency (ms)
-
-| rows | #1 snap | #1 rest | #3 snap | #3 rest | #2 snap | #2 rest |
-|-----:|----:|----:|----:|----:|----:|----:|
-| 1k   | 11.0 | 13.2 | 38.2 | 35.7 | 225.3 | 223.4 |
-| 100k | 10.9 | 13.9 | 38.2 | 33.8 | 245.4 | 232.2 |
-| 1M   | 14.6 | 15.0 | 36.7 | 35.6 | 323.3 | 268.0 |
-
-### Per-snapshot storage
-
-| rows | #1 (fs ≈ whole repo) | #3 (Dolt delta) | #2 (CRIU memory) | #2 (fs) |
+| rows | #1 fs-only | #1 build/CRIU | #3 external | #2 full-system |
 |-----:|----:|----:|----:|----:|
-| 1k   | 33 KB   | 36 KB | 30 MB | 54 KB |
-| 100k | 1.73 MB | 51 KB | 40 MB | 3.9 MB |
-| 1M   | 17.6 MB | 66 KB | 79 MB | 41 MB |
+| 1k   | 11.9 | 140.6 | 39.7 | 231.9 |
+| 100k | 12.3 | 136.9 | 39.9 | 241.9 |
+| 1M   | 12.3 | 138.1 | 41.4 | 321.2 |
+
+## Per-snapshot storage (CRIU memory + filesystem)
+
+| rows | #1 fs-only (fs) | #1 build/CRIU (mem + fs) | #3 external (Dolt delta) | #2 full-system (mem + fs) |
+|-----:|----:|----:|----:|----:|
+| 1k   | 33 KB   | 3.0 MB (3.0 + 0.05) | **36 KB** | 35 MB (35 + 0.05) |
+| 100k | 1.73 MB | 6.7 MB (2.8 + 3.9) | **51 KB** | 40 MB (36 + 3.9) |
+| 1M   | 17.6 MB | 44.6 MB (3.4 + 41.2) | **66 KB** | 122 MB (81 + 41) |
 
 ## Findings
 
-1. **#1 coupled — cheapest checkpoint, but whole-repo storage.** Snapshot is a pure
-   OverlayFS op (~11–15 ms, flat with size; no DB process). But each snapshot stores
-   **~the whole repo** (17.6 MB at 1M) — a single dolt commit rewrites enough storage
-   (conjoin) that OverlayFS copies up nearly the entire repo. So #1 behaves like
-   arch B (whole-DB capture), just with Dolt's more compact on-disk format
-   (17.6 MB vs SQLite's 76 MB at 1M, ~4×). Captures **no** DB in-memory state.
+1. **#3 external (arch A) — the only true delta.** Dolt versions logically, so each
+   snapshot adds a flat **~66 KB** regardless of data size, at ~40 ms. Best for
+   branching big data often. The moment Dolt lives *inside* the checkpoint (any of the
+   #1/#2 variants) you capture the whole thing and lose this.
 
-2. **#3 external (arch A) — the only one with true delta storage.** Dolt versions
-   logically (commit + branch + reset), so per-snapshot storage is a flat **~66 KB**
-   regardless of data size. Moderate latency (~37 ms = app-tier Waypoint + Dolt op).
-   Best when you branch a large dataset often.
+2. **#1 fs-only — cheapest checkpoint, whole-repo storage.** ~12 ms (pure OverlayFS op,
+   flat with size; no DB process), but stores ~the whole repo per snapshot (a dolt
+   commit rewrites enough storage that OverlayFS copies it up). Like arch B, but Dolt's
+   format is ~4× more compact than SQLite (17.6 MB vs 76 MB at 1M).
 
-3. **#2 full-system — heaviest, but the only one that preserves a warm DB.** Snapshot
-   ~225–323 ms (grows with the server's working set → bigger CRIU memory dump:
-   30→79 MB) **plus** ~the whole repo on disk (up to 41 MB) ≈ **120 MB/snapshot at 1M**.
-   It is also the most tool-invasive: CRIU-checkpointing a running `dolt sql-server`
-   required (a) `GODEBUG=multipathtcp=0` (Go's MPTCP sockets are unsupported by CRIU),
-   (b) disabling dolt telemetry (no external `:443` connection at checkpoint time), and
-   (c) patching Waypoint to pass `criu --file-locks` (dolt holds DB file locks). In
-   return it captures the server's **buffer pool, sessions, and open transactions**, and
-   restores an exact running server (same PID).
+3. **Fair control — #1 in build mode isolates the cost of build mode vs the DB server.**
+   With #1 and #2 now on identical build-mode CRIU machinery (same sandbox, same
+   `waypoint create` with memory), the only difference is the running server:
+   - **#1 fs-only → #1 build/CRIU** = the cost of *build mode itself*: ~12 → ~138 ms,
+     and a ~3 MB CRIU dump of an **idle shell** (flat — no data in RAM). Build mode adds
+     a fixed CRIU tax even when there's nothing useful to capture.
+   - **#1 build/CRIU → #2** = the cost of the **running dolt server**: identical repo fs
+     (41 MB at 1M), but CRIU memory jumps from ~3 MB (idle shell) to **35→81 MB** (server
+     buffer pool/sessions, growing with data), and latency +~93–183 ms. So #2's entire
+     premium is dumping the server's RAM.
 
-## The key insight
+4. **#2 is the only one that preserves a warm DB**, at the highest cost (~120 MB/snapshot
+   at 1M) and the most tool work: it required `GODEBUG=multipathtcp=0` (Go MPTCP breaks
+   CRIU), dolt telemetry off (no external `:443` at checkpoint), and a Waypoint
+   `criu --file-locks` patch (dolt holds DB file locks).
 
-**Dolt's "cheap delta" only materialises through Dolt's own commit/branch graph (#3).**
-The moment Dolt lives *inside* the checkpoint, you are back to capturing the whole
-thing — the repo files for #1, the repo **and** the server's memory for #2 — and the
-delta advantage is lost. So the placement decision is really:
+## Picking a structure
 
-- want **branch-cheap, big-data versioning** → external Dolt (#3);
-- want the **simplest, fastest checkpoint** and don't mind whole-DB storage → #1;
-- need the **DB's warm in-memory state** captured atomically with the app → #2, and pay
-  for it (latency, storage, and tool patches).
+- Branch a large dataset often, cheap storage → **#3 external (arch A)**.
+- Simplest, fastest checkpoint, don't mind whole-DB storage, no need for warm DB →
+  **#1 fs-only**.
+- Need the DB's **warm in-memory state** captured atomically with the app → **#2**, and
+  pay the latency, storage, and tool-patch cost. (#1 build/CRIU exists mainly as the
+  control that shows how much of that cost is the server vs build mode itself.)
 
 ## Reproduce
 
@@ -75,5 +75,4 @@ sudo env PATH=$PWD/.venv/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   DEMO_STATEFORK_ROOT=/path/to/Andy_StateFork \
   .venv/bin/python scripts/bench-three-structures.py 1000 100000 1000000
 ```
-Note: #2 requires a `waypoint` built with `criu --file-locks` (see the patch to
-`Andy_StateFork`'s Waypoint).
+#2 and #1-build require a `waypoint` built with `criu --file-locks`.

@@ -94,6 +94,40 @@ def struct1(base_repo, k):
     return {"snap_ms": med(snap), "rest_ms": med(rest), "criu_bytes": 0,
             "fs_upper_bytes": upper, "whole_repo_bytes": whole}
 
+# ---------- #1b coupled in BUILD mode: same sandbox+CRIU as #2, but NO DB server ---------- #
+def struct1_build(base_repo, csv_path, k):
+    # Fair control vs #2: identical build-mode CRIU machinery (sandbox + waypoint create with
+    # memory), but no running dolt server -- only the idle shell. So criu ~= build-mode
+    # overhead; the gap vs #2 is exactly the server's memory.
+    mgr = create_env_manager("ckpt_build", dockerfile_dir=IMG, build=True)
+    work = Path(mgr.work_dir); sess = str(work.parent)
+    shutil.copy(csv_path, work / "data.csv")
+    setup = ("export HOME=/root && dolt config --global --add metrics.disabled true && "
+             "mkdir -p /repo && cd /repo && dolt init --name B --email b@b --initial-branch main && "
+             "dolt sql -q 'CREATE TABLE parts (id INT PRIMARY KEY, qty INT, name VARCHAR(64))' && "
+             "dolt table import -u parts /data.csv && dolt add -A && dolt commit -m seed && echo OK")
+    rc, out, err = mgr.exec_command(setup, timeout=300)
+    if "OK" not in out:
+        mgr.cleanup(); return {"error": "setup: " + (err or out)[-200:]}
+    def mutate():
+        mgr.exec_command("export HOME=/root && cd /repo && "
+                         f"dolt sql -q 'UPDATE parts SET qty = qty + 1 WHERE id <= {MUT}' && "
+                         "dolt add -A && dolt commit -m d --allow-empty", timeout=120)
+    snap, rest, sids = [], [], []
+    for i in range(k + 1):
+        mutate()
+        t = time.perf_counter(); sid = mgr.snapshot(); dt = time.perf_counter() - t
+        if sid is None:
+            mgr.cleanup(); return {"error": "snapshot failed"}
+        sids.append(sid)
+        if i: snap.append(dt)
+    criu = du(os.path.join(sess, sids[0], "criu")); upper = du(os.path.join(sess, sids[0], "upper"))
+    for i in range(k + 1):
+        t = time.perf_counter(); mgr.restore(sids[i % len(sids)])
+        if i: rest.append(time.perf_counter() - t)
+    mgr.cleanup(); subprocess.run(["sudo", "rm", "-rf", sess], capture_output=True)
+    return {"snap_ms": med(snap), "rest_ms": med(rest), "criu_bytes": criu, "fs_upper_bytes": upper}
+
 # ---------- #2 full-system: dolt sql-server inside the sandbox, CRIU both ---------- #
 def struct2(base_repo, csv_path, k, port=3308):
     import pymysql
@@ -190,6 +224,7 @@ def main():
         gen_csv(csvp, n); base = tmp / "base"; build_repo(base, csvp)
         row = {}
         for name, fn in [("s1_coupled", lambda: struct1(base, k)),
+                         ("s1_build", lambda: struct1_build(base, csvp, k)),
                          ("s3_external", lambda: struct3(base, k, a_snap, a_rest)),
                          ("s2_fullsystem", lambda: struct2(base, csvp, k))]:
             print(f"  [{name}] ...", flush=True)
