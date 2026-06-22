@@ -78,6 +78,18 @@ app.add_middleware(
 )
 
 
+@app.post("/api/admin/drain-connections")
+def drain_connections() -> dict:
+    """Close any pooled DB connections so a CRIU checkpoint captures no open
+    sockets to the external server. Called by the control plane before a
+    checkpoint_exec snapshot; no-op for the SQLite / CLI backends."""
+    drain = getattr(get_store(), "close_pool", None)
+    if callable(drain):
+        drain()
+        return {"drained": True}
+    return {"drained": False}
+
+
 class ReserveRequest(BaseModel):
     part_id: str
     quantity: int = Field(gt=0)

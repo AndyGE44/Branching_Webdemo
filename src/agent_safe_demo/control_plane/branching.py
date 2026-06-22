@@ -1077,10 +1077,26 @@ class StateForkBackend:
             yield
             return
         branch.checkpointing = True
+        self._drain_runtime_connections(branch)
         try:
             yield
         finally:
             branch.checkpointing = False
+
+    def _drain_runtime_connections(self, branch: BranchHandle) -> None:
+        """Best-effort: ask the runtime app to close pooled DB connections so the
+        CRIU checkpoint captures no open sockets to the external data tier
+        (relevant in build mode with the dolt-server backend; no-op otherwise)."""
+        if self.data_backend not in ("dolt", "dolt_server"):
+            return
+        try:
+            req = request.Request(
+                f"{branch.url}/api/admin/drain-connections", data=b"", method="POST"
+            )
+            with request.urlopen(req, timeout=3):
+                pass
+        except Exception:
+            pass
 
     def _start_branch_runtime(
         self,

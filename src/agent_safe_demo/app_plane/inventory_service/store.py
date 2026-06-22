@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import shutil
 import sqlite3
 import subprocess
@@ -517,12 +518,23 @@ class DoltServerInventoryStore(InventoryStore):
         database: str = "inventory",
         user: str = "root",
         password: str = "",
+        pool_size: int | None = None,
     ) -> None:
         self.host = host
         self.port = int(port)
         self.database = database
         self.user = user
         self.password = password
+        # Connection pool: keep long-lived connections to the server and reuse
+        # them across requests (realistic web-service behaviour) instead of a
+        # TCP+auth handshake per query. pool_size=0 falls back to connect-per-query.
+        # The pool is checkpoint-aware: close_pool() drains it before a CRIU
+        # snapshot, and ping(reconnect=True) on borrow re-establishes connections
+        # after a restore (the external server is untouched by the checkpoint).
+        if pool_size is None:
+            pool_size = int(os.getenv("DEMO_INVENTORY_DOLT_POOL_SIZE", "5") or "5")
+        self._pool_size = pool_size
+        self._pool: "queue.Queue | None" = queue.Queue(maxsize=pool_size) if pool_size > 0 else None
 
     @property
     def location_label(self) -> str:
@@ -536,14 +548,54 @@ class DoltServerInventoryStore(InventoryStore):
             cursorclass=pymysql.cursors.DictCursor,
         )
 
+    def _borrow(self):
+        if self._pool is None:
+            return self._connect()
+        try:
+            conn = self._pool.get_nowait()
+        except queue.Empty:
+            return self._connect()
+        try:
+            conn.ping(reconnect=True)  # validate; reconnect if the socket died (e.g. after a restore)
+            return conn
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            return self._connect()
+
+    def _release(self, conn) -> None:
+        if self._pool is None:
+            conn.close()
+            return
+        try:
+            self._pool.put_nowait(conn)
+        except queue.Full:
+            conn.close()
+
     @contextmanager
     def _cursor(self):
-        conn = self._connect()
+        conn = self._borrow()
         try:
             with conn.cursor() as cur:
                 yield cur
         finally:
-            conn.close()
+            self._release(conn)
+
+    def close_pool(self) -> None:
+        """Drain and close all pooled connections (call before a checkpoint)."""
+        if self._pool is None:
+            return
+        while True:
+            try:
+                conn = self._pool.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def _query(self, sql: str, args: tuple = ()) -> list[dict[str, Any]]:
         with self._cursor() as cur:
