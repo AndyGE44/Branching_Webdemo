@@ -117,4 +117,33 @@ if pool_path.exists():
     fig.tight_layout(); fig.savefig(DOCS / "benchmark-pool.svg", metadata={"Date": None})
     plt.close(fig)
 
+# ---------------- three placements of a Dolt data tier ---------------- #
+three_path = DOCS / "benchmark-three-structures.results.json"
+if three_path.exists():
+    t3 = json.loads(three_path.read_text())["sizes"]
+    szs = sorted(t3, key=int)
+    xl = ["1k", "100k", "1M"][: len(szs)]
+    s1 = [t3[s]["s1_coupled"] for s in szs]
+    s3 = [t3[s]["s3_external"] for s in szs]
+    s2 = [t3[s]["s2_fullsystem"] for s in szs]
+    mb = lambda b: b / 1e6
+    fig, ax = plt.subplots(1, 2, figsize=(13, 4.6))
+    fig.suptitle("Three placements of a Dolt data tier (snapshot after a 200-row change)",
+                 fontsize=13, weight="bold")
+    ax[0].plot(xl, [r["snap_ms"] for r in s1], "-o", color=BLUE, label="#1 coupled (fs-only)")
+    ax[0].plot(xl, [r["snap_ms"] for r in s3], "--s", color=TEAL, label="#3 external / arch A")
+    ax[0].plot(xl, [r["snap_ms"] for r in s2], ":^", color=CORAL, label="#2 full-system (CRIU server)")
+    ax[0].set_title("Snapshot latency"); ax[0].set_xlabel("rows"); ax[0].set_ylabel("milliseconds")
+    ax[0].set_ylim(bottom=0); ax[0].legend()
+    st1 = [mb(r["fs_upper_bytes"]) for r in s1]
+    st3 = [mb(r["data_delta_bytes"]) for r in s3]
+    st2 = [mb(r["criu_bytes"] + r["fs_upper_bytes"]) for r in s2]
+    ax[1].plot(xl, st1, "-o", color=BLUE, label="#1 coupled (≈ whole repo)")
+    ax[1].plot(xl, st3, "--s", color=TEAL, label="#3 external (Dolt delta)")
+    ax[1].plot(xl, st2, ":^", color=CORAL, label="#2 full-system (memory + repo)")
+    ax[1].set_yscale("log"); ax[1].set_title("Per-snapshot storage")
+    ax[1].set_xlabel("rows"); ax[1].set_ylabel("MB per snapshot (log)"); ax[1].legend()
+    fig.tight_layout(); fig.savefig(DOCS / "benchmark-three-structures.svg", metadata={"Date": None})
+    plt.close(fig)
+
 print("wrote benchmark SVGs to", DOCS)

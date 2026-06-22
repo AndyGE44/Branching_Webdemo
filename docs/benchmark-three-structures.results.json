@@ -1,0 +1,77 @@
+{
+  "app_tier_const_ms": {
+    "snap": 13.4,
+    "rest": 14.0
+  },
+  "sizes": {
+    "1000": {
+      "s1_coupled": {
+        "snap_ms": 11.0,
+        "rest_ms": 13.2,
+        "criu_bytes": 0,
+        "fs_upper_bytes": 33563,
+        "whole_repo_bytes": 26658
+      },
+      "s3_external": {
+        "snap_ms": 38.2,
+        "rest_ms": 35.7,
+        "dolt_op_snap_ms": 24.8,
+        "criu_bytes": 0,
+        "fs_upper_bytes": 0,
+        "data_delta_bytes": 35561
+      },
+      "s2_fullsystem": {
+        "snap_ms": 225.3,
+        "rest_ms": 223.4,
+        "criu_bytes": 31135231,
+        "fs_upper_bytes": 53677
+      }
+    },
+    "100000": {
+      "s1_coupled": {
+        "snap_ms": 10.9,
+        "rest_ms": 13.9,
+        "criu_bytes": 0,
+        "fs_upper_bytes": 1730059,
+        "whole_repo_bytes": 1719318
+      },
+      "s3_external": {
+        "snap_ms": 38.2,
+        "rest_ms": 33.8,
+        "dolt_op_snap_ms": 24.8,
+        "criu_bytes": 0,
+        "fs_upper_bytes": 0,
+        "data_delta_bytes": 50961
+      },
+      "s2_fullsystem": {
+        "snap_ms": 245.4,
+        "rest_ms": 232.2,
+        "criu_bytes": 40434110,
+        "fs_upper_bytes": 3894838
+      }
+    },
+    "1000000": {
+      "s1_coupled": {
+        "snap_ms": 14.6,
+        "rest_ms": 15.0,
+        "criu_bytes": 0,
+        "fs_upper_bytes": 17578048,
+        "whole_repo_bytes": 17564548
+      },
+      "s3_external": {
+        "snap_ms": 36.7,
+        "rest_ms": 35.6,
+        "dolt_op_snap_ms": 23.3,
+        "criu_bytes": 0,
+        "fs_upper_bytes": 0,
+        "data_delta_bytes": 66167
+      },
+      "s2_fullsystem": {
+        "snap_ms": 323.3,
+        "rest_ms": 268.0,
+        "criu_bytes": 78657013,
+        "fs_upper_bytes": 41244632
+      }
+    }
+  }
+}
