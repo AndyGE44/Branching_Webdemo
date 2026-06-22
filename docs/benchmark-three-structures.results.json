@@ -1,95 +1,120 @@
 {
   "app_tier_const_ms": {
-    "snap": 16.3,
-    "rest": 14.0
+    "snap": 15.7,
+    "rest": 15.5
   },
   "sizes": {
     "1000": {
       "s1_coupled": {
         "snap_ms": 11.9,
-        "rest_ms": 14.8,
+        "rest_ms": 13.2,
         "criu_bytes": 0,
-        "fs_upper_bytes": 33569,
-        "whole_repo_bytes": 26662
+        "fs_upper_bytes": 33570,
+        "whole_repo_bytes": 26665
       },
       "s1_build": {
-        "snap_ms": 140.6,
-        "rest_ms": 187.5,
-        "criu_bytes": 2966052,
-        "fs_upper_bytes": 51580
+        "snap_ms": 138.8,
+        "rest_ms": 190.1,
+        "criu_bytes": 2903168,
+        "fs_upper_bytes": 51783
       },
       "s3_external": {
-        "snap_ms": 39.7,
-        "rest_ms": 35.7,
-        "dolt_op_snap_ms": 23.4,
+        "snap_ms": 39.4,
+        "rest_ms": 37.4,
+        "dolt_op_snap_ms": 23.7,
         "criu_bytes": 0,
         "fs_upper_bytes": 0,
-        "data_delta_bytes": 35629
+        "data_delta_bytes": 35699
+      },
+      "s3_build": {
+        "snap_ms": 162.2,
+        "rest_ms": 212.4,
+        "criu_bytes": 2256365,
+        "fs_upper_bytes": 0,
+        "data_delta_bytes": 38170
       },
       "s2_fullsystem": {
-        "snap_ms": 231.9,
-        "rest_ms": 229.3,
-        "criu_bytes": 35111513,
-        "fs_upper_bytes": 53847
+        "snap_ms": 228.1,
+        "rest_ms": 221.1,
+        "criu_bytes": 30383588,
+        "fs_upper_bytes": 53674
       }
     },
     "100000": {
       "s1_coupled": {
-        "snap_ms": 12.3,
-        "rest_ms": 15.9,
+        "snap_ms": 11.4,
+        "rest_ms": 16.4,
         "criu_bytes": 0,
-        "fs_upper_bytes": 1730058,
-        "whole_repo_bytes": 1719317
+        "fs_upper_bytes": 1730059,
+        "whole_repo_bytes": 1719318
       },
       "s1_build": {
-        "snap_ms": 136.9,
-        "rest_ms": 188.2,
-        "criu_bytes": 2829369,
-        "fs_upper_bytes": 3897308
+        "snap_ms": 134.9,
+        "rest_ms": 189.3,
+        "criu_bytes": 3134186,
+        "fs_upper_bytes": 3897306
       },
       "s3_external": {
-        "snap_ms": 39.9,
-        "rest_ms": 35.3,
-        "dolt_op_snap_ms": 23.6,
+        "snap_ms": 39.6,
+        "rest_ms": 35.6,
+        "dolt_op_snap_ms": 23.9,
         "criu_bytes": 0,
         "fs_upper_bytes": 0,
-        "data_delta_bytes": 50874
+        "data_delta_bytes": 50865
+      },
+      "s3_build": {
+        "snap_ms": 160.6,
+        "rest_ms": 210.8,
+        "criu_bytes": 2353543,
+        "fs_upper_bytes": 0,
+        "data_delta_bytes": 57831
       },
       "s2_fullsystem": {
-        "snap_ms": 241.9,
-        "rest_ms": 230.3,
-        "criu_bytes": 36257450,
-        "fs_upper_bytes": 3894840
+        "snap_ms": 236.9,
+        "rest_ms": 232.0,
+        "criu_bytes": 35388171,
+        "fs_upper_bytes": 3894849
       }
     },
     "1000000": {
       "s1_coupled": {
-        "snap_ms": 12.3,
-        "rest_ms": 16.3,
+        "snap_ms": 11.0,
+        "rest_ms": 14.6,
         "criu_bytes": 0,
-        "fs_upper_bytes": 17578013,
-        "whole_repo_bytes": 17564530
+        "fs_upper_bytes": 17578021,
+        "whole_repo_bytes": 17564534
       },
       "s1_build": {
-        "snap_ms": 138.1,
-        "rest_ms": 187.3,
-        "criu_bytes": 3362799,
-        "fs_upper_bytes": 41247402
+        "snap_ms": 138.0,
+        "rest_ms": 189.8,
+        "criu_bytes": 3595616,
+        "fs_upper_bytes": 41247604
       },
       "s3_external": {
-        "snap_ms": 41.4,
-        "rest_ms": 35.9,
+        "snap_ms": 40.8,
+        "rest_ms": 37.2,
         "dolt_op_snap_ms": 25.1,
         "criu_bytes": 0,
         "fs_upper_bytes": 0,
-        "data_delta_bytes": 66053
+        "data_delta_bytes": 65925
+      },
+      "s3_build": {
+        "snap_ms": 166.1,
+        "rest_ms": 211.1,
+        "criu_bytes": 2354089,
+        "fs_upper_bytes": 0,
+        "data_delta_bytes": 68836
       },
       "s2_fullsystem": {
-        "snap_ms": 321.2,
-        "rest_ms": 265.2,
-        "criu_bytes": 80946808,
-        "fs_upper_bytes": 41244651
+        "snap_ms": 317.7,
+        "rest_ms": 260.9,
+        "criu_bytes": 78085791,
+        "fs_upper_bytes": 41244655
       }
     }
+  },
+  "throughput": {
+    "dolt_cli_ops_s": 22.1,
+    "dolt_server_pooled_ops_s": 1413.7
   }
 }

@@ -210,6 +210,63 @@ def struct3(base_repo, k, app_snap, app_rest, port=3309):
             "dolt_op_snap_ms": med(snap), "criu_bytes": 0,
             "fs_upper_bytes": 0, "data_delta_bytes": after - before}
 
+# ---------- #3 external in BUILD mode: app (idle shell) in a CRIU sandbox; Dolt external ---------- #
+def struct3_build(base_repo, k, port=3310):
+    # Same build-mode CRIU as #1-build/#2, but the dolt server is EXTERNAL and Dolt's own
+    # branches version the data. The checkpoint captures the app's memory (idle shell) + tiny
+    # fs; the data stays external (delta), so the checkpoint never grows with data size.
+    import pymysql
+    repo = Path(tempfile.mkdtemp(prefix="s3b_")) / "repo"; shutil.copytree(base_repo, repo)
+    srv = DoltSqlServer(repo, port=port, dolt_bin=DOLT); srv.start()
+    tier = DoltServerDataTier(host="127.0.0.1", port=port, database=srv.database)
+    mgr = create_env_manager("ckpt_build", dockerfile_dir=IMG, build=True)   # idle-shell sandbox, no repo inside
+    sess = str(Path(mgr.work_dir).parent)
+    def mutate():
+        c = pymysql.connect(host="127.0.0.1", port=port, user="root", password="", database=srv.database, autocommit=True)
+        with c.cursor() as cur: cur.execute(f"UPDATE parts SET qty = qty + 1 WHERE id <= {MUT}")
+        c.close()
+    before = du(str(repo / ".dolt")); snap, rest, ids = [], [], []
+    for i in range(k + 1):
+        mutate(); did = f"s{i:03d}"
+        t = time.perf_counter(); ck = mgr.snapshot(); tier.on_snapshot(did); dt = time.perf_counter() - t
+        if ck is None:
+            mgr.cleanup(); srv.stop(); return {"error": "snapshot failed"}
+        ids.append((ck, did))
+        if i: snap.append(dt)
+    criu = du(os.path.join(sess, ids[0][0], "criu")); upper = du(os.path.join(sess, ids[0][0], "upper"))
+    after = du(str(repo / ".dolt"))
+    for i in range(k + 1):
+        ck, did = ids[i % len(ids)]
+        t = time.perf_counter(); mgr.restore(ck); tier.on_restore(did)
+        if i: rest.append(time.perf_counter() - t)
+    mgr.cleanup(); srv.stop()
+    subprocess.run(["sudo", "rm", "-rf", sess], capture_output=True); shutil.rmtree(repo.parent, ignore_errors=True)
+    return {"snap_ms": med(snap), "rest_ms": med(rest), "criu_bytes": criu,
+            "fs_upper_bytes": upper, "data_delta_bytes": after - before}
+
+# ---------- point-write throughput by data-access method ---------- #
+def throughput(base_repo, port=3311):
+    # #1 = dolt CLI (a process per query); #2 & #3 = dolt sql-server over a reused (pooled)
+    # connection. PK point writes, so ~size-independent.
+    import pymysql
+    tmp = Path(tempfile.mkdtemp(prefix="tput_"))
+    cli_repo = tmp / "cli"; shutil.copytree(base_repo, cli_repo)
+    t = time.perf_counter()
+    for _ in range(40):
+        subprocess.run([DOLT, "sql", "-q", "UPDATE parts SET qty = qty + 1 WHERE id = 1"],
+                       cwd=cli_repo, env=ENVH, capture_output=True, text=True, check=True)
+    cli = round(40 / (time.perf_counter() - t), 1)
+    srv_repo = tmp / "srv"; shutil.copytree(base_repo, srv_repo)
+    srv = DoltSqlServer(srv_repo, port=port, dolt_bin=DOLT); srv.start()
+    c = pymysql.connect(host="127.0.0.1", port=port, user="root", password="", database=srv.database, autocommit=True)
+    t = time.perf_counter()
+    with c.cursor() as cur:
+        for _ in range(2000):
+            cur.execute("UPDATE parts SET qty = qty + 1 WHERE id = 1")
+    pooled = round(2000 / (time.perf_counter() - t), 1)
+    c.close(); srv.stop(); shutil.rmtree(tmp, ignore_errors=True)
+    return {"dolt_cli_ops_s": cli, "dolt_server_pooled_ops_s": pooled}
+
 def main():
     sizes = [int(x) for x in sys.argv[1:]] or [1000, 100000, 1000000]
     k = 3
@@ -226,12 +283,18 @@ def main():
         for name, fn in [("s1_coupled", lambda: struct1(base, k)),
                          ("s1_build", lambda: struct1_build(base, csvp, k)),
                          ("s3_external", lambda: struct3(base, k, a_snap, a_rest)),
+                         ("s3_build", lambda: struct3_build(base, k)),
                          ("s2_fullsystem", lambda: struct2(base, csvp, k))]:
             print(f"  [{name}] ...", flush=True)
             try: row[name] = fn()
             except Exception as e: row[name] = {"error": repr(e)[:200]}
             print(f"     {row[name]}", flush=True)
         res["sizes"][n] = row
+        if n == sizes[0]:
+            print("  [throughput] ...", flush=True)
+            try: res["throughput"] = throughput(base)
+            except Exception as e: res["throughput"] = {"error": repr(e)[:200]}
+            print(f"     {res.get('throughput')}", flush=True)
         shutil.rmtree(tmp, ignore_errors=True)
         with open("/tmp/bench3_results.json", "w") as f: json.dump(res, f, indent=2)
     print("\nDONE\n" + json.dumps(res, indent=2), flush=True)

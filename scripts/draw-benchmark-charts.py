@@ -120,32 +120,48 @@ if pool_path.exists():
 # ---------------- three placements of a Dolt data tier ---------------- #
 three_path = DOCS / "benchmark-three-structures.results.json"
 if three_path.exists():
-    PURPLE = "#7a5fb0"
-    t3 = json.loads(three_path.read_text())["sizes"]
+    doc = json.loads(three_path.read_text())
+    t3 = doc["sizes"]
     szs = sorted(t3, key=int)
     xl = ["1k", "100k", "1M"][: len(szs)]
     g = lambda key: [t3[s][key] for s in szs]
-    s1, s1b, s3, s2 = g("s1_coupled"), g("s1_build"), g("s3_external"), g("s2_fullsystem")
     mb = lambda b: b / 1e6
-    series = [("#1 coupled, fs-only", s1, BLUE, "-o"),
-              ("#1 coupled, build/CRIU", s1b, PURPLE, "-.D"),
-              ("#3 external / arch A", s3, TEAL, "--s"),
-              ("#2 full-system (server+CRIU)", s2, CORAL, ":^")]
-    store = {  # per-snapshot storage: #3 = Dolt delta; #1-init = fs; #1-build/#2 = memory + fs
-        "#1 coupled, fs-only": [mb(r["fs_upper_bytes"]) for r in s1],
-        "#1 coupled, build/CRIU": [mb(r["criu_bytes"] + r["fs_upper_bytes"]) for r in s1b],
-        "#3 external / arch A": [mb(r["data_delta_bytes"]) for r in s3],
-        "#2 full-system (server+CRIU)": [mb(r["criu_bytes"] + r["fs_upper_bytes"]) for r in s2]}
-    fig, ax = plt.subplots(1, 2, figsize=(13, 4.8))
-    fig.suptitle("Placements of a Dolt data tier (snapshot after a 200-row change)",
-                 fontsize=13, weight="bold")
-    for lab, ser, col, sty in series:
-        ax[0].plot(xl, [r["snap_ms"] for r in ser], sty, color=col, label=lab)
-        ax[1].plot(xl, store[lab], sty, color=col, label=lab)
-    ax[0].set_title("Snapshot latency"); ax[0].set_xlabel("rows"); ax[0].set_ylabel("milliseconds")
-    ax[0].set_ylim(bottom=0); ax[0].legend(fontsize=9)
-    ax[1].set_yscale("log"); ax[1].set_title("Per-snapshot storage")
-    ax[1].set_xlabel("rows"); ax[1].set_ylabel("MB per snapshot (log)"); ax[1].legend(fontsize=9)
+    store_fn = {  # per-snapshot total storage by structure
+        "s1_coupled": lambda r: mb(r["fs_upper_bytes"]),
+        "s1_build": lambda r: mb(r["criu_bytes"] + r["fs_upper_bytes"]),
+        "s3_external": lambda r: mb(r["data_delta_bytes"]),
+        "s3_build": lambda r: mb(r["criu_bytes"] + r["fs_upper_bytes"] + r.get("data_delta_bytes", 0)),
+        "s2_fullsystem": lambda r: mb(r["criu_bytes"] + r["fs_upper_bytes"]),
+    }
+    # (label, key, color, style) -- color = structure family, dashed = build mode
+    series = [("#1 coupled, fs-only", "s1_coupled", BLUE, "-o"),
+              ("#1 coupled, build/CRIU", "s1_build", BLUE, "--o"),
+              ("#3 external, fs-only", "s3_external", TEAL, "-s"),
+              ("#3 external, build/CRIU", "s3_build", TEAL, "--s"),
+              ("#2 full-system", "s2_fullsystem", CORAL, ":^")]
+    fig, ax = plt.subplots(2, 2, figsize=(13, 9))
+    fig.suptitle("Placements of a Dolt data tier across modes (snapshot after a 200-row change)",
+                 fontsize=14, weight="bold")
+    for lab, key, col, sty in series:
+        ser = g(key)
+        ax[0, 0].plot(xl, [r["snap_ms"] for r in ser], sty, color=col, label=lab)
+        ax[0, 1].plot(xl, [r["rest_ms"] for r in ser], sty, color=col, label=lab)
+        ax[1, 0].plot(xl, [store_fn[key](r) for r in ser], sty, color=col, label=lab)
+    ax[0, 0].set_title("Snapshot latency"); ax[0, 0].set_ylabel("ms"); ax[0, 0].set_ylim(bottom=0); ax[0, 0].legend(fontsize=8)
+    ax[0, 1].set_title("Restore latency"); ax[0, 1].set_ylabel("ms"); ax[0, 1].set_ylim(bottom=0); ax[0, 1].legend(fontsize=8)
+    ax[1, 0].set_yscale("log"); ax[1, 0].set_title("Per-snapshot storage"); ax[1, 0].set_xlabel("rows")
+    ax[1, 0].set_ylabel("MB per snapshot (log)"); ax[1, 0].legend(fontsize=8)
+    tp = doc.get("throughput", {})
+    if tp and "error" not in tp:
+        bars = [("#1 dolt CLI", tp["dolt_cli_ops_s"], BLUE),
+                ("#2 / #3 dolt server\n(pooled)", tp["dolt_server_pooled_ops_s"], TEAL)]
+        ax[1, 1].bar([b[0] for b in bars], [b[1] for b in bars], color=[b[2] for b in bars], width=0.5)
+        ax[1, 1].set_yscale("log"); ax[1, 1].set_title("Point-write throughput (data tier)")
+        ax[1, 1].set_ylabel("ops / sec (log)")
+        for i, b in enumerate(bars):
+            ax[1, 1].text(i, b[1] * 1.15, f"{b[1]:,.0f}", ha="center", fontsize=9)
+    else:
+        ax[1, 1].axis("off")
     fig.tight_layout(); fig.savefig(DOCS / "benchmark-three-structures.svg", metadata={"Date": None})
     plt.close(fig)
 
