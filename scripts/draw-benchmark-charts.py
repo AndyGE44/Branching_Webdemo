@@ -17,7 +17,8 @@ import matplotlib.pyplot as plt
 DOCS = Path(__file__).resolve().parents[1] / "docs"
 BLUE, TEAL, CORAL, AMBER = "#2f6fb0", "#1d9e75", "#d8572f", "#b5651d"
 plt.rcParams.update({"font.size": 10, "axes.titlesize": 11, "axes.grid": True,
-                     "grid.alpha": 0.25, "figure.autolayout": True})
+                     "grid.alpha": 0.25, "figure.autolayout": True,
+                     "svg.hashsalt": "branching-webdemo-bench"})  # deterministic element ids
 
 def kfmt(v):  # bytes -> KB
     return v / 1024.0
@@ -85,4 +86,26 @@ ax[2].set_xlabel("rows"); ax[2].set_ylabel("ms (log)"); ax[2].legend()
 fig.savefig(DOCS / "benchmark-build-mode.svg", metadata={"Date": None})
 plt.close(fig)
 
-print("wrote", DOCS / "benchmark-arch-a-vs-b.svg", "and", DOCS / "benchmark-build-mode.svg")
+# ---------------- connection pool (arch A) ---------------- #
+pool_path = DOCS / "benchmark-pool.results.json"
+if pool_path.exists():
+    pool = json.loads(pool_path.read_text())
+    pq, pl = pool["0"], pool["5"]
+    groups = ["single point-UPDATE", "full buy() request"]
+    perq = [pq["single_update_ops_s"], pq["buy_request_ops_s"]]
+    pooled = [pl["single_update_ops_s"], pl["buy_request_ops_s"]]
+    x = list(range(len(groups))); w = 0.38
+    fig, ax = plt.subplots(1, 1, figsize=(7.5, 4.3))
+    ax.bar([i - w / 2 for i in x], perq, w, color=CORAL, label="connect per query")
+    ax.bar([i + w / 2 for i in x], pooled, w, color=TEAL, label="pooled (realistic)")
+    ax.set_yscale("log"); ax.set_xticks(x); ax.set_xticklabels(groups)
+    ax.set_ylabel("ops / sec (log)"); ax.legend()
+    ax.set_title("Arch A throughput: connection pool vs connect-per-query (dolt-server)")
+    for i, v in enumerate(perq):
+        ax.text(i - w / 2, v * 1.12, f"{v:.0f}", ha="center", fontsize=9)
+    for i, v in enumerate(pooled):
+        ax.text(i + w / 2, v * 1.12, f"{v:.0f}", ha="center", fontsize=9)
+    fig.tight_layout(); fig.savefig(DOCS / "benchmark-pool.svg", metadata={"Date": None})
+    plt.close(fig)
+
+print("wrote benchmark SVGs to", DOCS)

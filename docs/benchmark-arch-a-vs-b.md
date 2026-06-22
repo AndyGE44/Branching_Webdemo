@@ -73,3 +73,27 @@ so storage explodes with size × snapshot count. Pick A when you branch a large 
 often; pick B for small data or write-heavy steady state with few snapshots. For A,
 always use `dolt_server` (the CLI's per-query spawn kills both snapshot latency and
 throughput).
+
+## Connection model (arch A): pooling is essential
+
+The throughput numbers above use a *persistent* server connection. The app store
+originally opened a connection per query — and Dolt's sql-server handshake is unusually
+heavy (~20 ms), so connect-per-query is ~35× slower than reusing connections
+(`scripts/bench-dolt-pool.py`, figure `benchmark-pool.svg`):
+
+| workload | connect per query | pooled | speedup |
+|---|--:|--:|--:|
+| single point-UPDATE | 50 ops/s | 1790 ops/s | 35.6× |
+| full `buy()` request (4 round-trips) | 13 ops/s | 464 ops/s | 36.5× |
+
+So `DoltServerInventoryStore` now keeps a small connection pool (reused across requests,
+like any real web service). To stay compatible with the build-mode CRIU checkpoint — which
+must not capture an open socket to the *external* server — the pool is **checkpoint-aware**:
+
+- the control plane POSTs `/api/admin/drain-connections` during quiesce, so the pool is
+  emptied before `waypoint create` (no established sockets in the image);
+- on borrow after a restore, `ping(reconnect=True)` transparently re-establishes a
+  connection to the (untouched, external) server.
+
+Validated end-to-end: the build-mode A UI flow restores into the **same PID** (CRIU memory
+restore) with the data tier rolling back in lockstep, pool enabled.
