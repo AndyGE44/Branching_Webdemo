@@ -72,6 +72,26 @@ tier lives outside the checkpoint, so after a restore the app must reconnect (an
 It is also exactly why #2 is the heaviest — you pay to freeze the app + its live socket, and
 in return you skip the reconnect/warmup.
 
+## Branching (tree) correctness
+
+Snapshots form a **tree**, not just a linear chain: restoring to an earlier snapshot and
+snapshotting again forks a sibling branch (`restore()` resets `last_snapshot_id`, which the next
+`snapshot()` takes as parent). Verified by `scripts/test-branching.py` with the sequence
+`A → B`, restore `A`, `→ C` (sibling of B), restore `B`, `→ D` — writing a distinct marker cell
+each step and reading it back after every restore. The decisive check: after diverging into C,
+`restore B` must return B's value (20), **not** the C-branch's (30).
+
+| restore → | #1 coupled | #3 external | #2 full-system |
+|---|:--:|:--:|:--:|
+| A (rollback) | ✅ | ✅ | ✅ + conn resumed |
+| **B (sibling of C=30)** | ✅ 20 | ✅ 20 | ✅ 20 + conn resumed |
+| C / D (branches intact) | ✅ | ✅ | ✅ + conn resumed |
+
+All three land on the correct divergent state. For #2, the in-sandbox held connection resumes on
+the same `CONNECTION_ID` at **every** jump — including across the branch switch — so even hopping
+between branches needs no reconnect. (#2 also confirms `waypoint create` works right after a
+`waypoint restore`, i.e. snapshot-after-restore interleaving.)
+
 ## Point-write throughput (data tier)
 
 Measured **per placement** (no shared/borrowed number): #1 via the dolt CLI, #2 against the
