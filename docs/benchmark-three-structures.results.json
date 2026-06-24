@@ -1,120 +1,147 @@
 {
   "app_tier_const_ms": {
-    "snap": 15.7,
-    "rest": 15.5
+    "snap": 14.6,
+    "rest": 13.4
   },
   "sizes": {
     "1000": {
       "s1_coupled": {
-        "snap_ms": 11.9,
-        "rest_ms": 13.2,
+        "snap_ms": 12.3,
+        "rest_ms": 13.9,
         "criu_bytes": 0,
-        "fs_upper_bytes": 33570,
+        "fs_upper_bytes": 33566,
         "whole_repo_bytes": 26665
       },
       "s1_build": {
-        "snap_ms": 138.8,
-        "rest_ms": 190.1,
-        "criu_bytes": 2903168,
-        "fs_upper_bytes": 51783
+        "snap_ms": 140.4,
+        "rest_ms": 189.9,
+        "criu_bytes": 2963312,
+        "fs_upper_bytes": 51587
       },
       "s3_external": {
-        "snap_ms": 39.4,
-        "rest_ms": 37.4,
-        "dolt_op_snap_ms": 23.7,
+        "snap_ms": 38.4,
+        "rest_ms": 34.4,
+        "dolt_op_snap_ms": 23.8,
         "criu_bytes": 0,
         "fs_upper_bytes": 0,
-        "data_delta_bytes": 35699
+        "data_delta_bytes": 35560
       },
       "s3_build": {
-        "snap_ms": 162.2,
-        "rest_ms": 212.4,
-        "criu_bytes": 2256365,
+        "snap_ms": 161.2,
+        "rest_ms": 211.4,
+        "criu_bytes": 2287542,
         "fs_upper_bytes": 0,
-        "data_delta_bytes": 38170
+        "data_delta_bytes": 0
       },
       "s2_fullsystem": {
-        "snap_ms": 228.1,
-        "rest_ms": 221.1,
-        "criu_bytes": 30383588,
-        "fs_upper_bytes": 53674
+        "snap_ms": 339.0,
+        "rest_ms": 343.1,
+        "criu_bytes": 46416266,
+        "fs_upper_bytes": 62947,
+        "conn_survived": true,
+        "cid_stable": true,
+        "conn_proof": {
+          "start_cid": 2,
+          "cid_after": 2,
+          "hb_before": 4,
+          "hb_after": 9
+        }
       }
     },
     "100000": {
       "s1_coupled": {
-        "snap_ms": 11.4,
-        "rest_ms": 16.4,
+        "snap_ms": 13.1,
+        "rest_ms": 17.9,
         "criu_bytes": 0,
         "fs_upper_bytes": 1730059,
         "whole_repo_bytes": 1719318
       },
       "s1_build": {
-        "snap_ms": 134.9,
-        "rest_ms": 189.3,
-        "criu_bytes": 3134186,
-        "fs_upper_bytes": 3897306
+        "snap_ms": 137.5,
+        "rest_ms": 188.1,
+        "criu_bytes": 2855538,
+        "fs_upper_bytes": 3897311
       },
       "s3_external": {
-        "snap_ms": 39.6,
-        "rest_ms": 35.6,
-        "dolt_op_snap_ms": 23.9,
+        "snap_ms": 39.9,
+        "rest_ms": 34.7,
+        "dolt_op_snap_ms": 25.3,
         "criu_bytes": 0,
         "fs_upper_bytes": 0,
-        "data_delta_bytes": 50865
+        "data_delta_bytes": 50862
       },
       "s3_build": {
-        "snap_ms": 160.6,
-        "rest_ms": 210.8,
-        "criu_bytes": 2353543,
+        "snap_ms": 157.3,
+        "rest_ms": 214.0,
+        "criu_bytes": 2374404,
         "fs_upper_bytes": 0,
-        "data_delta_bytes": 57831
+        "data_delta_bytes": 0
       },
       "s2_fullsystem": {
-        "snap_ms": 236.9,
-        "rest_ms": 232.0,
-        "criu_bytes": 35388171,
-        "fs_upper_bytes": 3894849
+        "snap_ms": 340.2,
+        "rest_ms": 339.5,
+        "criu_bytes": 47651827,
+        "fs_upper_bytes": 3948253,
+        "conn_survived": true,
+        "cid_stable": true,
+        "conn_proof": {
+          "start_cid": 2,
+          "cid_after": 2,
+          "hb_before": 4,
+          "hb_after": 9
+        }
       }
     },
     "1000000": {
       "s1_coupled": {
-        "snap_ms": 11.0,
+        "snap_ms": 14.4,
         "rest_ms": 14.6,
         "criu_bytes": 0,
-        "fs_upper_bytes": 17578021,
+        "fs_upper_bytes": 17578022,
         "whole_repo_bytes": 17564534
       },
       "s1_build": {
-        "snap_ms": 138.0,
-        "rest_ms": 189.8,
-        "criu_bytes": 3595616,
-        "fs_upper_bytes": 41247604
+        "snap_ms": 135.3,
+        "rest_ms": 188.4,
+        "criu_bytes": 3419910,
+        "fs_upper_bytes": 41247631
       },
       "s3_external": {
-        "snap_ms": 40.8,
-        "rest_ms": 37.2,
-        "dolt_op_snap_ms": 25.1,
+        "snap_ms": 40.0,
+        "rest_ms": 35.2,
+        "dolt_op_snap_ms": 25.4,
         "criu_bytes": 0,
         "fs_upper_bytes": 0,
-        "data_delta_bytes": 65925
+        "data_delta_bytes": 65928
       },
       "s3_build": {
-        "snap_ms": 166.1,
-        "rest_ms": 211.1,
-        "criu_bytes": 2354089,
+        "snap_ms": 160.4,
+        "rest_ms": 214.3,
+        "criu_bytes": 2288447,
         "fs_upper_bytes": 0,
-        "data_delta_bytes": 68836
+        "data_delta_bytes": 0
       },
       "s2_fullsystem": {
-        "snap_ms": 317.7,
-        "rest_ms": 260.9,
-        "criu_bytes": 78085791,
-        "fs_upper_bytes": 41244655
+        "snap_ms": 441.3,
+        "rest_ms": 379.6,
+        "criu_bytes": 93638045,
+        "fs_upper_bytes": 41256144,
+        "conn_survived": true,
+        "cid_stable": true,
+        "conn_proof": {
+          "start_cid": 2,
+          "cid_after": 2,
+          "hb_before": 5,
+          "hb_after": 10
+        }
       }
     }
   },
   "throughput": {
-    "dolt_cli_ops_s": 22.1,
-    "dolt_server_pooled_ops_s": 1413.7
+    "s1_cli_ops_s": 22.3,
+    "s2_insandbox_pooled_ops_s": 1452.4,
+    "s3_external_pooled_ops_s": 1435.2,
+    "dolt_cli_ops_s": 22.3,
+    "dolt_server_pooled_ops_s": 1435.2
   }
 }

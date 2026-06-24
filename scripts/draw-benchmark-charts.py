@@ -153,10 +153,14 @@ if three_path.exists():
     ax[1, 0].set_ylabel("MB per snapshot (log)"); ax[1, 0].legend(fontsize=8)
     tp = doc.get("throughput", {})
     if tp and "error" not in tp:
-        bars = [("#1 dolt CLI", tp["dolt_cli_ops_s"], BLUE),
-                ("#2 / #3 dolt server\n(pooled)", tp["dolt_server_pooled_ops_s"], TEAL)]
-        ax[1, 1].bar([b[0] for b in bars], [b[1] for b in bars], color=[b[2] for b in bars], width=0.5)
-        ax[1, 1].set_yscale("log"); ax[1, 1].set_title("Point-write throughput (data tier)")
+        s2 = tp.get("s2_insandbox_pooled_ops_s")
+        bars = [("#1 dolt CLI\n(process/query)", tp.get("s1_cli_ops_s", tp.get("dolt_cli_ops_s")), BLUE)]
+        if s2 is not None:   # real 3-placement run: server-in-sandbox (#2) measured separately
+            bars.append(("#2 server\n(in sandbox)", s2, CORAL))
+        bars.append(("#3 server\n(external, pooled)",
+                     tp.get("s3_external_pooled_ops_s", tp.get("dolt_server_pooled_ops_s")), TEAL))
+        ax[1, 1].bar([b[0] for b in bars], [b[1] for b in bars], color=[b[2] for b in bars], width=0.6)
+        ax[1, 1].set_yscale("log"); ax[1, 1].set_title("Point-write throughput (data tier, measured per placement)")
         ax[1, 1].set_ylabel("ops / sec (log)")
         for i, b in enumerate(bars):
             ax[1, 1].text(i, b[1] * 1.15, f"{b[1]:,.0f}", ha="center", fontsize=9)
