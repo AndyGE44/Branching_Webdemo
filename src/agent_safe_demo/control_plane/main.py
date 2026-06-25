@@ -86,6 +86,7 @@ def create_branch_backend(app_spec: AppSpec | None = None) -> StateForkBackend:
         state_env=dict(selected_app.state_env),
         manifest_path=selected_app.manifest_path,
         agent_demo_actions=list(selected_app.agent_demo_actions or []),
+        db_backed=selected_app.db_backed,
     )
 
 

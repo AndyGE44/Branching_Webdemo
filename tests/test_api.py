@@ -260,7 +260,7 @@ def test_app_registry_discovers_manifests_and_reports_errors(tmp_path):
     from agent_safe_demo.control_plane import app_registry
 
     specs = app_registry.build_app_specs()
-    assert set(specs) == {"email", "inventory"}
+    assert set(specs) == {"email", "inventory", "shop_clothing", "shop_cookware", "shop_hardware"}
     assert specs["email"].manifest_path.name == "statefork.yaml"
     assert specs["email"].runtime_type == "checkpoint_exec"
     assert specs["email"].build_dockerfile_dir.name == "email_service"
@@ -312,7 +312,7 @@ def test_controller_lists_and_switches_registered_apps(monkeypatch, tmp_path):
     payload = apps.json()
     assert payload["current_app_id"] == "email"
     assert payload["manifest_errors"] == []
-    assert {app["id"] for app in payload["apps"]} == {"email", "inventory"}
+    assert {app["id"] for app in payload["apps"]} == {"email", "inventory", "shop_clothing", "shop_cookware", "shop_hardware"}
     email_app = next(app for app in payload["apps"] if app["id"] == "email")
     assert email_app["manifest_loaded"] is True
     assert email_app["runtime_type"] == "checkpoint_exec"

@@ -356,6 +356,7 @@ class StateForkBackend:
         state_env: dict[str, str] | None = None,
         manifest_path: Path | None = None,
         agent_demo_actions: list[dict[str, Any]] | None = None,
+        db_backed: bool = True,
     ) -> None:
         self.project_root = project_root
         self.main_db_path = main_db_path
@@ -375,7 +376,13 @@ class StateForkBackend:
         self.runtime_port_env = runtime_port_env
         self.runtime_type = runtime_type
         self.build_dockerfile_dir = build_dockerfile_dir
-        self.state_files = tuple(state_files or [main_db_path.name])
+        self.db_backed = db_backed
+        if state_files:
+            self.state_files = tuple(state_files)
+        elif db_backed:
+            self.state_files = (main_db_path.name,)
+        else:
+            self.state_files = ()
         self.state_env = dict(state_env or {})
         self.manifest_path = manifest_path
         runtime_manager_cls = (
@@ -450,7 +457,7 @@ class StateForkBackend:
         return bases
 
     def create_base(self, label: str | None = None) -> dict[str, Any]:
-        if not self.main_db_path.exists():
+        if getattr(self, "db_backed", True) and not self.main_db_path.exists():
             raise BranchError(f"Main database does not exist: {self.main_db_path}")
 
         started_at = time.time()
@@ -477,8 +484,8 @@ class StateForkBackend:
             session_id=getattr(manager, "session_id", snapshot_id),
             db_path=base_db_path,
             work_dir=work_dir,
-            main_fingerprint=sqlite_fingerprint(base_db_path),
-            state_summary=self._safe_read_summary(base_db_path),
+            main_fingerprint=self._fingerprint(base_db_path),
+            state_summary=self._summary(base_db_path),
         )
         self.bases[base_id] = base
         self.base_managers[base_id] = manager
@@ -559,9 +566,12 @@ class StateForkBackend:
         self.branches[branch_id] = branch
         self.branch_environments[branch_id] = str(environment_name)
         self._wait_until_ready(branch)
-        if not branch_db.exists():
-            raise BranchError(f"App runtime did not create its database: {branch_db}")
-        branch.last_saved_fingerprint = sqlite_fingerprint(branch_db)
+        if getattr(self, "db_backed", True):
+            if not branch_db.exists():
+                raise BranchError(f"App runtime did not create its database: {branch_db}")
+            branch.last_saved_fingerprint = sqlite_fingerprint(branch_db)
+        else:
+            branch.last_saved_fingerprint = ""
         branch.dirty = False
         return branch.to_dict()
 
@@ -642,6 +652,8 @@ class StateForkBackend:
 
     def diff(self, branch_id: str) -> dict[str, Any]:
         branch = self._require_branch(branch_id)
+        if not getattr(self, "db_backed", True):
+            return {"branch_id": branch_id, "tables": [], "counts": {}}
         main = self._summary_for_branch_base(branch)
         candidate = self._read_summary(branch.db_path)
         all_tables = sorted(set(main["counts"]) | set(candidate["counts"]))
@@ -706,8 +718,8 @@ class StateForkBackend:
             self._wait_until_ready(branch)
             self._terminate(branch)
 
-        fingerprint = sqlite_fingerprint(branch.db_path)
-        state_summary = self._read_summary(branch.db_path)
+        fingerprint = self._fingerprint(branch.db_path)
+        state_summary = self._summary(branch.db_path)
         base.checkpoint_id = snapshot_id
         base.label = f"Committed {branch.id}"
         base.session_id = getattr(manager, "session_id", base.session_id)
@@ -831,7 +843,7 @@ class StateForkBackend:
             label=label,
             action=action,
             parent_id=parent_id,
-            fingerprint=sqlite_fingerprint(branch.db_path),
+            fingerprint=self._fingerprint(branch.db_path),
         )
         branch.snapshots.append(snapshot)
         branch.current_snapshot_id = snapshot.id
@@ -873,7 +885,7 @@ class StateForkBackend:
             )
         branch.status = "running"
         branch.current_snapshot_id = snapshot.id
-        branch.last_saved_fingerprint = snapshot.fingerprint or sqlite_fingerprint(branch.db_path)
+        branch.last_saved_fingerprint = snapshot.fingerprint or self._fingerprint(branch.db_path)
         branch.dirty = False
         self._wait_until_ready(branch)
 
@@ -985,6 +997,8 @@ class StateForkBackend:
         raise BranchError(f"Unknown snapshot for {branch.id}: {snapshot_id}")
 
     def _branch_is_dirty(self, branch: BranchHandle) -> bool:
+        if not getattr(self, "db_backed", True):
+            return branch.dirty
         if branch.last_saved_fingerprint and branch.db_path.exists():
             branch.dirty = sqlite_fingerprint(branch.db_path) != branch.last_saved_fingerprint
         return branch.dirty
@@ -1135,10 +1149,24 @@ class StateForkBackend:
             base = self.bases.get(branch.base_id)
             if base and base.state_summary is not None:
                 return base.state_summary
+        if not getattr(self, "db_backed", True):
+            return {"backend": "container", "note": "in-memory state"}
         summary = self._safe_read_summary(self.main_db_path)
         if summary is None:
             raise BranchError(f"Could not read base database summary for branch {branch.id}")
         return summary
+
+    def _fingerprint(self, db_path: Path | None) -> str:
+        """SQLite fingerprint for db-backed apps; empty string for container apps."""
+        if not getattr(self, "db_backed", True) or db_path is None or not Path(db_path).exists():
+            return ""
+        return sqlite_fingerprint(db_path)
+
+    def _summary(self, db_path: Path | None) -> dict[str, Any] | None:
+        """State summary for db-backed apps; a marker for container apps."""
+        if not getattr(self, "db_backed", True):
+            return {"backend": "container", "note": "in-memory state captured by checkpoint"}
+        return self._safe_read_summary(db_path)
 
     def _safe_read_summary(self, db_path: Path) -> dict[str, Any] | None:
         try:

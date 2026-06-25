@@ -1,0 +1,24 @@
+id: shop_cookware
+name: Cookware Shop
+description: Mock Shopify Hydrogen storefront (cookware). Cart/order state lives in-memory in the mock Storefront API and is captured by the StateFork container checkpoint (no state file).
+
+runtime:
+  # See app_plane/shop_clothing/statefork.yaml for the full rationale. Runs the
+  # PREBUNDLED plain-node mock-api so the process tree is CRIU-checkpointable.
+  type: checkpoint_exec
+  command: "node /app/mock-api/mockapi.cjs /app/data ${PORT}"
+  cwd: "/app/mock-api"
+  port_env: "PORT"
+  health_path: "/health"
+  ui_path: "/"
+
+build:
+  dockerfile_dir: "."
+
+state:
+  files: []
+  env:
+    UV_USE_IO_URING: "0"
+
+observability:
+  state_summary_path: "/health"

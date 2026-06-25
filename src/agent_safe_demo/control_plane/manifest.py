@@ -33,7 +33,9 @@ class RuntimeManifest(BaseModel):
 class StateManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    files: list[str] = Field(min_length=1)
+    # May be empty for apps whose state is in-memory and captured by the
+    # container/process checkpoint (e.g. the shopgym shops) rather than a file.
+    files: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("files")

@@ -130,7 +130,8 @@ class CheckpointExecRuntimeManager(RuntimeProcessManager):
     def build_launch(self, *, db_path: Path, port: int, work_dir: Path) -> RuntimeLaunch:
         variables = self.runtime_variables(db_path=db_path, port=port, work_dir=work_dir)
         env = {}
-        env[self.app_db_env_var] = f"/{db_path.name}"
+        if self.app_db_env_var:
+            env[self.app_db_env_var] = f"/{db_path.name}"
         env[self.runtime_port_env] = str(port)
         for key, value in self.state_env.items():
             env[key] = interpolate_template(value, variables)

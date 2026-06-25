@@ -10,6 +10,8 @@ from typing import Any
 from agent_safe_demo.control_plane.manifest import StateForkManifest, interpolate_template, load_manifest
 
 APP_PLANE_DIR = Path(__file__).resolve().parents[1] / "app_plane"
+# repo root: control_plane -> agent_safe_demo -> src -> <repo>
+REPO_ROOT = Path(__file__).resolve().parents[3]
 USER_SELECTABLE_APP_IDS = frozenset({"email", "inventory"})
 
 
@@ -38,6 +40,9 @@ class AppSpec:
     build_dockerfile_dir: Path | None = None
     state_files: tuple[str, ...] = field(default_factory=tuple)
     state_env: dict[str, str] = field(default_factory=dict)
+    # False for manifest-only/container apps with no SQLite file (state captured
+    # by the container checkpoint, e.g. the shopgym shops).
+    db_backed: bool = True
 
     def public_dict(self) -> dict[str, Any]:
         return {
@@ -61,6 +66,7 @@ class AppSpec:
             "build_dockerfile_dir": str(self.build_dockerfile_dir) if self.build_dockerfile_dir else None,
             "state_files": list(self.state_files),
             "state_env_keys": sorted(self.state_env),
+            "db_backed": self.db_backed,
         }
 
 
@@ -252,9 +258,60 @@ def _build_dockerfile_dir(path: Path, manifest: StateForkManifest, module: Any) 
     return dockerfile_dir.resolve()
 
 
+def _container_spec_from_manifest(path: Path, manifest: StateForkManifest) -> AppSpec:
+    """AppSpec for a manifest-only app with no Python module (e.g. a prebuilt
+    container such as the shopgym shops). Snapshot/restore is handled entirely
+    by the StateFork container checkpoint, so there is no SQLite file:
+    ``db_backed=False`` and ``init_db`` is a no-op."""
+    app_dir = path.parent
+    db_env_var = next(iter(manifest.state.env), "") if manifest.state.env else ""
+    # Sentinel path that never exists, so db `.exists()` checks cleanly skip.
+    sentinel_db = REPO_ROOT / f".{manifest.id}-container-state"
+    dockerfile_dir: Path | None = None
+    if manifest.build is not None:
+        raw = interpolate_template(
+            manifest.build.dockerfile_dir,
+            {"APP_DIR": str(app_dir), "PROJECT_ROOT": str(REPO_ROOT)},
+        )
+        dd = Path(raw)
+        dockerfile_dir = (dd if dd.is_absolute() else app_dir / dd).resolve()
+    return AppSpec(
+        id=manifest.id,
+        label=manifest.name,
+        description=manifest.description,
+        module="",
+        uvicorn_target="",
+        db_env_var=db_env_var,
+        db_filename="",
+        db_path=sentinel_db,
+        project_root=REPO_ROOT,
+        init_db=lambda: None,
+        db_backed=False,
+        health_path=manifest.runtime.health_path,
+        state_path=manifest.observability.state_summary_path,
+        runtime_ui_path=manifest.runtime.ui_path,
+        agent_demo_label="Run",
+        agent_demo_actions=None,
+        manifest_path=path,
+        runtime_command=manifest.runtime.command,
+        runtime_cwd=manifest.runtime.cwd,
+        runtime_port_env=manifest.runtime.port_env,
+        runtime_type=manifest.runtime.type,
+        build_dockerfile_dir=dockerfile_dir,
+        state_files=tuple(manifest.state.files),
+        state_env=dict(manifest.state.env),
+    )
+
+
 def _spec_from_manifest(path: Path, manifest: StateForkManifest) -> AppSpec:
     adapter = APP_ADAPTERS.get(manifest.id)
     if adapter is None:
+        # No Python adapter. If the app declares no state file, treat it as an
+        # external/container app whose state is captured by the checkpoint
+        # (e.g. the shopgym shops). Otherwise it is a Python app missing its
+        # adapter, which is a configuration error.
+        if not manifest.state.files:
+            return _container_spec_from_manifest(path, manifest)
         available = ", ".join(sorted(APP_ADAPTERS))
         raise ValueError(f"No Python adapter registered for app id {manifest.id!r}; available: {available}")
 

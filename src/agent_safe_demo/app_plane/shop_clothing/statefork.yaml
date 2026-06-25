@@ -1,0 +1,30 @@
+id: shop_clothing
+name: Clothing Shop
+description: Mock Shopify Hydrogen storefront. Cart/order state lives in-memory in the mock Storefront API and is captured by the StateFork container checkpoint (no state file).
+
+runtime:
+  # checkpoint_exec + build mode: StateFork/Waypoint builds the image, launches the
+  # app inside the managed session, and checkpoints the whole process tree (incl.
+  # the in-memory cart) via CRIU. Runs the PREBUNDLED plain-node mock-api (see
+  # Dockerfile) — running it via tsx is not CRIU-checkpointable.
+  type: checkpoint_exec
+  command: "node /app/mock-api/mockapi.cjs /app/data ${PORT}"
+  cwd: "/app/mock-api"
+  port_env: "PORT"
+  health_path: "/health"
+  ui_path: "/"
+
+build:
+  dockerfile_dir: "."
+
+state:
+  # Cart/order state is in-memory only; the container checkpoint captures it.
+  # No state file to declare.
+  files: []
+  env:
+    # Belt-and-suspenders: also disable libuv io_uring per-process (the host
+    # also sets kernel.io_uring_disabled=2). CRIU 4.2 cannot dump io_uring.
+    UV_USE_IO_URING: "0"
+
+observability:
+  state_summary_path: "/health"
