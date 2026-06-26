@@ -3,11 +3,12 @@ name: Hardware Shop
 description: Mock Shopify Hydrogen storefront (hardware). Cart/order state lives in-memory in the mock Storefront API and is captured by the StateFork container checkpoint (no state file).
 
 runtime:
-  # See app_plane/shop_clothing/statefork.yaml for the full rationale. Runs the
-  # PREBUNDLED plain-node mock-api so the process tree is CRIU-checkpointable.
+  # See app_plane/shop_clothing/statefork.yaml for the full rationale. run-shop.sh
+  # starts the prebundled mock-api on :4000 and the Hydrogen storefront on $PORT
+  # so the embedded UI is the actual shop website (whole tree is CRIU-checkpointable).
   type: checkpoint_exec
-  command: "node /app/mock-api/mockapi.cjs /app/data ${PORT}"
-  cwd: "/app/mock-api"
+  command: "bash /app/run-shop.sh ${PORT}"
+  cwd: "/app"
   port_env: "PORT"
   health_path: "/health"
   ui_path: "/"

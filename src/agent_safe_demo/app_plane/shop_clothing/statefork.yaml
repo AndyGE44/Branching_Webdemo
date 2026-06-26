@@ -5,11 +5,13 @@ description: Mock Shopify Hydrogen storefront. Cart/order state lives in-memory 
 runtime:
   # checkpoint_exec + build mode: StateFork/Waypoint builds the image, launches the
   # app inside the managed session, and checkpoints the whole process tree (incl.
-  # the in-memory cart) via CRIU. Runs the PREBUNDLED plain-node mock-api (see
-  # Dockerfile) — running it via tsx is not CRIU-checkpointable.
+  # the in-memory cart) via CRIU. run-shop.sh (baked by the Dockerfile) starts the
+  # PREBUNDLED plain-node mock-api on :4000 and the Hydrogen storefront on $PORT,
+  # so the embedded UI is the actual shop WEBSITE, not the bare GraphQL API.
+  # (Both are plain `node` — running the API via tsx is not CRIU-checkpointable.)
   type: checkpoint_exec
-  command: "node /app/mock-api/mockapi.cjs /app/data ${PORT}"
-  cwd: "/app/mock-api"
+  command: "bash /app/run-shop.sh ${PORT}"
+  cwd: "/app"
   port_env: "PORT"
   health_path: "/health"
   ui_path: "/"

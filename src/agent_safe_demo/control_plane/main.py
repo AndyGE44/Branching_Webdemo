@@ -308,20 +308,60 @@ def apps() -> dict:
     return app_selection_payload()
 
 
+# Cookies the embedded shopgym storefronts set on the control-plane origin to
+# hold the in-memory cart id (and Hydrogen session). They persist in the browser
+# across shop switches and resets, and because the mock-api assigns deterministic
+# cart ids the same id is valid in the next shop — so the cart appears to carry
+# over. Clearing them when the workspace context changes gives each shop/reset a
+# fresh cart. Harmless for the db-backed apps (they never set these).
+STOREFRONT_COOKIES = ("cart", "session")
+
+
+def clear_storefront_cookies(response: Response) -> None:
+    for name in STOREFRONT_COOKIES:
+        response.delete_cookie(name, path="/")
+
+
 @app.post("/api/apps/{app_id}/select")
-def select_app(app_id: str) -> dict:
+def select_app(app_id: str, response: Response) -> dict:
     try:
-        return switch_current_app(app_id)
+        result = switch_current_app(app_id)
+        clear_storefront_cookies(response)
+        return result
     except ValueError as error:
         return JSONResponse({"detail": str(error)}, status_code=404)
     except BranchError as error:
         return branch_error(error)
 
 
-def runtime_target_url(branch: dict, path: str, query_string: bytes = b"") -> str:
-    suffix = f"/{path}" if path else "/"
-    query = query_string.decode("utf-8")
-    return f"{branch['url']}{suffix}{'?' + query if query else ''}"
+RUNTIME_MOUNT = "/runtime"
+# Paths a website runtime (the shopgym Hydrogen storefronts) serves at its ORIGIN
+# ROOT rather than under the basename: Vite assets, product images, health, and
+# other dist/client static files. Everything else root-relative is a document
+# route and must be re-prefixed with the mount so the basename-aware server matches.
+RUNTIME_ROOT_PREFIXES = (
+    "/assets/",
+    "/images/",
+    "/build/",
+    "/@",
+    "/favicon",
+    "/health",
+    "/robots.txt",
+    "/sitemap",
+)
+
+
+def runtime_forward_path(request_path: str) -> str:
+    """Map an incoming control-plane path to the path to request on a website
+    runtime. The storefront server runs with basename=/runtime (see run-shop.sh
+    and the shop Dockerfile), so /runtime/* documents and root static assets pass
+    through unchanged, while a stray root-relative document link (e.g. a hardcoded
+    <a href="/pages/about">) gets the mount prepended so the server matches it."""
+    if request_path == RUNTIME_MOUNT or request_path.startswith(RUNTIME_MOUNT + "/"):
+        return request_path
+    if request_path.startswith(RUNTIME_ROOT_PREFIXES):
+        return request_path
+    return RUNTIME_MOUNT + request_path
 
 
 def proxy_headers(request: Request) -> dict[str, str]:
@@ -333,41 +373,77 @@ def proxy_headers(request: Request) -> dict[str, str]:
     }
 
 
-def proxied_response(content: bytes, status_code: int, content_type: str | None) -> Response:
-    headers = {"content-type": content_type} if content_type else None
-    return Response(content=content, status_code=status_code, headers=headers)
+def proxied_response(content: bytes, status_code: int, upstream_headers) -> Response:
+    media_type = upstream_headers.get("content-type") if upstream_headers is not None else None
+    response = Response(content=content, status_code=status_code, media_type=media_type)
+    if upstream_headers is not None:
+        # Forward Set-Cookie (the Hydrogen session that holds the cart id — may be
+        # several) and other response headers the embedded app relies on. Hop-by-hop
+        # and length headers are managed by Starlette, so they are intentionally skipped.
+        for cookie in upstream_headers.get_all("set-cookie", []):
+            response.raw_headers.append((b"set-cookie", cookie.encode("latin-1")))
+        for key in ("location", "cache-control"):
+            value = upstream_headers.get(key)
+            if value:
+                response.headers[key] = value
+    return response
 
 
-@app.api_route("/runtime", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
-@app.api_route("/runtime/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+def runtime_proxy_headers(request: Request, branch: dict) -> dict[str, str]:
+    headers = {
+        key: value
+        for key, value in proxy_headers(request).items()
+        if key.lower() not in {"origin", "referer"}
+    }
+    # We proxy to branch.url, so urllib sends Host=<branch host>. React Router's
+    # single-fetch action guard rejects a POST whose Origin host != Host ("host
+    # header does not match origin header"), which breaks add-to-cart through the
+    # control-plane origin. Align Origin to the runtime so the guard passes.
+    headers["Origin"] = branch["url"]
+    return headers
+
+
+async def proxy_request_to_branch(request: Request, branch: dict, forward_path: str) -> Response:
+    if branch.get("checkpointing"):
+        return JSONResponse({"detail": "Runtime is checkpointing; retry shortly."}, status_code=503)
+
+    body = await request.body()
+    query = request.scope.get("query_string", b"").decode("utf-8")
+    target = f"{branch['url']}{forward_path}{'?' + query if query else ''}"
+    proxy_request = urlrequest.Request(
+        target,
+        data=body or None,
+        headers=runtime_proxy_headers(request, branch),
+        method=request.method,
+    )
+    try:
+        with urlrequest.urlopen(proxy_request, timeout=30) as proxy_response:
+            content = proxy_response.read()
+            return proxied_response(content, proxy_response.status, proxy_response.headers)
+    except HTTPError as error:
+        content = error.read()
+        return proxied_response(content, error.code, error.headers)
+    except URLError as error:
+        return JSONResponse({"detail": f"Runtime proxy failed: {error}"}, status_code=502)
+
+
+def branch_forward_path(request: Request, path: str) -> str:
+    # Website apps run with basename=/runtime and keep the full path (assets at
+    # root, documents under /runtime). db-backed apps (email/inventory) serve at
+    # root with relative URLs, so strip the mount as before.
+    if CURRENT_APP.db_backed:
+        return f"/{path}"
+    return runtime_forward_path(request.url.path)
+
+
+@app.api_route("/runtime", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
+@app.api_route("/runtime/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
 async def runtime_proxy(request: Request, path: str = "") -> Response:
     try:
         branch = ensure_workspace()["branch"]
     except BranchError as error:
         return branch_error(error)
-
-    if branch.get("checkpointing"):
-        return JSONResponse({"detail": "Runtime is checkpointing; retry shortly."}, status_code=503)
-
-    body = await request.body()
-    target = runtime_target_url(branch, path, request.scope.get("query_string", b""))
-    proxy_request = urlrequest.Request(
-        target,
-        data=body or None,
-        headers=proxy_headers(request),
-        method=request.method,
-    )
-    try:
-        with urlrequest.urlopen(proxy_request, timeout=15) as proxy_response:
-            content = proxy_response.read()
-            content_type = proxy_response.headers.get("content-type")
-            return proxied_response(content, proxy_response.status, content_type)
-    except HTTPError as error:
-        content = error.read()
-        content_type = error.headers.get("content-type")
-        return proxied_response(content, error.code, content_type)
-    except URLError as error:
-        return JSONResponse({"detail": f"Runtime proxy failed: {error}"}, status_code=502)
+    return await proxy_request_to_branch(request, branch, branch_forward_path(request, path))
 
 
 @app.get("/api/backend")
@@ -486,9 +562,12 @@ def commit_workspace(payload: WorkspaceCommitRequest | None = None) -> dict:
 
 
 @app.post("/api/workspace/reset")
-def reset_workspace() -> dict:
+def reset_workspace(response: Response) -> dict:
     cleanup = branch_backend.reset()
     reset_workspace_handles()
+    # A reset is a full wipe: drop committed heads/history so we do not return to
+    # a previously committed state, and clear the storefront cart cookie.
+    commit_store.reset_app(CURRENT_APP.id)
     if CURRENT_APP.db_path.exists():
         CURRENT_APP.db_path.unlink()
     CURRENT_APP.init_db()
@@ -496,6 +575,7 @@ def reset_workspace() -> dict:
         workspace = ensure_workspace()
     except BranchError as error:
         return branch_error(error)
+    clear_storefront_cookies(response)
     return {"status": "reset", "cleanup": cleanup, **workspace}
 
 
@@ -607,3 +687,23 @@ def discard_branch(branch_id: str) -> dict:
         return branch_backend.discard(branch_id)
     except BranchError as error:
         return branch_error(error)
+
+
+# Registered LAST so it only catches paths no other route owns. Website apps such
+# as the shopgym shops emit root-relative URLs (/assets/..., /collections/...,
+# /images/...) that the iframe requests at the control-plane origin rather than
+# under /runtime/. For those apps we forward any otherwise-unmatched path to the
+# active runtime so the embedded storefront's assets and navigation resolve on a
+# single origin (works through the Cloudflare/SSH tunnels too). db-backed apps
+# (email/inventory) use relative URLs under /runtime/ and never reach this.
+@app.api_route(
+    "/{full_path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+)
+async def runtime_root_fallback(request: Request, full_path: str) -> Response:
+    if CURRENT_APP.db_backed:
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    branch = running_workspace_branch()
+    if not branch:
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    return await proxy_request_to_branch(request, branch, runtime_forward_path(request.url.path))

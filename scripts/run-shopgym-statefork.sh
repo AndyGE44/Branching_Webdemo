@@ -58,9 +58,10 @@ for img in "${SHOP_IMAGES[@]}"; do
   fi
 done
 
-echo ">> 3/4  Ensure Waypoint is built with Node-friendly CRIU flags"
+echo ">> 3/4  Ensure Waypoint (+ bash_init) is built with Node-friendly CRIU flags"
 mem_go="$WAYPOINT_SRC/pkg/waypoint/memory.go"
 wp_bin="$WAYPOINT_SRC/waypoint"
+bi_bin="$WAYPOINT_SRC/bash_init"
 if ! grep -q -- "--force-irmap" "$mem_go" 2>/dev/null; then
   echo "        ERROR: $mem_go is missing --force-irmap; shop checkpoints will fail." >&2
   echo "        Add '--force-irmap' and '--link-remap' to the criu dump args, then rerun." >&2
@@ -72,12 +73,24 @@ if [[ ! -x "$wp_bin" || "$mem_go" -nt "$wp_bin" ]]; then
 else
   echo "        ok: waypoint up to date"
 fi
+# bash_init is the chroot-embedded managed shell Waypoint launches inside each
+# built container; without it `waypoint build` cannot start the app.
+if [[ ! -x "$bi_bin" ]]; then
+  echo "        building bash_init"
+  PATH="$PATH:/usr/local/go/bin" go -C "$WAYPOINT_SRC" build -o bash_init ./cmd/bash-init
+else
+  echo "        ok: bash_init present"
+fi
 
 echo ">> 4/4  Launch control plane (StateFork build mode)"
 export DEMO_STATEFORK_BUILD=1
 export DEMO_STATEFORK_ROOT="$STATEFORK_ROOT"
 export DEMO_STATEFORK_CWD="${DEMO_STATEFORK_CWD:-$STATEFORK_ROOT}"
 export DEMO_STATEFORK_METHOD="${DEMO_STATEFORK_METHOD:-ckpt_build}"
+# Point StateFork's waypoint backend at the binary we just built (it resolves
+# WAYPOINT_BIN, then $PATH, then ./waypoint), and Waypoint at its bash_init helper.
+export WAYPOINT_BIN="${WAYPOINT_BIN:-$wp_bin}"
+export WAYPOINT_BASH_INIT_SRC="${WAYPOINT_BASH_INIT_SRC:-$bi_bin}"
 export CHECKPOINT_SESSIONS_DIR="${CHECKPOINT_SESSIONS_DIR:-/tmp/checkpoint-sessions-shopgym}"
 export DEMO_BRANCH_HOST="${DEMO_BRANCH_HOST:-127.0.0.1}"
 export DEMO_BRANCH_PORT_START="${DEMO_BRANCH_PORT_START:-8300}"

@@ -124,6 +124,14 @@ class CommitStore:
             ).fetchall()
         return [self._row_to_commit(row) for row in rows]
 
+    def reset_app(self, app_id: str) -> None:
+        """Drop all committed heads and history for an app (used by workspace
+        reset, so a reset truly returns to a clean slate with no prior head)."""
+        self.init_db()
+        with self._connect() as conn:
+            conn.execute("DELETE FROM app_heads WHERE app_id = ?", (app_id,))
+            conn.execute("DELETE FROM commits WHERE app_id = ?", (app_id,))
+
     def app_head(self, app_id: str) -> dict[str, Any] | None:
         self.init_db()
         with self._connect() as conn:

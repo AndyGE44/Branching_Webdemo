@@ -953,7 +953,10 @@ class StateForkBackend:
             return sock.connect_ex((self.host, port)) != 0
 
     def _wait_until_ready(self, branch: BranchHandle) -> None:
-        deadline = time.time() + 10
+        # Website runtimes (the shopgym Hydrogen storefronts) need to boot the
+        # mock API and SSR-render their first page, which takes well over the old
+        # 10s. Configurable via DEMO_RUNTIME_READY_TIMEOUT.
+        deadline = time.time() + float(os.getenv("DEMO_RUNTIME_READY_TIMEOUT", "60"))
         while time.time() < deadline:
             self._refresh_status(branch)
             if branch.status == "exited":
@@ -1019,6 +1022,31 @@ class StateForkBackend:
         base = self.create_base(label=f"Auto base {len(self.bases) + 1}")
         return self._require_base(base["id"])
 
+    # Storefront runtimes are a process TREE (run-shop.sh -> mock-api + Hydrogen).
+    # CRIU restore reassigns PIDs, so the tracked runtime_pid goes stale after a
+    # restore and a pid-based stop then misses the tree — leaving the mock-api
+    # alive on :4000 serving a stale cart across switch/reset. Since only one
+    # branch runs at a time, kill the whole storefront runtime by argv marker on
+    # the host (the control plane runs as root) as a reliable backstop.
+    _STOREFRONT_RUNTIME_MARKERS = ("run-shop.sh", "mockapi.cjs", "server.mjs")
+
+    def _kill_storefront_runtime_processes(self) -> None:
+        if "run-shop.sh" not in (self.runtime_command or ""):
+            return
+        import glob
+
+        for proc_dir in glob.glob("/proc/[0-9]*"):
+            try:
+                with open(f"{proc_dir}/cmdline", "rb") as handle:
+                    cmdline = handle.read().replace(b"\x00", b" ").decode("utf-8", "replace")
+            except OSError:
+                continue
+            if any(marker in cmdline for marker in self._STOREFRONT_RUNTIME_MARKERS):
+                try:
+                    os.kill(int(os.path.basename(proc_dir)), signal.SIGKILL)
+                except (OSError, ValueError):
+                    pass
+
     def _terminate(self, branch: BranchHandle) -> None:
         if branch.runtime_type == "checkpoint_exec":
             manager = self._manager_for_branch(branch)
@@ -1026,6 +1054,7 @@ class StateForkBackend:
                 self._call_statefork(
                     lambda: self.runtime_manager.stop(manager=manager, pid=branch.runtime_pid)
                 )
+            self._kill_storefront_runtime_processes()
             return
         if branch.process and branch.process.poll() is None:
             self._signal_runtime(branch.process, signal.SIGTERM)

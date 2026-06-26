@@ -346,9 +346,11 @@ def test_workspace_payload_uses_same_origin_runtime_proxy(monkeypatch, tmp_path)
     assert workspace["runtime_url"] == "http://127.0.0.1:8300"
     assert workspace["runtime_proxy_url"] == "/runtime"
     assert workspace["runtime_ui_url"] == "/runtime/"
-    assert module.runtime_target_url(branch, "api/state", b"page=1") == (
-        "http://127.0.0.1:8300/api/state?page=1"
-    )
+    # Website runtimes run with basename=/runtime: /runtime/* documents and root
+    # static assets pass through, stray root-relative document links get the mount.
+    assert module.runtime_forward_path("/runtime/api/state") == "/runtime/api/state"
+    assert module.runtime_forward_path("/assets/app.js") == "/assets/app.js"
+    assert module.runtime_forward_path("/collections/x") == "/runtime/collections/x"
 
 
 def test_workspace_payload_includes_active_app_head(monkeypatch, tmp_path):

@@ -488,6 +488,9 @@ async function restoreSnapshot(snapshotId) {
     method: "POST",
     body: JSON.stringify({ snapshot_id: snapshotId, force }),
   });
+  // The runtime reverted to the snapshot (e.g. the storefront cart), so force the
+  // embedded iframe to reload — refreshWorkspace re-sets src once it is cleared.
+  runtimeFrame.removeAttribute("src");
   showResult("Checkpoint restored");
   await refresh();
 }

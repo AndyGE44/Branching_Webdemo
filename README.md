@@ -45,6 +45,67 @@ ordinary packaged web service from the outside.
 `DEMO_STATEFORK_BUILD=1` before starting the controller to ask StateFork to use
 the Dockerfile build path.
 
+## Shopgym Storefronts (Shopify Hydrogen shops)
+
+The `shop_clothing`, `shop_cookware`, and `shop_hardware` app-plane entries are
+full synthetic Shopify **Hydrogen** storefront websites (from the shopgym
+dataset), branchable through StateFork's **Waypoint** backend. Selecting one in
+the control panel makes Waypoint `buildah bud` the shop image, launch the
+storefront inside a managed session, and CRIU-checkpoint the whole process tree;
+the live site is embedded in the workspace iframe.
+
+One command (on the VM) brings up the control plane with the shops:
+
+```bash
+cd ~/Branching_Webdemo
+. .venv/bin/activate            # python3 -m venv .venv && pip install -e ".[dev]" if missing
+./scripts/run-shopgym-statefork.sh
+```
+
+The launcher satisfies the host prerequisites the shop containers need and then
+starts the control plane in StateFork build mode (default app `shop_clothing`;
+switch shops in the UI). Open `http://127.0.0.1:8000` (or `:18000` through the
+SSH tunnel).
+
+Prerequisites the launcher checks/sets:
+
+- `kernel.io_uring_disabled=2` — CRIU 4.x cannot checkpoint Node 22's io_uring.
+- Shop base images in **root** podman storage. Restore them once from the
+  shopgym archive: `~/shopgym/restore.sh` (unzips `shop_docker_images.zip` to
+  `~/shopgym/docker-images/*.tar.gz`), then the launcher `sudo podman load`s them.
+- A `waypoint` binary built with the Node-friendly CRIU dump flags
+  `--force-irmap` and `--link-remap` (in `Andy_Waypoint/pkg/waypoint/memory.go`),
+  plus the `bash_init` helper. The launcher builds both and points StateFork at
+  them via `WAYPOINT_BIN` / `WAYPOINT_BASH_INIT_SRC`.
+
+How a shop runtime is shaped (see each shop's `Dockerfile` + `statefork.yaml`):
+
+- The Dockerfile prebundles the mock Storefront API to plain JS (`mockapi.cjs`)
+  — running it under `tsx` is not CRIU-checkpointable — and bakes a
+  `/app/run-shop.sh` launcher.
+- `run-shop.sh` starts the prebundled mock API on `:4000` and the Hydrogen
+  storefront (`node server.mjs`) on `$PORT`, so the embedded UI is the real shop
+  **website**, not the bare GraphQL API. Both are plain `node`, so Waypoint/CRIU
+  can dump the whole tree.
+- Hydrogen emits root-relative URLs (`/assets/...`, `/collections/...`). The
+  control plane has a catch-all fallback route that forwards any otherwise
+  unmatched path to the active runtime, so the storefront's assets and
+  navigation resolve on the single control-plane origin (works through the
+  Cloudflare/SSH tunnels). db-backed apps (email/inventory) use relative URLs
+  under `/runtime/` and never hit this fallback.
+
+Product images ship only as runtime bind-mounts in the standalone shopgym setup
+(`~/shopgym/mock_*/.../images`), not inside the container images, so the
+StateFork build path would 404 every product picture. Bake them into the base
+images once with:
+
+```bash
+./scripts/setup-shopgym-images.sh   # idempotent; copies images into /app/data/images
+```
+
+Run it after `~/shopgym/restore.sh` (which produces the base images) and rebuild
+the workspace (Reset in the UI) to pick them up.
+
 ## Recommended VM Start
 
 On `sf-exp`, prefer the Docker build-mode launcher:
@@ -608,7 +669,11 @@ agent_safe_demo/
 │   ├── control_plane/         # Workspace controller, branch backends, static UI
 │   └── app_plane/
 │       ├── email_service/     # Independent managed email app
-│       └── inventory_service/ # Independent managed inventory app
+│       ├── inventory_service/ # Independent managed inventory app
+│       ├── kv_service/        # Tiny KV app (wrapper-script launch)
+│       ├── shop_clothing/     # Shopify Hydrogen storefront (Dockerfile + manifest)
+│       ├── shop_cookware/     # Shopify Hydrogen storefront
+│       └── shop_hardware/     # Shopify Hydrogen storefront
 ├── tests/                     # API tests
 ├── docs/                      # Ubuntu / checkpoint-lite setup notes
 ├── scripts/                   # Local run and smoke-test helpers
