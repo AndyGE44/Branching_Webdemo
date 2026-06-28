@@ -520,8 +520,19 @@ def list_workspace_commits() -> dict:
     }
 
 
+# Commit (promoting a branch to the app head) is disabled in this build. The
+# endpoints are kept so existing clients get a clear 403 instead of a 404.
+COMMIT_DISABLED_RESPONSE = JSONResponse(
+    {"detail": "Commit is disabled in this build."}, status_code=403
+)
+
+
 @app.post("/api/workspace/commit")
-def commit_workspace(payload: WorkspaceCommitRequest | None = None) -> dict:
+def commit_workspace(payload: WorkspaceCommitRequest | None = None) -> Response:
+    return COMMIT_DISABLED_RESPONSE
+
+
+def _commit_workspace_impl(payload: WorkspaceCommitRequest | None = None) -> dict:
     try:
         current_workspace = ensure_workspace()
         branch_id = current_workspace["branch"]["id"]
@@ -674,11 +685,8 @@ def branch_diff(branch_id: str) -> dict:
 
 
 @app.post("/api/branches/{branch_id}/commit")
-def commit_branch(branch_id: str) -> dict:
-    try:
-        return branch_backend.commit(branch_id)
-    except BranchError as error:
-        return branch_error(error)
+def commit_branch(branch_id: str) -> Response:
+    return COMMIT_DISABLED_RESPONSE
 
 
 @app.post("/api/branches/{branch_id}/discard")

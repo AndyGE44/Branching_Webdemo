@@ -31,6 +31,10 @@ requires_live_memory_integration = pytest.mark.skipif(
     not RUN_LIVE_MEMORY_INTEGRATION,
     reason="requires real live uvicorn memory checkpoint integration",
 )
+# Commit (promoting a branch to the app head) is disabled in this build; the
+# endpoints return 403. These tests exercise the old commit-success behavior and
+# are kept (skipped) so they can be restored if commit is re-enabled.
+commit_disabled = pytest.mark.skip(reason="commit is disabled in this build")
 
 def configure_env(monkeypatch, tmp_path, auth_password=None) -> None:
     db_path = tmp_path / "demo_mailbox.db"
@@ -710,6 +714,22 @@ def test_kv_service_remains_but_is_not_user_selectable(monkeypatch, tmp_path):
     assert "Unknown app id" in selected.json()["detail"]
 
 
+def test_commit_endpoints_are_disabled(monkeypatch, tmp_path):
+    app = load_controller_app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        workspace_commit = client.post(
+            "/api/workspace/commit",
+            json={"label": "should not commit", "message": "nope"},
+        )
+        branch_commit = client.post("/api/branches/any-branch/commit")
+
+    assert workspace_commit.status_code == 403
+    assert workspace_commit.json()["detail"] == "Commit is disabled in this build."
+    assert branch_commit.status_code == 403
+    assert branch_commit.json()["detail"] == "Commit is disabled in this build."
+
+
+@commit_disabled
 @requires_statefork_integration
 def test_workspace_commit_records_metadata_and_reopens_from_head(monkeypatch, tmp_path):
     app = load_controller_app(monkeypatch, tmp_path)
@@ -804,6 +824,7 @@ def test_workspace_agent_and_restore_keep_main_as_seed(monkeypatch, tmp_path):
     assert len(restored_state["drafts"]) == 1
 
 
+@commit_disabled
 @requires_statefork_integration
 def test_commit_advances_statefork_head_without_sqlite_promotion(monkeypatch, tmp_path):
     app = load_controller_app(monkeypatch, tmp_path)
@@ -851,6 +872,7 @@ def test_commit_advances_statefork_head_without_sqlite_promotion(monkeypatch, tm
     assert "msg-agent-2001" not in main_messages
 
 
+@commit_disabled
 @requires_statefork_integration
 def test_commit_rejects_branch_when_statefork_head_changed_after_base(monkeypatch, tmp_path):
     app = load_controller_app(monkeypatch, tmp_path)

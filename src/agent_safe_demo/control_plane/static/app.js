@@ -13,7 +13,6 @@ const checkpointsEl = document.querySelector("#checkpoints");
 const commitHeadEl = document.querySelector("#commitHead");
 const commitHistoryEl = document.querySelector("#commitHistory");
 const snapshotLabelInput = document.querySelector("#snapshotLabelInput");
-const commitBtn = document.querySelector("#commitBtn");
 const runAgentBtn = document.querySelector("#runAgentBtn");
 const memoryControlEl = document.querySelector("#memoryControl");
 const memoryCounterEl = document.querySelector("#memoryCounter");
@@ -434,35 +433,6 @@ async function saveWorkspaceSnapshot(label) {
   });
 }
 
-async function commitWorkspace() {
-  const dirty = await request("/api/workspace/dirty");
-  if (!dirty.dirty && !window.confirm("Commit the current clean workspace head?")) {
-    showResult("Commit canceled");
-    return;
-  }
-  const app = activeApp();
-  const defaultLabel = `${app?.label || "App"} app head promotion`;
-  const label = window.prompt("Commit label", defaultLabel);
-  if (label === null) {
-    showResult("Commit canceled");
-    return;
-  }
-  const message = window.prompt("Commit message", "");
-  if (message === null) {
-    showResult("Commit canceled");
-    return;
-  }
-  runtimeFrame.removeAttribute("src");
-  stateView.innerHTML = `<p class="empty">Committing workspace...</p>`;
-  showResult("Committing...");
-  const data = await request("/api/workspace/commit", {
-    method: "POST",
-    body: JSON.stringify({ label: label.trim() || null, message: message.trim(), author: "user" }),
-  });
-  showResult(`Committed ${data.commit.id}`);
-  await refresh();
-}
-
 async function restoreSnapshot(snapshotId) {
   const dirty = await request("/api/workspace/dirty");
   let force = false;
@@ -518,15 +488,6 @@ document.querySelector("#snapshotBtn").addEventListener("click", async () => {
     await saveWorkspaceSnapshot(label);
     snapshotLabelInput.value = "";
   });
-});
-
-commitBtn.addEventListener("click", async () => {
-  try {
-    await commitWorkspace();
-  } catch (error) {
-    showResult(error.message, false);
-    await refreshWorkspace();
-  }
 });
 
 runAgentBtn.addEventListener("click", async () => {
