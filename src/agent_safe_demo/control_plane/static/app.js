@@ -1,7 +1,6 @@
 const appSelect = document.querySelector("#appSelect");
 const runtimeFrame = document.querySelector("#runtimeFrame");
 const resultPill = document.querySelector("#lastResult");
-const workspaceStateEl = document.querySelector("#workspaceState");
 const checkpointsEl = document.querySelector("#checkpoints");
 const snapshotLabelInput = document.querySelector("#snapshotLabelInput");
 const runAgentBtn = document.querySelector("#runAgentBtn");
@@ -106,13 +105,6 @@ function renderApps(payload) {
   }
 }
 
-function renderWorkspaceState(branch) {
-  workspaceStateEl.innerHTML = branch.dirty ? badge("unsaved") : badge("saved");
-  workspaceStateEl.title = branch.dirty
-    ? "The runtime has changes since the last snapshot."
-    : "The runtime matches the current snapshot.";
-}
-
 // Outline numbering for one node among its siblings, by depth:
 // depth 1 → 1, 2, 3 ; depth 2 → a, b, c ; deeper levels alternate number/letter.
 function snapshotSegment(index, depth) {
@@ -213,7 +205,6 @@ async function refreshWorkspace() {
   workspace = data;
   currentAppId = data.app.id;
   renderApps({ apps, current_app_id: currentAppId });
-  renderWorkspaceState(data.branch);
   renderCheckpoints(data.branch);
   const url = data.workspace.runtime_ui_url;
   if (runtimeFrame.getAttribute("src") !== url) {
