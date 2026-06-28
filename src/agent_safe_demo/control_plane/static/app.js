@@ -116,6 +116,71 @@ function renderWorkspaceState(branch) {
     : "The runtime matches the current checkpoint.";
 }
 
+// Outline numbering for one node among its siblings, by depth:
+// depth 1 → 1, 2, 3 ; depth 2 → a, b, c ; deeper levels alternate number/letter.
+function snapshotSegment(index, depth) {
+  if (depth % 2 === 1) {
+    return String(index + 1);
+  }
+  const letters = "abcdefghijklmnopqrstuvwxyz";
+  return index < letters.length ? letters[index] : String(index + 1);
+}
+
+// Rebuild the checkpoint tree from the flat snapshot list using parent_id (set by
+// the control plane on each snapshot). A snapshot whose parent is the base/build
+// checkpoint (not itself a snapshot) is a root — normally just "Initial checkpoint".
+function buildSnapshotTree(snapshots) {
+  const byId = new Map(snapshots.map((snap) => [snap.id, snap]));
+  const childrenOf = new Map();
+  const roots = [];
+  for (const snap of snapshots) {
+    if (snap.parent_id && byId.has(snap.parent_id)) {
+      const siblings = childrenOf.get(snap.parent_id) || [];
+      siblings.push(snap);
+      childrenOf.set(snap.parent_id, siblings);
+    } else {
+      roots.push(snap);
+    }
+  }
+  const byTime = (a, b) => (a.created_at || 0) - (b.created_at || 0);
+  roots.sort(byTime);
+  for (const siblings of childrenOf.values()) {
+    siblings.sort(byTime);
+  }
+  return { roots, childrenOf };
+}
+
+function renderSnapshotNodes(nodes, depth, parentLabel, childrenOf, branch) {
+  return nodes
+    .map((snap, index) => {
+      const isInitial = depth === 0;
+      const segment = isInitial ? "" : snapshotSegment(index, depth);
+      const label = isInitial ? "" : parentLabel ? `${parentLabel}.${segment}` : segment;
+      const indent = depth * 18;
+      const fontSize = Math.max(11, 13 - depth);
+      const marker = isInitial
+        ? `<span class="ckpt-init" title="Initial checkpoint" aria-hidden="true">●</span>`
+        : `<span class="ckpt-num">${escapeHtml(label)}</span>`;
+      const kids = childrenOf.get(snap.id) || [];
+      return `
+        <div class="ckpt-row" style="padding-left:${indent}px;font-size:${fontSize}px">
+          ${marker}
+          <div class="ckpt-body">
+            <div class="checkpoint-title">
+              <strong>${escapeHtml(snap.label)}</strong>
+              ${snap.id === branch.current_snapshot_id ? badge("current") : ""}
+            </div>
+            <p>${escapeHtml(snap.backend)} · ${escapeHtml(snap.id)}</p>
+            <p>${escapeHtml(formatTime(snap.created_at))}</p>
+            <button data-action="restore-snapshot" data-snapshot-id="${escapeHtml(snap.id)}" type="button">Restore</button>
+          </div>
+        </div>
+        ${kids.length ? renderSnapshotNodes(kids, depth + 1, label, childrenOf, branch) : ""}
+      `;
+    })
+    .join("");
+}
+
 function renderCheckpoints(branch) {
   const snapshots = branch.snapshots || [];
   if (!snapshots.length) {
@@ -123,6 +188,7 @@ function renderCheckpoints(branch) {
     return;
   }
 
+  const { roots, childrenOf } = buildSnapshotTree(snapshots);
   checkpointsEl.innerHTML = `
     <section class="snapshot-tree checkpoint-tree">
       <div class="snapshot-root">
@@ -132,26 +198,9 @@ function renderCheckpoints(branch) {
           <p>${escapeHtml(branch.id)} · ${escapeHtml(branch.url)}</p>
         </div>
       </div>
-      <ol>
-        ${snapshots
-          .map(
-            (snapshot, index) => `
-              <li>
-                <span class="snapshot-index">${index + 1}</span>
-                <div>
-                  <div class="checkpoint-title">
-                    <strong>${escapeHtml(snapshot.label)}</strong>
-                    ${snapshot.id === branch.current_snapshot_id ? badge("current") : ""}
-                  </div>
-                  <p>${escapeHtml(snapshot.backend)} · ${escapeHtml(snapshot.id)}</p>
-                  <p>${escapeHtml(formatTime(snapshot.created_at))}</p>
-                  <button data-action="restore-snapshot" data-snapshot-id="${escapeHtml(snapshot.id)}" type="button">Restore</button>
-                </div>
-              </li>
-            `,
-          )
-          .join("")}
-      </ol>
+      <div class="ckpt-tree">
+        ${renderSnapshotNodes(roots, 0, "", childrenOf, branch)}
+      </div>
     </section>
   `;
 }
