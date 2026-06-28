@@ -1,6 +1,4 @@
 const appSelect = document.querySelector("#appSelect");
-const appDescriptionEl = document.querySelector("#appDescription");
-const runtimeUrlEl = document.querySelector("#runtimeUrl");
 const runtimeFrame = document.querySelector("#runtimeFrame");
 const resultPill = document.querySelector("#lastResult");
 const workspaceStateEl = document.querySelector("#workspaceState");
@@ -104,7 +102,6 @@ function renderApps(payload) {
     .join("");
   const app = activeApp();
   if (app) {
-    appDescriptionEl.textContent = app.description;
     runAgentBtn.textContent = app.agent_demo_label || "Run Agent";
   }
 }
@@ -113,7 +110,7 @@ function renderWorkspaceState(branch) {
   workspaceStateEl.innerHTML = branch.dirty ? badge("unsaved") : badge("saved");
   workspaceStateEl.title = branch.dirty
     ? "The runtime has changes since the last snapshot."
-    : "The runtime matches the current checkpoint.";
+    : "The runtime matches the current snapshot.";
 }
 
 // Outline numbering for one node among its siblings, by depth:
@@ -159,7 +156,7 @@ function renderSnapshotNodes(nodes, depth, parentLabel, childrenOf, branch) {
       const indent = depth * 18;
       const fontSize = Math.max(11, 13 - depth);
       const marker = isInitial
-        ? `<span class="ckpt-init" title="Initial checkpoint" aria-hidden="true">●</span>`
+        ? `<span class="ckpt-init" title="Initial snapshot" aria-hidden="true">●</span>`
         : `<span class="ckpt-num">${escapeHtml(label)}</span>`;
       const kids = childrenOf.get(snap.id) || [];
       return `
@@ -184,7 +181,7 @@ function renderSnapshotNodes(nodes, depth, parentLabel, childrenOf, branch) {
 function renderCheckpoints(branch) {
   const snapshots = branch.snapshots || [];
   if (!snapshots.length) {
-    checkpointsEl.innerHTML = `<p class="empty">No checkpoints yet.</p>`;
+    checkpointsEl.innerHTML = `<p class="empty">No snapshots yet.</p>`;
     return;
   }
 
@@ -218,7 +215,6 @@ async function refreshWorkspace() {
   renderApps({ apps, current_app_id: currentAppId });
   renderWorkspaceState(data.branch);
   renderCheckpoints(data.branch);
-  runtimeUrlEl.textContent = data.workspace.runtime_ui_url;
   const url = data.workspace.runtime_ui_url;
   if (runtimeFrame.getAttribute("src") !== url) {
     showBuilding();
@@ -272,7 +268,7 @@ async function restoreSnapshot(snapshotId) {
       }
       await saveWorkspaceSnapshot(label.trim() || "autosave before restore");
     } else {
-      const discard = window.confirm("Discard unsaved changes and restore the selected checkpoint?");
+      const discard = window.confirm("Discard unsaved changes and restore the selected snapshot?");
       if (!discard) {
         showResult("Restore canceled");
         return;
@@ -282,13 +278,13 @@ async function restoreSnapshot(snapshotId) {
   }
   // The runtime is about to revert (e.g. the storefront cart), so reload the
   // embedded iframe — refreshWorkspace re-sets src once it is cleared.
-  showBuilding("Restoring checkpoint…", "Reverting the shop runtime to the selected save point.");
+  showBuilding("Restoring snapshot…", "Reverting the shop runtime to the selected snapshot.");
   runtimeFrame.removeAttribute("src");
   await request("/api/workspace/restore", {
     method: "POST",
     body: JSON.stringify({ snapshot_id: snapshotId, force }),
   });
-  showResult("Checkpoint restored");
+  showResult("Snapshot restored");
   await refresh();
 }
 
@@ -306,8 +302,6 @@ appSelect.addEventListener("change", async () => {
     await refreshApps();
   });
 });
-
-document.querySelector("#refreshBtn").addEventListener("click", refresh);
 
 document.querySelector("#snapshotBtn").addEventListener("click", async () => {
   const label = snapshotLabelInput.value.trim();
@@ -330,7 +324,7 @@ runAgentBtn.addEventListener("click", async () => {
 });
 
 document.querySelector("#resetBtn").addEventListener("click", async () => {
-  if (!window.confirm("Reset the workspace and discard runtime checkpoints?")) {
+  if (!window.confirm("Reset the workspace and discard runtime snapshots?")) {
     return;
   }
   showBuilding("Building runtime…", "Resetting and rebuilding a clean shop runtime.");

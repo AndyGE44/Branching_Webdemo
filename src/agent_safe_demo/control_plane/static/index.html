@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>State-Fork Workspace</title>
+    <title>State Fork Control Panel</title>
     <link rel="stylesheet" href="/static/styles.css?v=27" />
   </head>
   <body>
@@ -26,15 +26,14 @@
 
       <!-- Collapsible right control rail. -->
       <aside id="rail" class="rail">
+        <img class="lab-logo" src="/static/daplab_logo_horiz.png?v=4" alt="DAP Lab" />
+
         <header class="rail-head">
           <div class="brand">
-            <h1>State-Fork</h1>
-            <p id="appDescription" class="muted">StateFork app runtime</p>
+            <h1>State Fork Control Panel</h1>
           </div>
           <button id="railHide" class="rail-hide" type="button" title="Hide controls">›</button>
         </header>
-
-        <img class="lab-logo" src="/static/daplab_logo_horiz.png?v=4" alt="DAP Lab" />
 
         <label class="app-select-label">
           Shop
@@ -45,7 +44,6 @@
           <span id="workspaceState" class="backend-pill">Starting…</span>
           <span id="lastResult" class="result-pill">Ready</span>
         </div>
-        <p id="runtimeUrl" class="muted">Waiting for workspace</p>
 
         <label class="snapshot-input">
           Snapshot
@@ -55,14 +53,13 @@
           <button id="snapshotBtn" class="primary" type="button">Snapshot</button>
           <button id="runAgentBtn" type="button">Run Agent</button>
           <button id="resetBtn" class="danger" type="button">Reset</button>
-          <button id="refreshBtn" type="button">Refresh</button>
         </div>
 
         <section class="rail-section">
           <div class="panel-header">
             <div>
-              <h2>Checkpoints</h2>
-              <p class="muted">Current runtime save points</p>
+              <h2>Snapshots</h2>
+              <p class="muted">Current runtime snapshots</p>
             </div>
           </div>
           <div id="checkpoints" class="branch-list"></div>
@@ -70,6 +67,6 @@
       </aside>
     </div>
 
-    <script src="/static/app.js?v=26"></script>
+    <script src="/static/app.js?v=27"></script>
   </body>
 </html>

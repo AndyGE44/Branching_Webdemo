@@ -692,7 +692,7 @@ def test_workspace_starts_in_runtime_with_initial_checkpoint(monkeypatch, tmp_pa
     assert branch["status"] == "running"
     assert branch["dirty"] is False
     assert [snapshot["label"] for snapshot in branch["snapshots"]] == [
-        "Initial checkpoint"
+        "Initial snapshot"
     ]
     assert runtime_mailbox["unread"] == 3
     assert runtime_mailbox["drafts"] == 1

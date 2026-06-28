@@ -618,10 +618,12 @@ class StateForkBackend:
         branch = self._require_branch(branch_id)
         if branch.status != "running":
             raise BranchError(f"Branch {branch_id} is not running")
+        # The Initial snapshot already occupies index 0, so the count of existing
+        # snapshots is the right number for the first user snapshot ("Snapshot 1").
         snapshot = self._record_branch_snapshot(
             branch,
             "manual",
-            label or f"Snapshot {len(branch.snapshots) + 1}",
+            label or f"Snapshot {len(branch.snapshots)}",
         )
         return {"branch": branch.to_dict(), "snapshot": snapshot}
 

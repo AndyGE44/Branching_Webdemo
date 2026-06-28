@@ -36,7 +36,7 @@ DEMO_AUTH_PASSWORD = os.getenv("DEMO_AUTH_PASSWORD")
 DEMO_AUTH_REALM = os.getenv("DEMO_AUTH_REALM", "Agent-Safe Demo")
 WORKSPACE_BASE_ID: str | None = None
 WORKSPACE_BRANCH_ID: str | None = None
-WORKSPACE_INITIAL_SNAPSHOT_LABEL = "Initial checkpoint"
+WORKSPACE_INITIAL_SNAPSHOT_LABEL = "Initial snapshot"
 CURRENT_APP: AppSpec = get_app_spec()
 
 
