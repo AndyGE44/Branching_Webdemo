@@ -367,11 +367,29 @@ def _manifest_specs(app_plane_dir: Path) -> tuple[dict[str, AppSpec], list[dict[
     return specs, errors
 
 
+def _visible_app_ids() -> frozenset[str] | None:
+    """User-facing allowlist from DEMO_VISIBLE_APP_IDS (comma-separated). When
+    unset, all discovered apps are shown (default). The shopgym launcher sets it
+    to the three shops so the App selector lists shops only."""
+    raw = os.getenv("DEMO_VISIBLE_APP_IDS", "").strip()
+    if not raw:
+        return None
+    ids = frozenset(part.strip() for part in raw.split(",") if part.strip())
+    return ids or None
+
+
 def build_app_specs(app_plane_dir: Path | None = None) -> dict[str, AppSpec]:
     specs, _ = _manifest_specs(app_plane_dir or APP_PLANE_DIR)
-    if specs:
-        return specs
-    return _fallback_app_specs()
+    if not specs:
+        specs = _fallback_app_specs()
+    visible = _visible_app_ids()
+    if visible is not None:
+        filtered = {app_id: spec for app_id, spec in specs.items() if app_id in visible}
+        # Ignore the filter if it would hide everything (misconfigured env), so the
+        # selector never ends up empty.
+        if filtered:
+            return filtered
+    return specs
 
 
 def list_manifest_errors(app_plane_dir: Path | None = None) -> list[dict[str, str]]:
@@ -385,9 +403,14 @@ def list_app_specs() -> list[AppSpec]:
 
 def get_app_spec(app_id: str | None = None) -> AppSpec:
     specs = build_app_specs()
+    explicit = app_id is not None
     selected = app_id or os.getenv("DEMO_APP_ID", "email")
-    try:
+    if selected in specs:
         return specs[selected]
-    except KeyError as error:
-        available = ", ".join(sorted(specs))
-        raise ValueError(f"Unknown app id: {selected}. Available apps: {available}") from error
+    # For the default/env-resolved app, fall back to the first visible app rather
+    # than crash (e.g. DEMO_VISIBLE_APP_IDS hides the default "email"). An explicit
+    # request for a missing app is still an error.
+    if not explicit and specs:
+        return specs[sorted(specs)[0]]
+    available = ", ".join(sorted(specs))
+    raise ValueError(f"Unknown app id: {selected}. Available apps: {available}")

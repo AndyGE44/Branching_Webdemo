@@ -161,6 +161,8 @@ export CHECKPOINT_SESSIONS_DIR="${CHECKPOINT_SESSIONS_DIR:-/tmp/checkpoint-sessi
 export DEMO_BRANCH_HOST="${DEMO_BRANCH_HOST:-127.0.0.1}"
 export DEMO_BRANCH_PORT_START="${DEMO_BRANCH_PORT_START:-8300}"
 export DEMO_APP_ID="${DEMO_APP_ID:-shop_clothing}"
+# Restrict the App selector to the three shops (hides email/inventory).
+export DEMO_VISIBLE_APP_IDS="${DEMO_VISIBLE_APP_IDS:-shop_clothing,shop_cookware,shop_hardware}"
 export PYTHONPATH="$REPO_ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 
 if [[ -f .env ]]; then
