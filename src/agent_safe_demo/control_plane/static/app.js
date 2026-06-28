@@ -206,6 +206,11 @@ async function refreshWorkspace() {
   currentAppId = data.app.id;
   renderApps({ apps, current_app_id: currentAppId });
   renderCheckpoints(data.branch);
+  // Dirty/clean indicator on the result pill: red "unsnapshot change" when the
+  // runtime differs from the last snapshot; otherwise leave the last action result.
+  if (data.branch && data.branch.dirty) {
+    showResult("unsnapshot change", false);
+  }
   const url = data.workspace.runtime_ui_url;
   if (runtimeFrame.getAttribute("src") !== url) {
     showBuilding();
