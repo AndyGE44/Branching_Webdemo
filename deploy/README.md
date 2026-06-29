@@ -46,6 +46,31 @@ To move the demo to a different commit, edit those values. Overrides:
   is what the launcher's `DEMO_STATEFORK_ROOT` / `WAYPOINT_SRC` defaults expect).
 - `DEMO_MAIN_HOST=127.0.0.1` — keep the control plane local instead of all-interfaces.
 
+## Public demo (tunnel + auth + auto-teardown)
+
+The control plane runs as **root** (CRIU/podman need it), so it must never sit on a
+public port unauthenticated. For a timed public run, use the tunnel path instead of
+binding `0.0.0.0`:
+
+```bash
+./deploy/serve-public.sh          # start; prints the https URL + login
+DEMO_TTL_HOURS=8 ./deploy/serve-public.sh
+./deploy/teardown.sh              # stop everything now (or wait for the timer)
+```
+
+`serve-public.sh`:
+- ensures a strong `DEMO_AUTH_PASSWORD` in `.env` (generates one if missing) and
+  turns on Basic Auth across the whole app — the login also covers the embedded shops;
+- binds the app to `127.0.0.1` only (never a public port) and exposes it through a
+  **Cloudflare quick tunnel** (HTTPS), installing `cloudflared` if needed;
+- schedules an **auto-teardown** after `DEMO_TTL_HOURS` (default 24h) via `systemd-run`,
+  so a forgotten demo stops itself; `teardown.sh` also cancels the timer.
+
+`.env` (gitignored) holds the password. The branch runtimes already bind `127.0.0.1`
+only, so they are never exposed. If you instead need a raw `IP:8000` (no tunnel),
+front it with a host firewall allowlist (nftables/ufw: default-deny inbound, allow
+SSH + `:8000` from known source IPs) and keep Basic Auth on.
+
 ## Notes
 
 - Needs `sudo` (CRIU and podman run as root).
