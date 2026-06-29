@@ -148,6 +148,30 @@ button.danger { color: var(--danger); border-color: #e3b8b8; }
 
 .empty { color: var(--muted); font-size: 13px; padding: 10px 0; }
 
+/* AI Pick chat modal */
+.ai-modal { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(16, 32, 51, 0.45); padding: 16px; }
+.ai-modal[hidden] { display: none; }
+.ai-chat { width: min(460px, 100%); max-height: min(82vh, 660px); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 18px 50px rgba(20, 49, 83, 0.28); display: flex; flex-direction: column; overflow: hidden; }
+.ai-chat-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.ai-avatar { width: 34px; height: 34px; border-radius: 999px; background: var(--accent); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-weight: 800; font-size: 12px; flex: 0 0 auto; }
+.ai-chat-title { display: grid; line-height: 1.25; min-width: 0; }
+.ai-chat-title .muted { font-size: 12px; margin: 0; }
+.ai-close { margin-left: auto; min-height: 30px; width: 32px; padding: 0; flex: 0 0 auto; }
+.ai-chat-body { padding: 14px; display: grid; gap: 10px; overflow-y: auto; }
+.ai-msg { max-width: 88%; padding: 9px 12px; border-radius: 12px; font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }
+.ai-msg.bot { justify-self: start; background: var(--surface); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+.ai-msg.user { justify-self: end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+.ai-msg ul { margin: 6px 0 0; padding-left: 18px; }
+.ai-msg li { margin: 2px 0; }
+.ai-choices { padding: 12px 14px; display: grid; gap: 8px; border-top: 1px solid var(--line); }
+.ai-choices button { width: 100%; justify-content: flex-start; text-align: left; }
+.ai-choices .muted { font-weight: 600; }
+.ai-typing { display: inline-flex; gap: 4px; padding: 2px 0; }
+.ai-typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); display: inline-block; animation: ai-blink 1s infinite; }
+.ai-typing i:nth-child(2) { animation-delay: 0.2s; }
+.ai-typing i:nth-child(3) { animation-delay: 0.4s; }
+@keyframes ai-blink { 0%, 80%, 100% { opacity: 0.2; } 40% { opacity: 1; } }
+
 /* On narrow screens the rail drops below the website. */
 @media (max-width: 720px) {
   body { overflow: auto; }

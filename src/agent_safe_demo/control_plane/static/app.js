@@ -3,7 +3,11 @@ const runtimeFrame = document.querySelector("#runtimeFrame");
 const resultPill = document.querySelector("#lastResult");
 const checkpointsEl = document.querySelector("#checkpoints");
 const snapshotLabelInput = document.querySelector("#snapshotLabelInput");
-const runAgentBtn = document.querySelector("#runAgentBtn");
+const aiPickBtn = document.querySelector("#aiPickBtn");
+const aiPickModal = document.querySelector("#aiPickModal");
+const aiChatBody = document.querySelector("#aiChatBody");
+const aiChatChoices = document.querySelector("#aiChatChoices");
+const aiPickClose = document.querySelector("#aiPickClose");
 const buildingOverlay = document.querySelector("#buildingOverlay");
 const buildingTitle = document.querySelector("#buildingTitle");
 const buildingHint = document.querySelector("#buildingHint");
@@ -87,10 +91,6 @@ runtimeFrame.addEventListener("load", () => {
   }
 });
 
-function activeApp() {
-  return apps.find((app) => app.id === currentAppId) || workspace?.app || null;
-}
-
 function renderApps(payload) {
   apps = payload.apps || [];
   currentAppId = payload.current_app_id;
@@ -99,10 +99,6 @@ function renderApps(payload) {
       (app) => `<option value="${escapeHtml(app.id)}" ${app.id === currentAppId ? "selected" : ""}>${escapeHtml(app.label)}</option>`,
     )
     .join("");
-  const app = activeApp();
-  if (app) {
-    runAgentBtn.textContent = app.agent_demo_label || "Run Agent";
-  }
 }
 
 // Outline numbering for one node among its siblings, by depth:
@@ -200,7 +196,7 @@ async function refreshApps() {
   return payload;
 }
 
-async function refreshWorkspace() {
+async function refreshWorkspace({ skipFrame = false } = {}) {
   const data = await request("/api/workspace");
   workspace = data;
   currentAppId = data.app.id;
@@ -211,12 +207,15 @@ async function refreshWorkspace() {
   if (data.branch && data.branch.dirty) {
     showResult("unsnapshot change", false);
   }
-  const url = data.workspace.runtime_ui_url;
-  if (runtimeFrame.getAttribute("src") !== url) {
-    showBuilding();
-    runtimeFrame.src = url; // the load handler hides the overlay
-  } else {
-    hideBuilding();
+  // AI Pick navigates the iframe to the cart itself, so it skips the frame reset.
+  if (!skipFrame) {
+    const url = data.workspace.runtime_ui_url;
+    if (runtimeFrame.getAttribute("src") !== url) {
+      showBuilding();
+      runtimeFrame.src = url; // the load handler hides the overlay
+    } else {
+      hideBuilding();
+    }
   }
   return data;
 }
@@ -307,15 +306,144 @@ document.querySelector("#snapshotBtn").addEventListener("click", async () => {
   });
 });
 
-runAgentBtn.addEventListener("click", async () => {
+// AI Pick — a scripted "AI stylist" that demos State-Fork: it reverts the shop to
+// the Initial snapshot, drops a preset look into the cart, and snapshots it. The
+// picks are hard-coded per shop (no real model); items are real mock-api variants.
+const AI_PICK_PRESETS = {
+  shop_clothing: {
+    intro: "Hey! I'm your State-Fork stylist. Tell me today's vibe and I'll fill your bag.",
+    closing:
+      "Here's what I picked for you. I reverted the shop to a clean state, added these, and saved a snapshot — restore it anytime to get this look back.",
+    choices: [
+      {
+        id: "cozy",
+        label: "Cozy loungewear",
+        hint: "soft hoodie + joggers",
+        items: [
+          { id: 10000, name: "Plush Hoodie — Flamingo / XS" },
+          { id: 10084, name: "Print Joggers — Birch Fade / XS" },
+        ],
+      },
+      {
+        id: "active",
+        label: "Studio active",
+        hint: "legging + training short",
+        items: [
+          { id: 10273, name: "7/8 High-Waist Legging — Meadow" },
+          { id: 10248, name: "Athletic Short — Black / S" },
+        ],
+      },
+      {
+        id: "casual",
+        label: "Smart casual",
+        hint: "pullover + tee",
+        items: [
+          { id: 10288, name: "Crew Neck Pullover — Oatmeal" },
+          { id: 10471, name: "Dual-Layer Tee — Bone / S" },
+        ],
+      },
+    ],
+  },
+};
+
+function aiAddMessage(role, html) {
+  const message = document.createElement("div");
+  message.className = `ai-msg ${role}`;
+  message.innerHTML = html;
+  aiChatBody.appendChild(message);
+  aiChatBody.scrollTop = aiChatBody.scrollHeight;
+  return message;
+}
+
+function aiCloseModal() {
+  aiPickModal.hidden = true;
+}
+
+function aiOpenModal() {
+  aiChatBody.innerHTML = "";
+  aiChatChoices.innerHTML = "";
+  const preset = AI_PICK_PRESETS[currentAppId];
+  if (!preset) {
+    aiAddMessage("bot", "AI Pick isn't set up for this shop yet — try the Clothing Shop.");
+    aiPickModal.hidden = false;
+    return;
+  }
+  aiAddMessage("bot", escapeHtml(preset.intro));
+  preset.choices.forEach((choice) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.innerHTML = `<strong>${escapeHtml(choice.label)}</strong>&nbsp;<span class="muted">· ${escapeHtml(choice.hint)}</span>`;
+    button.addEventListener("click", () => aiChoose(preset, choice));
+    aiChatChoices.appendChild(button);
+  });
+  aiPickModal.hidden = false;
+}
+
+async function aiChoose(preset, choice) {
+  aiChatChoices.innerHTML = "";
+  aiAddMessage("user", escapeHtml(choice.label));
+  const thinking = aiAddMessage("bot", `<span class="ai-typing"><i></i><i></i><i></i></span>`);
   try {
-    showResult("Running agent...");
-    const data = await request("/api/workspace/run-agent", { method: "POST" });
-    showResult(`Agent ran ${data.actions.length} actions`);
-    await refresh();
+    await aiPickOrchestrate(choice);
+    const list = choice.items.map((item) => `<li>${escapeHtml(item.name)}</li>`).join("");
+    thinking.innerHTML = `${escapeHtml(preset.closing)}<ul>${list}</ul>`;
+    const again = document.createElement("button");
+    again.type = "button";
+    again.textContent = "Pick another vibe";
+    again.addEventListener("click", aiOpenModal);
+    const view = document.createElement("button");
+    view.type = "button";
+    view.className = "primary";
+    view.textContent = "View bag";
+    view.addEventListener("click", aiCloseModal);
+    aiChatChoices.appendChild(again);
+    aiChatChoices.appendChild(view);
   } catch (error) {
-    showResult(error.message, false);
-    await refreshWorkspace();
+    hideBuilding();
+    thinking.innerHTML = `Sorry, something went wrong: ${escapeHtml(error.message)}`;
+  }
+}
+
+async function aiPickOrchestrate(choice) {
+  showBuilding("AI Pick…", "Reverting to a clean shop, adding your items, and saving a snapshot.");
+  // 1. Revert to the Initial snapshot so every pick starts from a clean shop.
+  const current = await request("/api/workspace");
+  const initial = (current.branch.snapshots || [])[0];
+  if (initial) {
+    await request("/api/workspace/restore", {
+      method: "POST",
+      body: JSON.stringify({ snapshot_id: initial.id, force: true }),
+    });
+  }
+  // 2. Add the picked lines through the storefront cart action — the same path the
+  //    "Add to cart" button uses — so the browser's cart cookie is updated too.
+  const lines = choice.items.map((item) => ({
+    merchandiseId: `gid://shopify/ProductVariant/${item.id}`,
+    quantity: 1,
+  }));
+  const body =
+    "cartFormInput=" + encodeURIComponent(JSON.stringify({ action: "LinesAdd", inputs: { lines } }));
+  const cartResponse = await fetch("/runtime/cart", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    credentials: "same-origin",
+    body,
+  });
+  if (!cartResponse.ok) {
+    throw new Error(`cart add failed (${cartResponse.status})`);
+  }
+  // 3. Snapshot the populated cart, then show the bag without resetting the frame.
+  await saveWorkspaceSnapshot(`AI Pick — ${choice.label}`);
+  runtimeFrame.src = "/runtime/cart";
+  showResult(`AI Pick: ${choice.label}`);
+  await refreshWorkspace({ skipFrame: true });
+}
+
+aiPickBtn.addEventListener("click", aiOpenModal);
+aiPickClose.addEventListener("click", aiCloseModal);
+aiPickModal.addEventListener("click", (event) => {
+  if (event.target === aiPickModal) {
+    aiCloseModal();
   }
 });
 

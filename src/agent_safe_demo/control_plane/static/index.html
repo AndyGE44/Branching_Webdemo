@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>State-Fork Control Panel</title>
-    <link rel="stylesheet" href="/static/styles.css?v=27" />
+    <link rel="stylesheet" href="/static/styles.css?v=28" />
   </head>
   <body>
     <div class="workspace">
@@ -50,8 +50,8 @@
           <input id="snapshotLabelInput" type="text" maxlength="80" placeholder="before agent" />
         </label>
         <div class="control-actions">
-          <button id="snapshotBtn" class="primary" type="button">Snapshot</button>
-          <button id="runAgentBtn" type="button">Run Agent</button>
+          <button id="aiPickBtn" class="primary" type="button">AI Pick</button>
+          <button id="snapshotBtn" type="button">Snapshot</button>
           <button id="resetBtn" class="danger" type="button">Reset</button>
         </div>
 
@@ -67,6 +67,22 @@
       </aside>
     </div>
 
-    <script src="/static/app.js?v=30"></script>
+    <!-- AI Pick: scripted chat that demos restore → fill cart → snapshot. -->
+    <div id="aiPickModal" class="ai-modal" hidden>
+      <div class="ai-chat" role="dialog" aria-modal="true" aria-label="AI stylist">
+        <header class="ai-chat-head">
+          <span class="ai-avatar">AI</span>
+          <div class="ai-chat-title">
+            <strong>AI Stylist</strong>
+            <span class="muted">demo · powered by State-Fork</span>
+          </div>
+          <button id="aiPickClose" class="ai-close" type="button" title="Close" aria-label="Close">✕</button>
+        </header>
+        <div id="aiChatBody" class="ai-chat-body"></div>
+        <div id="aiChatChoices" class="ai-choices"></div>
+      </div>
+    </div>
+
+    <script src="/static/app.js?v=31"></script>
   </body>
 </html>
