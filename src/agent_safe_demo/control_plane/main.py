@@ -477,15 +477,6 @@ def workspace_dirty() -> dict:
         return branch_error(error)
 
 
-@app.post("/api/workspace/run-agent")
-def run_workspace_agent() -> dict:
-    try:
-        result = branch_backend.run_agent_demo(workspace_branch_id())
-        return {**result, "workspace": workspace_payload(result["branch"])["workspace"]}
-    except BranchError as error:
-        return branch_error(error)
-
-
 @app.post("/api/workspace/snapshots")
 def save_workspace_snapshot(
     payload: WorkspaceSnapshotRequest | None = None,
@@ -629,14 +620,6 @@ def list_branches() -> dict:
 def create_branch() -> dict:
     try:
         return {"branch": branch_backend.create_branch()}
-    except BranchError as error:
-        return branch_error(error)
-
-
-@app.post("/api/branches/{branch_id}/run-agent-demo")
-def run_branch_agent_demo(branch_id: str) -> dict:
-    try:
-        return branch_backend.run_agent_demo(branch_id)
     except BranchError as error:
         return branch_error(error)
 

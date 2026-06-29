@@ -14,3 +14,6 @@ dist/
 .env
 .env.*
 !.env.example
+
+# Unrelated sibling repo that happens to live in the working dir
+Andy_harbor/

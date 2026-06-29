@@ -21,21 +21,6 @@ from agent_safe_demo.control_plane.manifest import interpolate_template, load_ma
 from agent_safe_demo.control_plane.runtime_manager import CheckpointExecRuntimeManager, RuntimeProcessManager
 
 
-RUN_STATEFORK_INTEGRATION = os.getenv("RUN_STATEFORK_INTEGRATION") == "1"
-RUN_LIVE_MEMORY_INTEGRATION = os.getenv("RUN_LIVE_MEMORY_INTEGRATION") == "1"
-requires_statefork_integration = pytest.mark.skipif(
-    not RUN_STATEFORK_INTEGRATION,
-    reason="requires real StateFork integration",
-)
-requires_live_memory_integration = pytest.mark.skipif(
-    not RUN_LIVE_MEMORY_INTEGRATION,
-    reason="requires real live uvicorn memory checkpoint integration",
-)
-# Commit (promoting a branch to the app head) is disabled in this build; the
-# endpoints return 403. These tests exercise the old commit-success behavior and
-# are kept (skipped) so they can be restored if commit is re-enabled.
-commit_disabled = pytest.mark.skip(reason="commit is disabled in this build")
-
 def configure_env(monkeypatch, tmp_path, auth_password=None) -> None:
     db_path = tmp_path / "demo_mailbox.db"
     inventory_db_path = tmp_path / "demo_inventory.db"
@@ -64,27 +49,6 @@ def configure_env(monkeypatch, tmp_path, auth_password=None) -> None:
         monkeypatch.setenv("DEMO_AUTH_PASSWORD", auth_password)
 
 
-def load_mailbox_app(monkeypatch, tmp_path, auth_password=None):
-    configure_env(monkeypatch, tmp_path, auth_password)
-    sys.modules.pop("agent_safe_demo.app_plane.email_service.app", None)
-    module = importlib.import_module("agent_safe_demo.app_plane.email_service.app")
-    return module.app
-
-
-def load_inventory_app(monkeypatch, tmp_path, auth_password=None):
-    configure_env(monkeypatch, tmp_path, auth_password)
-    sys.modules.pop("agent_safe_demo.app_plane.inventory_service.app", None)
-    module = importlib.import_module("agent_safe_demo.app_plane.inventory_service.app")
-    return module.app
-
-
-def load_kv_app(monkeypatch, tmp_path, auth_password=None):
-    configure_env(monkeypatch, tmp_path, auth_password)
-    sys.modules.pop("agent_safe_demo.app_plane.kv_service.app", None)
-    module = importlib.import_module("agent_safe_demo.app_plane.kv_service.app")
-    return module.app
-
-
 def load_controller_app(monkeypatch, tmp_path, auth_password=None, app_id=None):
     configure_env(monkeypatch, tmp_path, auth_password)
     if app_id is not None:
@@ -93,9 +57,6 @@ def load_controller_app(monkeypatch, tmp_path, auth_password=None, app_id=None):
         "agent_safe_demo.control_plane.main",
         "agent_safe_demo.control_plane.app_registry",
         "agent_safe_demo.control_plane.manifest",
-        "agent_safe_demo.app_plane.email_service.app",
-        "agent_safe_demo.app_plane.inventory_service.app",
-        "agent_safe_demo.app_plane.kv_service.app",
     ]:
         sys.modules.pop(module_name, None)
     module = importlib.import_module("agent_safe_demo.control_plane.main")
@@ -103,79 +64,9 @@ def load_controller_app(monkeypatch, tmp_path, auth_password=None, app_id=None):
     return module.app
 
 
-def mailbox_state() -> dict:
-    module = importlib.import_module("agent_safe_demo.app_plane.email_service.app")
-    return module.state()
-
-
 def get_json(url: str) -> dict:
     with urlrequest.urlopen(url, timeout=10) as response:
         return json.loads(response.read().decode("utf-8"))
-
-
-def test_mailbox_seed_data(monkeypatch, tmp_path):
-    app = load_mailbox_app(monkeypatch, tmp_path)
-    with TestClient(app) as client:
-        response = client.get("/api/mailbox")
-
-    assert response.status_code == 200
-    mailbox = response.json()
-    messages = mailbox["messages"]
-    assert {message["id"] for message in messages} >= {"msg-1001", "msg-1002"}
-    assert mailbox["unread"] == 3
-    assert mailbox["drafts"] == 1
-    assert {"folder": "Inbox", "count": 4} in mailbox["folders"]
-
-
-def test_mailbox_memory_state_is_process_local(monkeypatch, tmp_path):
-    app = load_mailbox_app(monkeypatch, tmp_path)
-    with TestClient(app) as client:
-        before = client.get("/api/memory")
-        incremented = client.post("/api/memory/increment")
-        state = client.get("/api/state")
-        reset = client.post("/api/reset")
-        after_reset = client.get("/api/memory")
-
-    assert before.json()["memory"] == {"counter": 0}
-    assert incremented.json()["memory"] == {"counter": 1}
-    assert state.json()["runtime"]["memory"] == {"counter": 1}
-    assert reset.status_code == 200
-    assert after_reset.json()["memory"] == {"counter": 0}
-
-
-def test_inventory_app_seed_and_reservation(monkeypatch, tmp_path):
-    app = load_inventory_app(monkeypatch, tmp_path)
-    with TestClient(app) as client:
-        inventory = client.get("/api/inventory")
-        reservation = client.post(
-            "/api/reservations",
-            json={"part_id": "MCU-100", "quantity": 2, "actor": "tester"},
-        )
-        state = client.get("/api/state")
-
-    assert inventory.status_code == 200
-    assert {item["id"] for item in inventory.json()["items"]} >= {"MCU-100", "SENSOR-9"}
-    assert reservation.status_code == 200
-    assert reservation.json()["status"] == "active"
-    assert state.json()["summary"]["reservations"] == 1
-
-
-def test_kv_app_seed_and_update(monkeypatch, tmp_path):
-    app = load_kv_app(monkeypatch, tmp_path)
-    with TestClient(app) as client:
-        before = client.get("/api/state")
-        update = client.post(
-            "/api/kv/status",
-            json={"value": "updated", "actor": "tester"},
-        )
-        after = client.get("/api/state")
-
-    assert before.status_code == 200
-    assert before.json()["summary"]["entries"] == 3
-    assert update.status_code == 200
-    assert update.json()["entry"]["value"] == "updated"
-    assert after.json()["summary"]["entries"] == 3
-    assert any(event["action"] == "set" for event in after.json()["audit_log"])
 
 
 def test_commit_store_records_app_heads(tmp_path):
@@ -213,36 +104,21 @@ def test_commit_store_records_app_heads(tmp_path):
 
 def test_statefork_manifest_loads_runtime_contract():
     manifest = load_manifest(
-        Path("src/agent_safe_demo/app_plane/email_service/statefork.yaml")
-    )
-    inventory_manifest = load_manifest(
-        Path("src/agent_safe_demo/app_plane/inventory_service/statefork.yaml")
-    )
-    kv_manifest = load_manifest(
-        Path("src/agent_safe_demo/app_plane/kv_service/statefork.yaml")
+        Path("src/agent_safe_demo/app_plane/shop_clothing/statefork.yaml")
     )
 
-    assert manifest.id == "email"
-    assert manifest.name == "Email Service"
+    assert manifest.id == "shop_clothing"
+    assert manifest.name == "Clothing Shop"
     assert manifest.runtime.type == "checkpoint_exec"
-    assert "agent_safe_demo.app_plane.email_service.app:app" in manifest.runtime.command
-    assert manifest.runtime.cwd == "/"
+    assert "run-shop.sh" in manifest.runtime.command
+    assert manifest.runtime.cwd == "/app"
     assert manifest.runtime.port_env == "PORT"
+    assert manifest.runtime.health_path == "/health"
+    assert manifest.runtime.ui_path == "/"
     assert manifest.build is not None
     assert manifest.build.dockerfile_dir == "."
-    assert manifest.state.files == ["demo_mailbox.db"]
-    assert manifest.state.env == {"DEMO_MAILBOX_DB_PATH": "/demo_mailbox.db"}
-    assert manifest.observability.state_summary_path == "/api/state"
-    assert inventory_manifest.id == "inventory"
-    assert inventory_manifest.runtime.type == "checkpoint_exec"
-    assert inventory_manifest.runtime.cwd == "/"
-    assert inventory_manifest.build is not None
-    assert inventory_manifest.build.dockerfile_dir == "."
-    assert inventory_manifest.state.files == ["demo_inventory.db"]
-    assert inventory_manifest.state.env == {"DEMO_INVENTORY_DB_PATH": "/demo_inventory.db"}
-    assert kv_manifest.id == "kv"
-    assert kv_manifest.runtime.command.startswith("bash ${PROJECT_ROOT}")
-    assert kv_manifest.state.files == ["demo_kv.db"]
+    assert manifest.state.files == []
+    assert manifest.observability.state_summary_path == "/health"
     assert (
         interpolate_template(
             "${BRANCH_WORKDIR}:${PORT}:${MISSING}",
@@ -260,83 +136,45 @@ def test_statefork_manifest_validation_errors_are_readable(tmp_path):
         load_manifest(manifest_path)
 
 
-def test_app_registry_discovers_manifests_and_reports_errors(tmp_path):
+def test_app_registry_discovers_manifests_and_reports_errors():
     from agent_safe_demo.control_plane import app_registry
 
     specs = app_registry.build_app_specs()
-    assert set(specs) == {"email", "inventory", "shop_clothing", "shop_cookware", "shop_hardware"}
-    assert specs["email"].manifest_path.name == "statefork.yaml"
-    assert specs["email"].runtime_type == "checkpoint_exec"
-    assert specs["email"].build_dockerfile_dir.name == "email_service"
-    assert specs["email"].state_files == ("demo_mailbox.db",)
-    assert "agent_safe_demo.app_plane.email_service.app:app" in specs["email"].runtime_command
-    assert specs["inventory"].runtime_type == "checkpoint_exec"
-    assert specs["inventory"].build_dockerfile_dir.name == "inventory_service"
-    assert specs["inventory"].state_env == {"DEMO_INVENTORY_DB_PATH": "/demo_inventory.db"}
+    assert set(specs) == {"shop_clothing", "shop_cookware", "shop_hardware"}
+    for app_id, spec in specs.items():
+        assert spec.db_backed is False
+        assert spec.runtime_type == "checkpoint_exec"
+        assert spec.manifest_path is not None
+        assert spec.manifest_path.name == "statefork.yaml"
     assert app_registry.list_manifest_errors() == []
-
-    unsupported = tmp_path / "notes_service"
-    unsupported.mkdir()
-    (unsupported / "statefork.yaml").write_text(
-        """
-        id: notes
-        name: Notes
-        description: Unsupported app
-        runtime:
-          command: "python -m uvicorn notes:app --port ${PORT}"
-          cwd: "."
-          port_env: "PORT"
-          health_path: "/health"
-          ui_path: "/"
-        state:
-          files: ["notes.db"]
-          env: {}
-        observability:
-          state_summary_path: "/state"
-        """
-    )
-
-    fallback_specs = app_registry.build_app_specs(app_plane_dir=tmp_path)
-    errors = app_registry.list_manifest_errors(app_plane_dir=tmp_path)
-
-    assert set(fallback_specs) == {"email", "inventory"}
-    assert fallback_specs["email"].manifest_path is None
-    assert len(errors) == 1
-    assert "No Python adapter registered" in errors[0]["error"]
 
 
 def test_controller_lists_and_switches_registered_apps(monkeypatch, tmp_path):
     app = load_controller_app(monkeypatch, tmp_path)
     with TestClient(app) as client:
         apps = client.get("/api/apps")
-        selected = client.post("/api/apps/inventory/select")
+        selected = client.post("/api/apps/shop_cookware/select")
         backend = client.get("/api/backend")
 
     assert apps.status_code == 200
     payload = apps.json()
-    assert payload["current_app_id"] == "email"
+    assert payload["current_app_id"] == "shop_clothing"
     assert payload["manifest_errors"] == []
-    assert {app["id"] for app in payload["apps"]} == {"email", "inventory", "shop_clothing", "shop_cookware", "shop_hardware"}
-    email_app = next(app for app in payload["apps"] if app["id"] == "email")
-    assert email_app["manifest_loaded"] is True
-    assert email_app["runtime_type"] == "checkpoint_exec"
-    assert email_app["build_dockerfile_dir"].endswith("email_service")
-    assert email_app["state_files"] == ["demo_mailbox.db"]
-    assert "agent_safe_demo.app_plane.email_service.app:app" in email_app["runtime_command"]
-    inventory_app = next(app for app in payload["apps"] if app["id"] == "inventory")
-    assert inventory_app["runtime_type"] == "checkpoint_exec"
-    assert inventory_app["build_dockerfile_dir"].endswith("inventory_service")
-    assert inventory_app["state_files"] == ["demo_inventory.db"]
+    assert {app["id"] for app in payload["apps"]} == {
+        "shop_clothing",
+        "shop_cookware",
+        "shop_hardware",
+    }
+    clothing_app = next(app for app in payload["apps"] if app["id"] == "shop_clothing")
+    assert clothing_app["manifest_loaded"] is True
+    assert clothing_app["runtime_type"] == "checkpoint_exec"
     assert selected.status_code == 200
-    assert selected.json()["current_app_id"] == "inventory"
+    assert selected.json()["current_app_id"] == "shop_cookware"
     backend_details = backend.json()["details"]
-    assert backend_details["app_id"] == "inventory"
-    assert backend_details["app_db_env_var"] == "DEMO_INVENTORY_DB_PATH"
-    assert backend_details["manifest_path"].endswith("inventory_service/statefork.yaml")
+    assert backend_details["app_id"] == "shop_cookware"
+    assert backend_details["manifest_path"].endswith("shop_cookware/statefork.yaml")
     assert backend_details["runtime_type"] == "checkpoint_exec"
-    assert backend_details["build_dockerfile_dir"].endswith("inventory_service")
     assert backend_details["runtime_port_env"] == "PORT"
-    assert backend_details["state_files"][0]["name"] == "demo_inventory.db"
 
 
 def test_workspace_payload_uses_same_origin_runtime_proxy(monkeypatch, tmp_path):
@@ -362,13 +200,13 @@ def test_workspace_payload_includes_active_app_head(monkeypatch, tmp_path):
     sys.modules.pop("agent_safe_demo.control_plane.main", None)
     module = importlib.import_module("agent_safe_demo.control_plane.main")
     commit = module.commit_store.create_commit(
-        app_id="email",
+        app_id="shop_clothing",
         parent_commit_id=None,
         base_id="base-1",
         branch_id="branch-1",
         checkpoint_id="checkpoint-1",
-        label="accepted mailbox",
-        diff={"tables": ["messages"]},
+        label="accepted cart",
+        diff={"tables": ["cart"]},
     )
     module.branch_backend.head_base_id = "base-1"
     branch = {
@@ -383,139 +221,12 @@ def test_workspace_payload_includes_active_app_head(monkeypatch, tmp_path):
     assert payload["app_head"]["id"] == commit["id"]
     assert payload["app_head"]["active"] is True
     assert payload["workspace"]["head_commit_id"] == commit["id"]
-    assert payload["commits"][0]["diff"] == {"tables": ["messages"]}
+    assert payload["commits"][0]["diff"] == {"tables": ["cart"]}
 
     module.branch_backend.head_base_id = "base-2"
     inactive_payload = module.workspace_payload(branch)
     assert inactive_payload["app_head"]["active"] is False
     assert inactive_payload["workspace"]["head_commit_id"] is None
-
-
-def test_message_detail_includes_labels(monkeypatch, tmp_path):
-    app = load_mailbox_app(monkeypatch, tmp_path)
-    with TestClient(app) as client:
-        response = client.get("/api/messages/msg-1002")
-
-    assert response.status_code == 200
-    message = response.json()["message"]
-    assert message["subject"] == "Urgent: shipment delay"
-    assert message["is_read"] is False
-    assert set(message["labels"]) == {"customer", "urgent"}
-
-
-def test_label_message_creates_one_label_and_audit_event(monkeypatch, tmp_path):
-    app = load_mailbox_app(monkeypatch, tmp_path)
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/messages/msg-1001/label",
-            json={"label": "Finance", "actor": "alice"},
-        )
-        duplicate = client.post(
-            "/api/messages/msg-1001/label",
-            json={"label": "finance", "actor": "alice"},
-        )
-        state = client.get("/api/state").json()
-
-    assert response.status_code == 200
-    assert duplicate.status_code == 200
-    assert response.json()["status"] == "labeled"
-    assert duplicate.json()["status"] == "unchanged"
-    message = next(message for message in state["messages"] if message["id"] == "msg-1001")
-    assert message["labels"].count("finance") == 1
-    label_events = [
-        event for event in state["audit_log"]
-        if event["action"] == "label" and "msg-1001" in event["detail"]
-    ]
-    assert len(label_events) == 1
-
-
-def test_move_and_read_message_update_state_and_audit_log(monkeypatch, tmp_path):
-    app = load_mailbox_app(monkeypatch, tmp_path)
-    with TestClient(app) as client:
-        move = client.post(
-            "/api/messages/msg-1003/move",
-            json={"folder": "Spam", "actor": "moderator"},
-        )
-        read = client.post(
-            "/api/messages/msg-1003/read",
-            json={"is_read": True, "actor": "moderator"},
-        )
-        state = client.get("/api/state").json()
-
-    assert move.status_code == 200
-    assert read.status_code == 200
-    message = next(message for message in state["messages"] if message["id"] == "msg-1003")
-    assert message["folder"] == "Spam"
-    assert message["is_read"] is True
-    assert any(event["action"] == "move" and "Spam" in event["detail"] for event in state["audit_log"])
-    assert any(event["action"] == "read" and "msg-1003" in event["detail"] for event in state["audit_log"])
-
-
-def test_archive_message_accepts_empty_body(monkeypatch, tmp_path):
-    app = load_mailbox_app(monkeypatch, tmp_path)
-    with TestClient(app) as client:
-        response = client.post("/api/messages/msg-1004/archive")
-        state = client.get("/api/state").json()
-
-    assert response.status_code == 200
-    message = next(message for message in state["messages"] if message["id"] == "msg-1004")
-    assert message["folder"] == "Archive"
-    assert any(event["action"] == "archive" and "msg-1004" in event["detail"] for event in state["audit_log"])
-
-
-def test_create_draft_increments_mailbox_draft_count(monkeypatch, tmp_path):
-    app = load_mailbox_app(monkeypatch, tmp_path)
-    with TestClient(app) as client:
-        before = client.get("/api/mailbox").json()
-        response = client.post(
-            "/api/drafts",
-            json={
-                "source_message_id": "msg-1002",
-                "to_address": "customer@acme.example",
-                "subject": "Re: Urgent: shipment delay",
-                "body": "Thanks for the heads up. I will send a new ETA shortly.",
-                "created_by": "support",
-            },
-        )
-        after = client.get("/api/mailbox").json()
-        state = client.get("/api/state").json()
-
-    assert response.status_code == 200
-    assert response.json()["draft"]["source_message_id"] == "msg-1002"
-    assert after["drafts"] == before["drafts"] + 1
-    assert any(draft["created_by"] == "support" for draft in state["drafts"])
-    assert any(event["action"] == "draft" for event in state["audit_log"])
-
-
-def test_create_message_adds_email_to_mailbox(monkeypatch, tmp_path):
-    app = load_mailbox_app(monkeypatch, tmp_path)
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/messages",
-            json={
-                "id": "msg-test-2001",
-                "from_address": "director@example.com",
-                "to_address": "ops@example.com",
-                "subject": "Follow-up: customer escalation",
-                "body": "Please keep the customer updated.",
-                "folder": "Inbox",
-                "priority": "high",
-                "actor": "agent",
-            },
-        )
-        mailbox = client.get("/api/mailbox").json()
-        state = client.get("/api/state").json()
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "received"
-    messages = {message["id"]: message for message in mailbox["messages"]}
-    assert messages["msg-test-2001"]["subject"] == "Follow-up: customer escalation"
-    assert messages["msg-test-2001"]["folder"] == "Inbox"
-    assert messages["msg-test-2001"]["is_read"] is False
-    assert any(
-        event["action"] == "receive" and "msg-test-2001" in event["detail"]
-        for event in state["audit_log"]
-    )
 
 
 def test_demo_password_protects_controller_app(monkeypatch, tmp_path):
@@ -529,191 +240,6 @@ def test_demo_password_protects_controller_app(monkeypatch, tmp_path):
     assert blocked.headers["www-authenticate"] == 'Basic realm="Agent-Safe Demo"'
     assert wrong_password.status_code == 401
     assert allowed.status_code == 200
-
-
-def test_business_and_control_apis_are_separate(monkeypatch, tmp_path):
-    mailbox = load_mailbox_app(monkeypatch, tmp_path)
-    controller = load_controller_app(monkeypatch, tmp_path)
-    with TestClient(mailbox) as mailbox_client, TestClient(controller) as controller_client:
-        mailbox_business = mailbox_client.get("/api/mailbox")
-        mailbox_control = mailbox_client.get("/api/workspace")
-        controller_control = controller_client.get("/api/backend")
-        controller_business = controller_client.get("/api/mailbox")
-
-    assert mailbox_business.status_code == 200
-    assert mailbox_control.status_code == 404
-    assert controller_control.status_code == 200
-    assert controller_business.status_code == 404
-
-
-@requires_statefork_integration
-def test_base_checkpoint_api_shapes_branch_creation(monkeypatch, tmp_path):
-    app = load_controller_app(monkeypatch, tmp_path)
-    with TestClient(app) as client:
-        base_response = client.post("/api/bases", json={"label": "mailbox-base"})
-        assert base_response.status_code == 200
-        base = base_response.json()["base"]
-
-        bases = client.get("/api/bases")
-        assert bases.status_code == 200
-        assert bases.json()["bases"][0]["id"] == base["id"]
-
-        branch_response = client.post(f"/api/bases/{base['id']}/branches")
-        assert branch_response.status_code == 200
-        branch = branch_response.json()["branch"]
-
-        branches = client.get("/api/branches")
-        assert branches.status_code == 200
-
-        backend = client.get("/api/backend")
-        assert backend.status_code == 200
-
-        blocked_delete = client.delete(f"/api/bases/{base['id']}")
-        assert blocked_delete.status_code == 400
-
-        discarded = client.post(f"/api/branches/{branch['id']}/discard")
-        assert discarded.status_code == 200
-        deleted = client.delete(f"/api/bases/{base['id']}")
-        assert deleted.status_code == 200
-
-    assert base["label"] == "mailbox-base"
-    assert branch["base_id"] == base["id"]
-    assert branch["base_checkpoint_id"] == base["checkpoint_id"]
-    assert branches.json()["branches"][0]["base_id"] == base["id"]
-    assert branches.json()["branches"][0]["snapshots"] == []
-    backend_status = backend.json()
-    assert backend_status["backend"] == "statefork"
-    assert backend_status["method"] == "statefork:ckpt_build"
-    assert backend_status["totals"] == {"bases": 1, "branches": 1, "snapshots": 0}
-    assert backend_status["operations"]["snapshot"]["count"] >= 1
-    assert backend_status["operations"]["restore"]["count"] >= 1
-    assert deleted.json()["status"] == "deleted"
-
-
-@requires_statefork_integration
-def test_branch_agent_demo_runs_email_plan_without_changing_main(monkeypatch, tmp_path):
-    app = load_controller_app(monkeypatch, tmp_path)
-    branch = None
-    with TestClient(app) as client:
-        base = client.post("/api/bases", json={"label": "agent-base"}).json()["base"]
-        branch = client.post(f"/api/bases/{base['id']}/branches").json()["branch"]
-        try:
-            agent = client.post(f"/api/branches/{branch['id']}/run-agent-demo")
-            branch_state = get_json(f"{branch['url']}/api/state")
-            main_state = mailbox_state()
-        finally:
-            client.post(f"/api/branches/{branch['id']}/discard")
-
-    assert agent.status_code == 200
-    payload = agent.json()
-    assert payload["snapshots"] == []
-    assert payload["branch"]["dirty"] is True
-
-    branch_messages = {message["id"]: message for message in branch_state["messages"]}
-    assert "finance" in branch_messages["msg-1001"]["labels"]
-    assert branch_messages["msg-1003"]["folder"] == "Spam"
-    assert branch_messages["msg-1004"]["folder"] == "Archive"
-    assert branch_messages["msg-agent-2001"]["subject"] == "Follow-up: customer escalation"
-    assert branch_messages["msg-agent-2001"]["folder"] == "Inbox"
-    assert any(
-        draft["source_message_id"] == "msg-1002"
-        and draft["created_by"] == "agent"
-        and "new ETA shortly" in draft["body"]
-        for draft in branch_state["drafts"]
-    )
-
-    main_messages = {message["id"]: message for message in main_state["messages"]}
-    assert "finance" not in main_messages["msg-1001"]["labels"]
-    assert main_messages["msg-1003"]["folder"] == "Inbox"
-    assert main_messages["msg-1004"]["folder"] == "Inbox"
-    assert "msg-agent-2001" not in main_messages
-    assert len(main_state["drafts"]) == 1
-
-
-@requires_statefork_integration
-def test_manual_snapshot_restore_requires_dirty_choice(monkeypatch, tmp_path):
-    app = load_controller_app(monkeypatch, tmp_path)
-    branch = None
-    with TestClient(app) as client:
-        base = client.post("/api/bases", json={"label": "restore-base"}).json()["base"]
-        branch = client.post(f"/api/bases/{base['id']}/branches").json()["branch"]
-        try:
-            clean_snapshot = client.post(
-                f"/api/branches/{branch['id']}/snapshots",
-                json={"label": "clean mailbox"},
-            ).json()["snapshot"]
-            agent = client.post(f"/api/branches/{branch['id']}/run-agent-demo")
-            dirty = client.get(f"/api/branches/{branch['id']}/dirty")
-            blocked_restore = client.post(
-                f"/api/branches/{branch['id']}/restore",
-                json={"snapshot_id": clean_snapshot["id"]},
-            )
-            restored = client.post(
-                f"/api/branches/{branch['id']}/restore",
-                json={"snapshot_id": clean_snapshot["id"], "force": True},
-            )
-            branch_state = get_json(f"{branch['url']}/api/state")
-            backend = client.get("/api/backend").json()
-        finally:
-            client.post(f"/api/branches/{branch['id']}/discard")
-
-    assert agent.status_code == 200
-    assert dirty.json()["dirty"] is True
-    assert blocked_restore.status_code == 409
-    assert restored.status_code == 200
-    assert restored.json()["branch"]["dirty"] is False
-    assert restored.json()["branch"]["current_snapshot_id"] == clean_snapshot["id"]
-    assert backend["totals"]["snapshots"] == 1
-
-    branch_messages = {message["id"]: message for message in branch_state["messages"]}
-    assert "finance" not in branch_messages["msg-1001"]["labels"]
-    assert branch_messages["msg-1003"]["folder"] == "Inbox"
-    assert branch_messages["msg-1004"]["folder"] == "Inbox"
-    assert "msg-agent-2001" not in branch_messages
-    assert len(branch_state["drafts"]) == 1
-
-
-@requires_statefork_integration
-def test_workspace_starts_in_runtime_with_initial_checkpoint(monkeypatch, tmp_path):
-    app = load_controller_app(monkeypatch, tmp_path)
-    with TestClient(app) as client:
-        try:
-            response = client.get("/api/workspace")
-            assert response.status_code == 200
-            workspace = response.json()
-            branch = workspace["branch"]
-            runtime_mailbox = get_json(f"{branch['url']}/api/mailbox")
-            backend = client.get("/api/backend").json()
-        finally:
-            client.post("/api/reset")
-
-    assert workspace["workspace"]["mode"] == "runtime-checkpoints"
-    assert workspace["workspace"]["runtime_url"] == branch["url"]
-    assert branch["status"] == "running"
-    assert branch["dirty"] is False
-    assert [snapshot["label"] for snapshot in branch["snapshots"]] == [
-        "Initial snapshot"
-    ]
-    assert runtime_mailbox["unread"] == 3
-    assert runtime_mailbox["drafts"] == 1
-    assert backend["totals"] == {"bases": 1, "branches": 1, "snapshots": 1}
-
-
-def test_kv_service_remains_but_is_not_user_selectable(monkeypatch, tmp_path):
-    app = load_kv_app(monkeypatch, tmp_path)
-    with TestClient(app) as kv_client:
-        assert kv_client.get("/api/state").json()["summary"]["entries"] == 3
-
-    controller = load_controller_app(monkeypatch, tmp_path)
-    with TestClient(controller) as client:
-        apps = client.get("/api/apps").json()["apps"]
-        selected = client.post("/api/apps/kv/select")
-
-    assert "kv" not in {app["id"] for app in apps}
-    assert selected.status_code == 404
-    assert "Unknown app id" in selected.json()["detail"]
-
-
 def test_commit_endpoints_are_disabled(monkeypatch, tmp_path):
     app = load_controller_app(monkeypatch, tmp_path)
     with TestClient(app) as client:
@@ -727,174 +253,6 @@ def test_commit_endpoints_are_disabled(monkeypatch, tmp_path):
     assert workspace_commit.json()["detail"] == "Commit is disabled in this build."
     assert branch_commit.status_code == 403
     assert branch_commit.json()["detail"] == "Commit is disabled in this build."
-
-
-@commit_disabled
-@requires_statefork_integration
-def test_workspace_commit_records_metadata_and_reopens_from_head(monkeypatch, tmp_path):
-    app = load_controller_app(monkeypatch, tmp_path)
-    with TestClient(app) as client:
-        try:
-            workspace = client.get("/api/workspace").json()
-            initial_branch_id = workspace["branch"]["id"]
-            agent = client.post("/api/workspace/run-agent")
-            commit = client.post(
-                "/api/workspace/commit",
-                json={"label": "accept agent plan", "message": "looks good"},
-            )
-            commits = client.get("/api/workspace/commits").json()
-            new_branch = commit.json()["branch"]
-            committed_state = get_json(f"{new_branch['url']}/api/state")
-            main_state = mailbox_state()
-        finally:
-            client.post("/api/reset")
-
-    assert agent.status_code == 200
-    assert commit.status_code == 200
-    payload = commit.json()
-    assert payload["status"] == "committed"
-    assert payload["commit"]["label"] == "accept agent plan"
-    assert payload["commit"]["message"] == "looks good"
-    assert payload["commit"]["branch_id"] == initial_branch_id
-    assert payload["app_head"]["active"] is True
-    assert payload["workspace"]["head_commit_id"] == payload["commit"]["id"]
-    assert new_branch["id"] != initial_branch_id
-    assert commits["head"]["id"] == payload["commit"]["id"]
-    assert commits["commits"][0]["diff"]["tables"]
-
-    committed_messages = {message["id"]: message for message in committed_state["messages"]}
-    assert "finance" in committed_messages["msg-1001"]["labels"]
-    assert committed_messages["msg-1003"]["folder"] == "Spam"
-    assert "msg-agent-2001" in committed_messages
-
-    main_messages = {message["id"]: message for message in main_state["messages"]}
-    assert "finance" not in main_messages["msg-1001"]["labels"]
-    assert "msg-agent-2001" not in main_messages
-
-
-@requires_statefork_integration
-def test_workspace_agent_and_restore_keep_main_as_seed(monkeypatch, tmp_path):
-    app = load_controller_app(monkeypatch, tmp_path)
-    with TestClient(app) as client:
-        workspace = client.get("/api/workspace").json()
-        branch = workspace["branch"]
-        initial_snapshot = branch["snapshots"][0]
-        try:
-            agent = client.post("/api/workspace/run-agent")
-            dirty = client.get("/api/workspace/dirty")
-            branch_state = get_json(f"{branch['url']}/api/state")
-            main_state = mailbox_state()
-            blocked_restore = client.post(
-                "/api/workspace/restore",
-                json={"snapshot_id": initial_snapshot["id"]},
-            )
-            restored = client.post(
-                "/api/workspace/restore",
-                json={"snapshot_id": initial_snapshot["id"], "force": True},
-            )
-            restored_state = get_json(f"{restored.json()['branch']['url']}/api/state")
-        finally:
-            client.post("/api/reset")
-
-    assert agent.status_code == 200
-    assert dirty.json()["dirty"] is True
-    assert blocked_restore.status_code == 409
-    assert restored.status_code == 200
-    assert restored.json()["branch"]["dirty"] is False
-
-    branch_messages = {message["id"]: message for message in branch_state["messages"]}
-    assert "msg-agent-2001" in branch_messages
-    assert branch_messages["msg-agent-2001"]["folder"] == "Inbox"
-    assert branch_messages["msg-1003"]["folder"] == "Spam"
-    assert any(
-        draft["source_message_id"] == "msg-1002"
-        and draft["created_by"] == "agent"
-        and "new ETA shortly" in draft["body"]
-        for draft in branch_state["drafts"]
-    )
-
-    main_messages = {message["id"]: message for message in main_state["messages"]}
-    assert "msg-agent-2001" not in main_messages
-    assert main_messages["msg-1003"]["folder"] == "Inbox"
-    assert len(main_state["drafts"]) == 1
-
-    restored_messages = {message["id"]: message for message in restored_state["messages"]}
-    assert "msg-agent-2001" not in restored_messages
-    assert restored_messages["msg-1003"]["folder"] == "Inbox"
-    assert len(restored_state["drafts"]) == 1
-
-
-@commit_disabled
-@requires_statefork_integration
-def test_commit_advances_statefork_head_without_sqlite_promotion(monkeypatch, tmp_path):
-    app = load_controller_app(monkeypatch, tmp_path)
-    branch = None
-    next_branch = None
-    with TestClient(app) as client:
-        base = client.post("/api/bases", json={"label": "commit-base"}).json()["base"]
-        branch = client.post(f"/api/bases/{base['id']}/branches").json()["branch"]
-        try:
-            agent = client.post(f"/api/branches/{branch['id']}/run-agent-demo")
-            commit = client.post(f"/api/branches/{branch['id']}/commit")
-            branches_after_commit = client.get("/api/branches").json()["branches"]
-            next_branch = client.post("/api/branches").json()["branch"]
-            committed_state = get_json(f"{next_branch['url']}/api/state")
-            main_state = mailbox_state()
-        finally:
-            if next_branch:
-                client.post(f"/api/branches/{next_branch['id']}/discard")
-            elif branch:
-                client.post(f"/api/branches/{branch['id']}/discard")
-
-    assert agent.status_code == 200
-    assert commit.status_code == 200
-    commit_payload = commit.json()
-    assert commit_payload["status"] == "committed"
-    assert commit_payload["head_base"]["is_head"] is True
-    assert commit_payload["head_base"]["checkpoint_id"] != base["checkpoint_id"]
-    assert branches_after_commit == []
-
-    committed_messages = {message["id"]: message for message in committed_state["messages"]}
-    assert "finance" in committed_messages["msg-1001"]["labels"]
-    assert committed_messages["msg-1003"]["folder"] == "Spam"
-    assert committed_messages["msg-1004"]["folder"] == "Archive"
-    assert committed_messages["msg-agent-2001"]["subject"] == "Follow-up: customer escalation"
-    assert any(
-        draft["source_message_id"] == "msg-1002"
-        and draft["created_by"] == "agent"
-        and "new ETA shortly" in draft["body"]
-        for draft in committed_state["drafts"]
-    )
-
-    main_messages = {message["id"]: message for message in main_state["messages"]}
-    assert "finance" not in main_messages["msg-1001"]["labels"]
-    assert main_messages["msg-1003"]["folder"] == "Inbox"
-    assert "msg-agent-2001" not in main_messages
-
-
-@commit_disabled
-@requires_statefork_integration
-def test_commit_rejects_branch_when_statefork_head_changed_after_base(monkeypatch, tmp_path):
-    app = load_controller_app(monkeypatch, tmp_path)
-    branch = None
-    with TestClient(app) as client:
-        base = client.post("/api/bases", json={"label": "stale-base"}).json()["base"]
-        branch = client.post(f"/api/bases/{base['id']}/branches").json()["branch"]
-        new_head = client.post("/api/bases", json={"label": "new-head"}).json()["base"]
-        agent = client.post(f"/api/branches/{branch['id']}/run-agent-demo")
-        commit = client.post(f"/api/branches/{branch['id']}/commit")
-        branches = client.get("/api/branches").json()["branches"]
-        bases = client.get("/api/bases").json()["bases"]
-        client.post(f"/api/branches/{branch['id']}/discard")
-
-    assert new_head["is_head"] is True
-    assert agent.status_code == 200
-    assert commit.status_code == 400
-    assert "Committed StateFork head changed after this branch base was created" in commit.json()["detail"]
-    assert [active["id"] for active in branches] == [branch["id"]]
-    assert [base["id"] for base in bases if base["is_head"]] == [new_head["id"]]
-
-
 def test_runtime_manager_builds_script_launcher_command(tmp_path):
     branch_dir = tmp_path / "branch"
     branch_dir.mkdir()
@@ -1111,64 +469,3 @@ def test_statefork_status_reports_runtime_mode(tmp_path):
 
     assert status["details"]["statefork_build"] is True
     assert status["details"]["statefork_runtime_mode"] == "docker-build"
-
-
-@requires_statefork_integration
-def test_reset_clears_bases_branches_and_mailbox_state(monkeypatch, tmp_path):
-    app = load_controller_app(monkeypatch, tmp_path)
-    with TestClient(app) as client:
-        base = client.post("/api/bases", json={"label": "reset-base"}).json()["base"]
-        branch = client.post(f"/api/bases/{base['id']}/branches").json()["branch"]
-
-        before_reset = client.get("/api/branches").json()
-        assert before_reset["branches"][0]["id"] == branch["id"]
-
-        reset = client.post("/api/reset")
-        assert reset.status_code == 200
-
-        bases = client.get("/api/bases")
-        branches = client.get("/api/branches")
-        backend = client.get("/api/backend")
-        state = mailbox_state()
-
-    assert reset.json()["cleanup"] == {"branches_deleted": 1, "bases_deleted": 1}
-    assert bases.json()["bases"] == []
-    assert branches.json()["branches"] == []
-    assert backend.json()["totals"] == {"bases": 0, "branches": 0, "snapshots": 0}
-    assert backend.json()["operations"]["snapshot"]["count"] == 0
-    assert backend.json()["operations"]["restore"]["count"] == 0
-    assert len(state["messages"]) == 5
-    assert len(state["drafts"]) == 1
-    assert len(state["audit_log"]) == 1
-
-
-@requires_live_memory_integration
-def test_live_uvicorn_memory_counter_survives_checkpoint_restore(monkeypatch, tmp_path):
-    monkeypatch.setenv("DEMO_BRANCH_PORT_START", os.getenv("DEMO_BRANCH_PORT_START", "18400"))
-    monkeypatch.setenv(
-        "CHECKPOINT_SESSIONS_DIR",
-        os.getenv("CHECKPOINT_SESSIONS_DIR", "/tmp/checkpoint-sessions-live-memory-test"),
-    )
-    app = load_controller_app(monkeypatch, tmp_path)
-    with TestClient(app) as client:
-        try:
-            workspace = client.get("/api/workspace")
-            assert workspace.status_code == 200
-            assert workspace.json()["branch"]["runtime_type"] == "checkpoint_exec"
-
-            assert client.get("/runtime/api/memory").json()["memory"] == {"counter": 0}
-            assert client.post("/runtime/api/memory/increment").json()["memory"] == {"counter": 1}
-            snapshot = client.post(
-                "/api/workspace/snapshots",
-                json={"label": "memory counter one"},
-            ).json()["snapshot"]
-            assert client.post("/runtime/api/memory/increment").json()["memory"] == {"counter": 2}
-
-            restored = client.post(
-                "/api/workspace/restore",
-                json={"snapshot_id": snapshot["id"], "force": True},
-            )
-            assert restored.status_code == 200
-            assert client.get("/runtime/api/memory").json()["memory"] == {"counter": 1}
-        finally:
-            client.post("/api/workspace/reset")

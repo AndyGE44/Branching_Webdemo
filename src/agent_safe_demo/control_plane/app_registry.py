@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -12,7 +11,6 @@ from agent_safe_demo.control_plane.manifest import StateForkManifest, interpolat
 APP_PLANE_DIR = Path(__file__).resolve().parents[1] / "app_plane"
 # repo root: control_plane -> agent_safe_demo -> src -> <repo>
 REPO_ROOT = Path(__file__).resolve().parents[3]
-USER_SELECTABLE_APP_IDS = frozenset({"email", "inventory"})
 
 
 @dataclass(frozen=True)
@@ -30,7 +28,7 @@ class AppSpec:
     health_path: str = "/api/state"
     state_path: str = "/api/state"
     runtime_ui_path: str = "/"
-    agent_demo_label: str = "Run Agent"
+    agent_demo_label: str = "Run"
     agent_demo_actions: Sequence[dict[str, Any]] | None = None
     manifest_path: Path | None = None
     runtime_command: str | None = None
@@ -70,198 +68,9 @@ class AppSpec:
         }
 
 
-@dataclass(frozen=True)
-class PythonAppAdapter:
-    module_name: str
-    uvicorn_target: str
-    db_env_var: str
-    db_filename: str
-    label: str
-    description: str
-    agent_demo_label: str
-    agent_demo_actions: Sequence[dict[str, Any]] | None
-
-
-EMAIL_AGENT_ACTIONS = [
-    {
-        "action": "label",
-        "message_id": "msg-1001",
-        "label": "finance",
-        "actor": "agent",
-        "snapshot_label": "label finance",
-    },
-    {
-        "action": "move",
-        "message_id": "msg-1003",
-        "folder": "Spam",
-        "actor": "agent",
-        "snapshot_label": "move spam",
-    },
-    {
-        "action": "draft",
-        "source_message_id": "msg-1002",
-        "to_address": "customer@acme.example",
-        "subject": "Re: Urgent: shipment delay",
-        "body": "Thanks for the update. We are checking the shipment and will send a new ETA shortly.",
-        "actor": "agent",
-        "snapshot_label": "draft reply",
-    },
-    {
-        "action": "receive",
-        "message_id": "msg-agent-2001",
-        "from_address": "director@example.com",
-        "to_address": "ops@example.com",
-        "subject": "Follow-up: customer escalation",
-        "body": "Please keep the shipment-delay customer updated and post the revised ETA in this thread.",
-        "folder": "Inbox",
-        "is_read": False,
-        "priority": "high",
-        "actor": "agent",
-        "snapshot_label": "receive escalation",
-    },
-    {
-        "action": "archive",
-        "message_id": "msg-1004",
-        "actor": "agent",
-        "snapshot_label": "archive report",
-    },
-]
-
-
-INVENTORY_AGENT_ACTIONS = [
-    {
-        "path": "/api/reservations",
-        "body": {"part_id": "MCU-100", "quantity": 2, "actor": "agent"},
-        "snapshot_label": "reserve control boards",
-    },
-    {
-        "path": "/api/inventory/buy",
-        "body": {"part_id": "SENSOR-9", "quantity": 6, "actor": "agent"},
-        "snapshot_label": "reorder sensors",
-    },
-    {
-        "path": "/api/inventory/sell",
-        "body": {"part_id": "WIRE-RED", "quantity": 5, "actor": "agent"},
-        "snapshot_label": "sell harness wire",
-    },
-]
-
-
-APP_ADAPTERS = {
-    "email": PythonAppAdapter(
-        module_name="agent_safe_demo.app_plane.email_service.app",
-        uvicorn_target="agent_safe_demo.app_plane.email_service.app:app",
-        db_env_var="DEMO_MAILBOX_DB_PATH",
-        db_filename="demo_mailbox.db",
-        label="Email Service",
-        description="Mailbox, labels, folders, and draft replies.",
-        agent_demo_label="Run Email Agent",
-        agent_demo_actions=EMAIL_AGENT_ACTIONS,
-    ),
-    "inventory": PythonAppAdapter(
-        module_name="agent_safe_demo.app_plane.inventory_service.app",
-        uvicorn_target="agent_safe_demo.app_plane.inventory_service.app:app",
-        db_env_var="DEMO_INVENTORY_DB_PATH",
-        db_filename="demo_inventory.db",
-        label="Inventory Service",
-        description="Parts, stock levels, reservations, and reorder actions.",
-        agent_demo_label="Run Inventory Agent",
-        agent_demo_actions=INVENTORY_AGENT_ACTIONS,
-    ),
-    "kv": PythonAppAdapter(
-        module_name="agent_safe_demo.app_plane.kv_service.app",
-        uvicorn_target="agent_safe_demo.app_plane.kv_service.app:app",
-        db_env_var="DEMO_KV_DB_PATH",
-        db_filename="demo_kv.db",
-        label="KV Store",
-        description="Tiny key-value service launched through a wrapper script.",
-        agent_demo_label="Run Agent",
-        agent_demo_actions=None,
-    ),
-}
-
-
-def _module_spec(
-    *,
-    id: str,
-    label: str,
-    description: str,
-    module_name: str,
-    uvicorn_target: str,
-    db_env_var: str,
-    db_filename: str,
-    agent_demo_label: str,
-    agent_demo_actions: Sequence[dict[str, Any]] | None,
-) -> AppSpec:
-    module = importlib.import_module(module_name)
-    return AppSpec(
-        id=id,
-        label=label,
-        description=description,
-        module=module_name,
-        uvicorn_target=uvicorn_target,
-        db_env_var=db_env_var,
-        db_filename=db_filename,
-        db_path=Path(module.DB_PATH),
-        project_root=Path(module.PROJECT_ROOT),
-        init_db=module.init_db,
-        agent_demo_label=agent_demo_label,
-        agent_demo_actions=agent_demo_actions,
-        state_files=(db_filename,),
-        state_env={db_env_var: f"${{BRANCH_WORKDIR}}/{db_filename}"},
-    )
-
-
-def _fallback_app_specs() -> dict[str, AppSpec]:
-    specs = [
-        _module_spec(
-            id=app_id,
-            label=adapter.label,
-            description=adapter.description,
-            module_name=adapter.module_name,
-            uvicorn_target=adapter.uvicorn_target,
-            db_env_var=adapter.db_env_var,
-            db_filename=adapter.db_filename,
-            agent_demo_label=adapter.agent_demo_label,
-            agent_demo_actions=adapter.agent_demo_actions,
-        )
-        for app_id, adapter in APP_ADAPTERS.items()
-        if app_id in USER_SELECTABLE_APP_IDS
-    ]
-    return {spec.id: spec for spec in specs}
-
-
-def _primary_state_file(manifest: StateForkManifest, adapter: PythonAppAdapter) -> str:
-    return manifest.state.files[0] if manifest.state.files else adapter.db_filename
-
-
-def _primary_env_var(manifest: StateForkManifest, adapter: PythonAppAdapter) -> str:
-    if manifest.state.env:
-        return next(iter(manifest.state.env))
-    return adapter.db_env_var
-
-
-def _build_dockerfile_dir(path: Path, manifest: StateForkManifest, module: Any) -> Path | None:
-    if manifest.build is None:
-        return None
-    project_root = Path(module.PROJECT_ROOT)
-    raw = interpolate_template(
-        manifest.build.dockerfile_dir,
-        {
-            "APP_DIR": str(path.parent),
-            "PROJECT_ROOT": str(project_root),
-        },
-    )
-    dockerfile_dir = Path(raw)
-    if not dockerfile_dir.is_absolute():
-        dockerfile_dir = path.parent / dockerfile_dir
-    return dockerfile_dir.resolve()
-
-
 def _container_spec_from_manifest(path: Path, manifest: StateForkManifest) -> AppSpec:
-    """AppSpec for a manifest-only app with no Python module (e.g. a prebuilt
-    container such as the shopgym shops). Snapshot/restore is handled entirely
-    by the StateFork container checkpoint, so there is no SQLite file:
+    """AppSpec for a manifest-only app whose state is captured entirely by the
+    StateFork container checkpoint (the shopgym shops). There is no SQLite file:
     ``db_backed=False`` and ``init_db`` is a no-op."""
     app_dir = path.parent
     db_env_var = next(iter(manifest.state.env), "") if manifest.state.env else ""
@@ -303,48 +112,6 @@ def _container_spec_from_manifest(path: Path, manifest: StateForkManifest) -> Ap
     )
 
 
-def _spec_from_manifest(path: Path, manifest: StateForkManifest) -> AppSpec:
-    adapter = APP_ADAPTERS.get(manifest.id)
-    if adapter is None:
-        # No Python adapter. If the app declares no state file, treat it as an
-        # external/container app whose state is captured by the checkpoint
-        # (e.g. the shopgym shops). Otherwise it is a Python app missing its
-        # adapter, which is a configuration error.
-        if not manifest.state.files:
-            return _container_spec_from_manifest(path, manifest)
-        available = ", ".join(sorted(APP_ADAPTERS))
-        raise ValueError(f"No Python adapter registered for app id {manifest.id!r}; available: {available}")
-
-    module = importlib.import_module(adapter.module_name)
-    db_env_var = _primary_env_var(manifest, adapter)
-    db_filename = Path(_primary_state_file(manifest, adapter)).name
-    return AppSpec(
-        id=manifest.id,
-        label=manifest.name,
-        description=manifest.description,
-        module=adapter.module_name,
-        uvicorn_target=adapter.uvicorn_target,
-        db_env_var=db_env_var,
-        db_filename=db_filename,
-        db_path=Path(module.DB_PATH),
-        project_root=Path(module.PROJECT_ROOT),
-        init_db=module.init_db,
-        health_path=manifest.runtime.health_path,
-        state_path=manifest.observability.state_summary_path,
-        runtime_ui_path=manifest.runtime.ui_path,
-        agent_demo_label=adapter.agent_demo_label,
-        agent_demo_actions=adapter.agent_demo_actions,
-        manifest_path=path,
-        runtime_command=manifest.runtime.command,
-        runtime_cwd=manifest.runtime.cwd,
-        runtime_port_env=manifest.runtime.port_env,
-        runtime_type=manifest.runtime.type,
-        build_dockerfile_dir=_build_dockerfile_dir(path, manifest, module),
-        state_files=tuple(manifest.state.files),
-        state_env=dict(manifest.state.env),
-    )
-
-
 def _manifest_paths(app_plane_dir: Path) -> list[Path]:
     if not app_plane_dir.exists():
         return []
@@ -357,11 +124,9 @@ def _manifest_specs(app_plane_dir: Path) -> tuple[dict[str, AppSpec], list[dict[
     for path in _manifest_paths(app_plane_dir):
         try:
             manifest = load_manifest(path)
-            if manifest.id in APP_ADAPTERS and manifest.id not in USER_SELECTABLE_APP_IDS:
-                continue
             if manifest.id in specs:
                 raise ValueError(f"Duplicate manifest id: {manifest.id}")
-            specs[manifest.id] = _spec_from_manifest(path, manifest)
+            specs[manifest.id] = _container_spec_from_manifest(path, manifest)
         except Exception as error:
             errors.append({"path": str(path), "error": str(error)})
     return specs, errors
@@ -380,8 +145,6 @@ def _visible_app_ids() -> frozenset[str] | None:
 
 def build_app_specs(app_plane_dir: Path | None = None) -> dict[str, AppSpec]:
     specs, _ = _manifest_specs(app_plane_dir or APP_PLANE_DIR)
-    if not specs:
-        specs = _fallback_app_specs()
     visible = _visible_app_ids()
     if visible is not None:
         filtered = {app_id: spec for app_id, spec in specs.items() if app_id in visible}
@@ -404,12 +167,11 @@ def list_app_specs() -> list[AppSpec]:
 def get_app_spec(app_id: str | None = None) -> AppSpec:
     specs = build_app_specs()
     explicit = app_id is not None
-    selected = app_id or os.getenv("DEMO_APP_ID", "email")
+    selected = app_id or os.getenv("DEMO_APP_ID", "shop_clothing")
     if selected in specs:
         return specs[selected]
-    # For the default/env-resolved app, fall back to the first visible app rather
-    # than crash (e.g. DEMO_VISIBLE_APP_IDS hides the default "email"). An explicit
-    # request for a missing app is still an error.
+    # For the default/env-resolved app, fall back to the first available app rather
+    # than crash. An explicit request for a missing app is still an error.
     if not explicit and specs:
         return specs[sorted(specs)[0]]
     available = ", ".join(sorted(specs))

@@ -135,101 +135,6 @@ def build_status(
     }
 
 
-def branch_action_request(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    if "path" in payload:
-        return payload["path"], payload.get("body", {})
-    action = payload["action"]
-    actor = payload.get("actor", "agent")
-    if action == "label":
-        return (
-            f"/api/messages/{payload['message_id']}/label",
-            {"label": payload["label"], "actor": actor},
-        )
-    if action == "move":
-        return (
-            f"/api/messages/{payload['message_id']}/move",
-            {"folder": payload["folder"], "actor": actor},
-        )
-    if action == "draft":
-        return (
-            "/api/drafts",
-            {
-                "source_message_id": payload.get("source_message_id"),
-                "to_address": payload["to_address"],
-                "subject": payload["subject"],
-                "body": payload["body"],
-                "created_by": actor,
-            },
-        )
-    if action == "receive":
-        return (
-            "/api/messages",
-            {
-                "id": payload.get("message_id"),
-                "from_address": payload["from_address"],
-                "to_address": payload["to_address"],
-                "subject": payload["subject"],
-                "body": payload["body"],
-                "folder": payload.get("folder", "Inbox"),
-                "is_read": payload.get("is_read", False),
-                "priority": payload.get("priority", "normal"),
-                "actor": actor,
-            },
-        )
-    if action == "archive":
-        return (
-            f"/api/messages/{payload['message_id']}/archive",
-            {"actor": actor},
-        )
-    raise BranchError(f"Unknown branch action: {action}")
-
-
-AGENT_DEMO_ACTIONS = [
-    {
-        "action": "label",
-        "message_id": "msg-1001",
-        "label": "finance",
-        "actor": "agent",
-        "snapshot_label": "label finance",
-    },
-    {
-        "action": "move",
-        "message_id": "msg-1003",
-        "folder": "Spam",
-        "actor": "agent",
-        "snapshot_label": "move spam",
-    },
-    {
-        "action": "draft",
-        "source_message_id": "msg-1002",
-        "to_address": "customer@acme.example",
-        "subject": "Re: Urgent: shipment delay",
-        "body": "Thanks for the update. We are checking the shipment and will send a new ETA shortly.",
-        "actor": "agent",
-        "snapshot_label": "draft reply",
-    },
-    {
-        "action": "receive",
-        "message_id": "msg-agent-2001",
-        "from_address": "director@example.com",
-        "to_address": "ops@example.com",
-        "subject": "Follow-up: customer escalation",
-        "body": "Please keep the shipment-delay customer updated and post the revised ETA in this thread.",
-        "folder": "Inbox",
-        "is_read": False,
-        "priority": "high",
-        "actor": "agent",
-        "snapshot_label": "receive escalation",
-    },
-    {
-        "action": "archive",
-        "message_id": "msg-1004",
-        "actor": "agent",
-        "snapshot_label": "archive report",
-    },
-]
-
-
 @dataclass
 class BaseHandle:
     id: str
@@ -400,7 +305,7 @@ class StateForkBackend:
             runtime_port_env=runtime_port_env,
             state_env=self.state_env,
         )
-        self.agent_demo_actions = list(AGENT_DEMO_ACTIONS if agent_demo_actions is None else agent_demo_actions)
+        self.agent_demo_actions = list(agent_demo_actions or [])
         self.name = "statefork"
         self.bases: dict[str, BaseHandle] = {}
         self.branches: dict[str, BranchHandle] = {}
@@ -579,40 +484,6 @@ class StateForkBackend:
         for branch in self.branches.values():
             self._refresh_status(branch)
         return [branch.to_dict() for branch in self.branches.values()]
-
-    def apply_action(self, branch_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        branch = self._require_branch(branch_id)
-        if branch.status != "running":
-            raise BranchError(f"Branch {branch_id} is not running")
-
-        path, action_payload = branch_action_request(payload)
-        result = self._post_json(
-            branch.url,
-            path,
-            action_payload,
-        )
-        branch.dirty = True
-        return {
-            "branch": branch.to_dict(),
-            "action": result,
-            "snapshot": None,
-            "diff": self.diff(branch_id),
-        }
-
-    def run_agent_demo(self, branch_id: str) -> dict[str, Any]:
-        if not self.agent_demo_actions:
-            raise BranchError(f"App {self.app_id} does not define an agent demo")
-        actions = []
-        for payload in self.agent_demo_actions:
-            result = self.apply_action(branch_id, payload)
-            actions.append(result["action"])
-        branch = self._require_branch(branch_id)
-        return {
-            "branch": branch.to_dict(),
-            "actions": actions,
-            "snapshots": [snapshot.to_dict() for snapshot in branch.snapshots],
-            "diff": self.diff(branch_id),
-        }
 
     def save_snapshot(self, branch_id: str, label: str | None = None) -> dict[str, Any]:
         branch = self._require_branch(branch_id)
@@ -1153,27 +1024,6 @@ class StateForkBackend:
             if branch.status == "running" and branch.work_dir is not None:
                 return branch.work_dir
         return getattr(self, "project_root", Path("."))
-
-    def _post_json(self, base_url: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        import json
-
-        data = json.dumps(payload).encode("utf-8")
-        req = request.Request(
-            f"{base_url}{path}",
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with request.urlopen(req, timeout=5) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except HTTPError as error:
-            body = error.read().decode("utf-8")
-            try:
-                detail = json.loads(body).get("detail", body)
-            except json.JSONDecodeError:
-                detail = body or error.reason
-            raise BranchError(str(detail)) from error
 
     def _summary_for_branch_base(self, branch: BranchHandle) -> dict[str, Any]:
         if branch.base_id:
