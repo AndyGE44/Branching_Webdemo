@@ -513,7 +513,10 @@ async function aiPickOrchestrate(choice) {
   }));
   const body =
     "cartFormInput=" + encodeURIComponent(JSON.stringify({ action: "LinesAdd", inputs: { lines } }));
-  const cartResponse = await fetch("/runtime/cart", {
+  // POST the React Router single-fetch action endpoint (cart.data), NOT the
+  // document route /runtime/cart — a plain POST to the latter renders the page
+  // without persisting the lines. cart.data runs the action and sets the cart cookie.
+  const cartResponse = await fetch("/runtime/cart.data", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     credentials: "same-origin",
