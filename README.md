@@ -93,7 +93,18 @@ rebuild the workspace (Reset in the UI) to pick them up.
 
 ## Running The Demo
 
-One command (on the VM) brings up the control plane with the shops:
+**Fresh node?** One command provisions and launches everything — installs host
+packages, clones + pins the sibling repos, restores the shop images, builds the
+artifacts, and starts the control plane. See [`deploy/README.md`](deploy/README.md):
+
+```bash
+git clone -b feature/shopgym-slim git@github.com:AndyGE44/Branching_Webdemo.git
+cd Branching_Webdemo
+./deploy/deploy.sh                 # provision + build + launch  (--no-launch to stop after building)
+```
+
+**Already provisioned** (venv + `~/Andy_StateFork` + `~/Andy_Waypoint` + `~/shopgym`
+present)? Just launch the control plane:
 
 ```bash
 cd ~/Branching_Webdemo
@@ -138,44 +149,44 @@ If a run is interrupted, free ports and StateFork/Waypoint session mounts:
 ./scripts/cleanup-statefork-demo.sh
 ```
 
-## Public Cloudflare Quick Tunnel Demo
+## Public Demo (tunnel + auth + auto-teardown)
 
-Use this to send someone a temporary public URL for the VM-hosted demo without
-opening VM inbound ports: `cloudflared` makes an outbound connection to
-Cloudflare and proxies a generated `trycloudflare.com` URL back to the control
-plane on `127.0.0.1:8000`.
-
-Quick Tunnel is for short demos only — the URL changes whenever the tunnel
-restarts, and it is not a substitute for real authentication or a named
-Cloudflare Tunnel.
-
-### 1. Install `cloudflared` If Needed
+The control plane runs as **root** (CRIU/podman), so for a timed public demo do
+**not** bind the port directly. Use the wrapper: it binds the app to `127.0.0.1`,
+exposes it through a Cloudflare quick tunnel (HTTPS), enforces Basic Auth, and
+schedules an automatic teardown.
 
 ```bash
-if ! command -v cloudflared >/dev/null 2>&1; then
-  curl -L --fail --show-error --output /tmp/cloudflared.deb \
-    "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$(dpkg --print-architecture).deb"
-  sudo dpkg -i /tmp/cloudflared.deb
-fi
-cloudflared --version
+./deploy/serve-public.sh            # prints the https URL + login
+DEMO_TTL_HOURS=8 ./deploy/serve-public.sh
+./deploy/teardown.sh                # stop everything now (or wait for the timer)
 ```
 
-### 2. Start The Control Plane And The Tunnel
+`serve-public.sh`:
 
-Start the control plane (see "Running The Demo"), then in a separate session:
+- ensures a strong `DEMO_AUTH_PASSWORD` in `.env` (generates one if missing) and
+  turns on Basic Auth across the whole app — the login also covers the embedded
+  shops. Set your own by putting `DEMO_AUTH_USER` / `DEMO_AUTH_PASSWORD` in `.env`
+  (copy `.env.example`) before starting; `.env` is gitignored.
+- installs `cloudflared` if needed, opens a `*.trycloudflare.com` tunnel, and prints
+  the URL. Quick Tunnel URLs are ephemeral (they change on restart) — short demos only.
+- schedules an auto-teardown after `DEMO_TTL_HOURS` (default 24h) so a forgotten demo
+  stops itself; `teardown.sh` also cancels the timer.
+
+Keep the URL and password private (anyone with both reaches the demo). For a raw
+`IP:8000` instead of the tunnel, front it with a host firewall allowlist — see
+[`deploy/README.md`](deploy/README.md).
+
+### Driving the tunnel manually
+
+`serve-public.sh` just runs `scripts/run-shopgym-statefork.sh` (bound to localhost)
+alongside `scripts/run-cloudflare-quick-tunnel.sh`. To do it by hand: start the
+control plane with `DEMO_MAIN_HOST=127.0.0.1`, then
 
 ```bash
 tmux new -d -s cf-shopgym './scripts/run-cloudflare-quick-tunnel.sh'
-tmux capture-pane -pt cf-shopgym -S -80
-```
-
-The tunnel script proxies to `${DEMO_MAIN_HOST:-127.0.0.1}:${DEMO_MAIN_PORT:-8000}`.
-Copy the printed `https://...trycloudflare.com` URL and share it.
-
-### 3. Stop Public Access
-
-```bash
-tmux kill-session -t cf-shopgym
+tmux capture-pane -pt cf-shopgym -S -80     # grab the trycloudflare.com URL
+tmux kill-session -t cf-shopgym             # stop the tunnel
 ```
 
 ## Shared VM Demo With SSH Port Forwarding
@@ -403,6 +414,10 @@ dist/
 
 ### Scripts
 
+- `deploy/deploy.sh` — one-command bring-up on a fresh node (provision + clone/pin
+  repos + restore images + build + launch). See `deploy/README.md`.
+- `deploy/serve-public.sh` — timed public demo: localhost + Cloudflare tunnel +
+  Basic Auth + auto-teardown. `deploy/teardown.sh` stops it.
 - `scripts/run-shopgym-statefork.sh` — canonical launcher (clean slate, host
   prereqs, build Waypoint, load images, launch control plane on `:8000`).
 - `scripts/setup-shopgym-images.sh` — bake product images into the base images.
