@@ -3,9 +3,9 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agent-safe-demo-mailbox"
+name = "shopgym-statefork-webdemo"
 version = "0.1.0"
-description = "FastAPI mailbox app for agent-safe branch workflow experiments."
+description = "FastAPI control plane that branches Shopify Hydrogen shops via StateFork checkpoint/restore."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -26,10 +26,10 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-"agent_safe_demo.control_plane" = ["static/*.html", "static/*.css", "static/*.js"]
-"agent_safe_demo.app_plane.email_service" = ["statefork.yaml"]
-"agent_safe_demo.app_plane.inventory_service" = ["statefork.yaml"]
-"agent_safe_demo.app_plane.kv_service" = ["statefork.yaml", "*.sh"]
+"agent_safe_demo.control_plane" = ["static/*.html", "static/*.css", "static/*.js", "static/*.png"]
+"agent_safe_demo.app_plane.shop_clothing" = ["statefork.yaml", "Dockerfile"]
+"agent_safe_demo.app_plane.shop_cookware" = ["statefork.yaml", "Dockerfile"]
+"agent_safe_demo.app_plane.shop_hardware" = ["statefork.yaml", "Dockerfile"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

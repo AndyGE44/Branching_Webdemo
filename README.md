@@ -1,101 +1,86 @@
-# Agent-Safe Multi-App Demo
+# Shopgym StateFork Web Demo
 
-A FastAPI web demo for showing how StateFork can give normal app-plane web
-services an agent-safe branch workflow:
+A FastAPI **control plane** (`agent_safe_demo.control_plane.main:app`) that embeds
+three Shopify **Hydrogen** mock storefronts — `shop_clothing`, `shop_cookware`,
+and `shop_hardware` (from the shopgym dataset) — as branchable apps, and wraps
+them in an agent-safe snapshot/restore workflow:
 
 ```text
-open workspace -> initial checkpoint -> user/agent changes -> snapshot/restore
+open workspace -> initial snapshot -> user changes (cart, AI Pick) -> snapshot/restore
 ```
 
-The control UI is app-agnostic: it selects an app-plane service, starts that
-service in a managed runtime, embeds the runtime UI, and exposes snapshot/restore
-controls around it. The StateFork base and branch lifecycle remains underneath
-that workspace controller.
+Each shop is a full synthetic storefront **website**, not a bare GraphQL API.
+Selecting one in the control panel makes the StateFork **Waypoint** backend
+(`DEMO_STATEFORK_METHOD=ckpt_build`) `buildah`-build the shop image, launch the
+storefront inside a managed session, and CRIU-checkpoint the **whole process
+tree** — including the in-memory cart. The live site is embedded in the workspace
+iframe, and snapshot/restore captures and rewinds the entire runtime, cart
+included.
 
-The demo is split into two API surfaces:
+The App selector shows only the three shops (env `DEMO_VISIBLE_APP_IDS`). The
+canonical launcher is `scripts/run-shopgym-statefork.sh`.
 
-- `agent_safe_demo.app_plane.email_service.app:app`,
-  `agent_safe_demo.app_plane.inventory_service.app:app`, and
-  `agent_safe_demo.app_plane.kv_service.app:app` are ordinary business apps.
-  They expose their own runtime UI plus app-specific APIs.
-- `agent_safe_demo.control_plane.main:app` is the StateFork workspace
-  controller. It owns app selection, snapshot, restore, runtime startup, and the
-  checkpoint UI.
+**AI Pick** replaces the old "Run Agent" button: it is a scripted in-app
+"stylist" chat that reverts the shop to its initial snapshot, fills the cart with
+a preset look, and snapshots the result — a quick demo of restore → fill cart →
+snapshot. The **commit / app-head** feature is disabled in this build; its
+endpoints return `403`.
 
-Runtime branches are launched from the selected app manifest and registry
-entry, so the managed program does not know it has been branched. Control
-plane and app-plane imports should use the package paths above directly.
+## Architecture Overview
 
-The app plane is intentionally directory-based: each child under
-`agent_safe_demo/app_plane/` owns one independent app. New apps are primarily
-registered with `statefork.yaml`; the Python registry only supplies local demo
-adapters such as seed initialization and optional agent-demo actions. The KV
-service is launched through a wrapper script to exercise the generic runtime
-launcher path.
+The control plane is app-agnostic: it selects an app-plane service, starts it in
+a managed StateFork runtime, embeds the runtime UI, and exposes snapshot/restore
+controls around it. The StateFork base/branch lifecycle runs underneath the
+workspace controller.
 
-The repo now exposes a single backend: `StateForkBackend`. StateFork uses its
-controller API to call snapshot, restore, create-env, and cleanup operations.
+The repo exposes a single backend: `StateForkBackend`, which calls StateFork's
+Python controller API for `snapshot`, `restore`, `create_env_from_snapshot`, and
+`cleanup`. With `DEMO_STATEFORK_METHOD=ckpt_build`, StateFork drives the Waypoint
+backend, which builds each shop's container from its `Dockerfile` and uses CRIU
+to dump/restore the running process tree (`checkpoint_exec` + build mode).
 
-The repo includes a `Dockerfile` for checkpoint-lite/StateFork build mode. The
-build image contains Python, the app package, and a shell-capable runtime,
-which is the intended path for demonstrating that StateFork can manage an
-ordinary packaged web service from the outside.
+### How a shop runtime is shaped
 
-`StateForkBackend` keeps the current VM-stable init path by default. Set
-`DEMO_STATEFORK_BUILD=1` before starting the controller to ask StateFork to use
-the Dockerfile build path.
-
-## Shopgym Storefronts (Shopify Hydrogen shops)
-
-The `shop_clothing`, `shop_cookware`, and `shop_hardware` app-plane entries are
-full synthetic Shopify **Hydrogen** storefront websites (from the shopgym
-dataset), branchable through StateFork's **Waypoint** backend. Selecting one in
-the control panel makes Waypoint `buildah bud` the shop image, launch the
-storefront inside a managed session, and CRIU-checkpoint the whole process tree;
-the live site is embedded in the workspace iframe.
-
-One command (on the VM) brings up the control plane with the shops:
-
-```bash
-cd ~/Branching_Webdemo
-. .venv/bin/activate            # python3 -m venv .venv && pip install -e ".[dev]" if missing
-./scripts/run-shopgym-statefork.sh
-```
-
-The launcher satisfies the host prerequisites the shop containers need and then
-starts the control plane in StateFork build mode (default app `shop_clothing`;
-switch shops in the UI). Open `http://127.0.0.1:8000` (or `:18000` through the
-SSH tunnel).
-
-Prerequisites the launcher checks/sets:
-
-- `kernel.io_uring_disabled=2` — CRIU 4.x cannot checkpoint Node 22's io_uring.
-- Shop base images in **root** podman storage. Restore them once from the
-  shopgym archive: `~/shopgym/restore.sh` (unzips `shop_docker_images.zip` to
-  `~/shopgym/docker-images/*.tar.gz`), then the launcher `sudo podman load`s them.
-- A `waypoint` binary built with the Node-friendly CRIU dump flags
-  `--force-irmap` and `--link-remap` (in `Andy_Waypoint/pkg/waypoint/memory.go`),
-  plus the `bash_init` helper. The launcher builds both and points StateFork at
-  them via `WAYPOINT_BIN` / `WAYPOINT_BASH_INIT_SRC`.
-
-How a shop runtime is shaped (see each shop's `Dockerfile` + `statefork.yaml`):
+See each shop's `Dockerfile` + `statefork.yaml`:
 
 - The Dockerfile prebundles the mock Storefront API to plain JS (`mockapi.cjs`)
   — running it under `tsx` is not CRIU-checkpointable — and bakes a
   `/app/run-shop.sh` launcher.
 - `run-shop.sh` starts the prebundled mock API on `:4000` and the Hydrogen
   storefront (`node server.mjs`) on `$PORT`, so the embedded UI is the real shop
-  **website**, not the bare GraphQL API. Both are plain `node`, so Waypoint/CRIU
-  can dump the whole tree.
+  website. Both are plain `node`, so Waypoint/CRIU can dump the whole tree.
 - Hydrogen emits root-relative URLs (`/assets/...`, `/collections/...`). The
   control plane has a catch-all fallback route that forwards any otherwise
   unmatched path to the active runtime, so the storefront's assets and
   navigation resolve on the single control-plane origin (works through the
-  Cloudflare/SSH tunnels). db-backed apps (email/inventory) use relative URLs
-  under `/runtime/` and never hit this fallback.
+  Cloudflare/SSH tunnels).
+
+## Host Prerequisites
+
+The shop containers need a few host-level things to be CRIU-checkpointable.
+`scripts/run-shopgym-statefork.sh` checks/sets most of these automatically, but
+they describe what the node must provide:
+
+- **`kernel.io_uring_disabled=2`** — Node 22's libuv uses io_uring, which CRIU
+  4.x cannot checkpoint. The launcher sets this via `sysctl`.
+- **Shop base images in _root_ podman storage.** Waypoint builds with `buildah`
+  as root, so the `FROM localhost/shop-arena-mock-*` base images must live in
+  root storage. Restore them once from the shopgym archive with
+  `~/shopgym/restore.sh` (unzips `shop_docker_images.zip` to
+  `~/shopgym/docker-images/*.tar.gz`); the launcher then `sudo podman load`s them.
+- **Waypoint built with the Node-friendly CRIU dump flags `--force-irmap` and
+  `--link-remap`** (in `Andy_Waypoint/pkg/waypoint/memory.go`), plus the
+  `bash_init` helper that Waypoint launches inside each built container. The
+  launcher builds both and points StateFork at them via `WAYPOINT_BIN` /
+  `WAYPOINT_BASH_INIT_SRC`. Without those flags CRIU cannot dump the shop's
+  inotify watches.
+- **CRIU** and **Go** installed on the host.
+- A Python venv: `python3 -m venv .venv && . .venv/bin/activate && pip install -e '.[dev]'`.
+
+### Bake product images into the base images
 
 Product images ship only as runtime bind-mounts in the standalone shopgym setup
-(`~/shopgym/mock_*/.../images`), not inside the container images, so the
+(`~/shopgym/mock_*/.../images`), **not** inside the container images, so the
 StateFork build path would 404 every product picture. Bake them into the base
 images once with:
 
@@ -103,71 +88,68 @@ images once with:
 ./scripts/setup-shopgym-images.sh   # idempotent; copies images into /app/data/images
 ```
 
-Run it after `~/shopgym/restore.sh` (which produces the base images) and rebuild
-the workspace (Reset in the UI) to pick them up.
+Run it after `~/shopgym/restore.sh` (which produces the base images), then
+rebuild the workspace (Reset in the UI) to pick them up.
 
-## Recommended VM Start
+## Running The Demo
 
-On `sf-exp`, prefer the Docker build-mode launcher:
+One command (on the VM) brings up the control plane with the shops:
 
 ```bash
-cd ~/Web_Demo_For_Checkpointlite
-. .venv/bin/activate
-./scripts/run-statefork-docker.sh
+cd ~/Branching_Webdemo
+. .venv/bin/activate            # see "Host Prerequisites" if the venv is missing
+./scripts/run-shopgym-statefork.sh
 ```
 
-If port `8000` or the runtime ports are already occupied:
+The launcher:
+
+1. **Clean slate** — kills leftover storefront process trees (orphaned
+   mock-api/Hydrogen processes that would serve a stale in-memory cart), frees
+   the control-plane port and branch port range, wipes on-disk
+   checkpoint/restore session state, and drops the control-plane metadata db so a
+   new run starts with no prior head.
+2. Sets `kernel.io_uring_disabled=2`.
+3. Ensures the shop base images are in root podman storage (`sudo podman load`).
+4. Builds Waypoint + `bash_init` (verifying the `--force-irmap` flag is present).
+5. Launches the control plane in StateFork build mode on port `8000`, bound on
+   all interfaces by default (override with `DEMO_MAIN_HOST=127.0.0.1`).
+
+Default app is `shop_clothing`; switch shops in the UI. Open
+`http://<host>:8000` (or `http://127.0.0.1:18000` through the SSH tunnel below).
+
+Override any path/port with the matching env var: `DEMO_STATEFORK_ROOT`,
+`WAYPOINT_SRC`, `SHOPGYM_DIR`, `DEMO_MAIN_HOST`, `DEMO_MAIN_PORT`, `DEMO_APP_ID`,
+`DEMO_VISIBLE_APP_IDS`, `DEMO_BRANCH_PORT_START`, ...
+
+### Related repos and data
+
+- `Andy_StateFork` — the StateFork controller (`DEMO_STATEFORK_ROOT` /
+  `DEMO_STATEFORK_CWD` point here).
+- `Andy_Waypoint` — the Waypoint CRIU backend, on the branch carrying the
+  Node-friendly dump flags (`--force-irmap`, `--link-remap`).
+- `~/shopgym` — the data/image archive: `restore.sh`, `shop_docker_images.zip`,
+  and the `mock_*` product-image zips.
+
+### Cleanup
+
+If a run is interrupted, free ports and StateFork/Waypoint session mounts:
 
 ```bash
 ./scripts/cleanup-statefork-demo.sh
-./scripts/run-statefork-docker.sh
-```
-
-The UI should show:
-
-```text
-statefork / statefork:ckpt_build / Docker build
 ```
 
 ## Public Cloudflare Quick Tunnel Demo
 
-Use this when you want to send someone a temporary public URL for the VM-hosted
-main app. This keeps VM inbound ports closed: `cloudflared` makes an outbound
-connection to Cloudflare and proxies the generated `trycloudflare.com` URL back
-to `127.0.0.1:8000` on the VM.
+Use this to send someone a temporary public URL for the VM-hosted demo without
+opening VM inbound ports: `cloudflared` makes an outbound connection to
+Cloudflare and proxies a generated `trycloudflare.com` URL back to the control
+plane on `127.0.0.1:8000`.
 
-Quick Tunnel is for short demos only. The URL changes whenever the tunnel is
-restarted, and it does not replace real authentication or a named Cloudflare
-Tunnel for longer-running deployments.
+Quick Tunnel is for short demos only — the URL changes whenever the tunnel
+restarts, and it is not a substitute for real authentication or a named
+Cloudflare Tunnel.
 
-### 1. Prepare `.env` On The VM
-
-The real `.env` file is intentionally ignored by git. Create it on the VM:
-
-```bash
-ssh sf-exp
-cd ~/Web_Demo_For_Checkpointlite
-cp .env.example .env
-```
-
-Edit `.env` and replace `DEMO_AUTH_PASSWORD` with a real demo password:
-
-```bash
-nano .env
-```
-
-Minimum required value:
-
-```bash
-DEMO_AUTH_PASSWORD=<shared-demo-password>
-```
-
-`DEMO_AUTH_USER` defaults to `demo`. The password protects the main app
-with HTTP Basic Auth. The active runtime app is still an internal VM-only process
-on `127.0.0.1:8300`, so the main app can manage branch environments without
-opening the branch port publicly.
-
-### 2. Install `cloudflared` If Needed
+### 1. Install `cloudflared` If Needed
 
 ```bash
 if ! command -v cloudflared >/dev/null 2>&1; then
@@ -178,67 +160,35 @@ fi
 cloudflared --version
 ```
 
-### 3. Start The Password-Protected Main App
+### 2. Start The Control Plane And The Tunnel
+
+Start the control plane (see "Running The Demo"), then in a separate session:
 
 ```bash
-cd ~/Web_Demo_For_Checkpointlite
-git pull
-
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -e ".[dev]"
-pytest -q
-
-tmux new -d -s agent-main './scripts/run-public-main.sh'
+tmux new -d -s cf-shopgym './scripts/run-cloudflare-quick-tunnel.sh'
+tmux capture-pane -pt cf-shopgym -S -80
 ```
 
-Check that unauthenticated requests are blocked and authenticated requests work:
+The tunnel script proxies to `${DEMO_MAIN_HOST:-127.0.0.1}:${DEMO_MAIN_PORT:-8000}`.
+Copy the printed `https://...trycloudflare.com` URL and share it.
+
+### 3. Stop Public Access
 
 ```bash
-curl -i http://127.0.0.1:8000/api/backend
-curl -u demo:<shared-demo-password> http://127.0.0.1:8000/api/backend
-```
-
-### 4. Start The Public Quick Tunnel
-
-```bash
-tmux new -d -s cf-main './scripts/run-cloudflare-quick-tunnel.sh'
-tmux capture-pane -pt cf-main -S -80
-```
-
-Copy the printed `https://...trycloudflare.com` URL and share it with the demo
-username and password.
-
-### 5. Stop Public Access
-
-Stop only the public URL:
-
-```bash
-tmux kill-session -t cf-main
-```
-
-Stop the app too:
-
-```bash
-tmux kill-session -t agent-main
+tmux kill-session -t cf-shopgym
 ```
 
 ## Shared VM Demo With SSH Port Forwarding
 
-This private repo is currently tested on the shared Ubuntu VM reachable as:
-
-```bash
-ssh sf-exp
-```
-
-Use SSH port forwarding to view the VM-hosted StateFork demo from your
-local browser without opening public inbound ports.
+The demo is tested on a shared Ubuntu VM reachable as `ssh sf-exp`. Use SSH port
+forwarding to view the VM-hosted demo from your local browser without opening
+public inbound ports.
 
 ### 1. Open An Auto-Reconnecting Tunnel From Your Laptop
 
-Run this on your laptop in a dedicated tunnel terminal. It uses tunnel-only
-mode (`-N`) and retries when the SSH connection drops, which is useful when your
-laptop sleeps and later wakes back up:
+Run this on your laptop in a dedicated tunnel terminal. It uses tunnel-only mode
+(`-N`) and retries when the SSH connection drops (useful across laptop
+sleep/wake):
 
 ```bash
 while true; do
@@ -259,93 +209,27 @@ done
 
 Port meanings:
 
-- `18000`: forwards your laptop's `127.0.0.1:18000` to the VM main FastAPI app
-  on `127.0.0.1:8000`
-- `18300`: forwards your laptop's `127.0.0.1:18300` to the VM StateFork
-  runtime app on `127.0.0.1:8300` for direct runtime debugging
+- `18000` → VM control plane on `127.0.0.1:8000`.
+- `18300` → VM branch runtime (the active storefront) on `127.0.0.1:8300+` for
+  direct runtime debugging.
 
-The current StateFork backend supports one active runtime at a time. The
-workspace controller owns that runtime for the UI.
+`ExitOnForwardFailure=yes` makes SSH fail immediately if a requested local port
+is already occupied, instead of silently connecting you to the wrong server. The
+StateFork backend serves one active runtime at a time; the workspace controller
+owns it for the UI.
 
-Using `18000` and `18300` avoids colliding with a local copy of this demo that
-may already be running on your laptop. The `ExitOnForwardFailure=yes` option
-makes SSH fail immediately if a requested local port is already occupied, instead
-of silently leaving you connected to the wrong server. `ServerAliveInterval` and
-`ServerAliveCountMax` make SSH notice dead sleep/wake connections quickly so the
-loop can reconnect.
+### 2. Start The Demo On The VM
 
-### 2. Prepare The Repo On The VM
-
-Open a second terminal for VM commands:
+In a second terminal:
 
 ```bash
 ssh sf-exp
-```
-
-Inside that VM shell:
-
-```bash
-cd ~/Web_Demo_For_Checkpointlite
-git pull
-
-python3 -m venv .venv
+cd ~/Branching_Webdemo
 . .venv/bin/activate
-pip install -e ".[dev]"
-pytest -q
+./scripts/run-shopgym-statefork.sh
 ```
 
-If the VM was freshly rebuilt and `venv` support is missing:
-
-```bash
-sudo apt-get update
-sudo apt-get install -y python3.12-venv
-```
-
-### 3. Start The StateFork Demo On The VM
-
-Still inside the SSH session, use the Docker build-mode launcher. This is the
-recommended demo path:
-
-```bash
-cd ~/Web_Demo_For_Checkpointlite
-. .venv/bin/activate
-./scripts/run-statefork-docker.sh
-```
-
-The script sets the StateFork environment, enables `DEMO_STATEFORK_BUILD=1`,
-uses this repo's `Dockerfile`, and starts the controller on `127.0.0.1:8000`.
-
-If port `8000` is already in use, clean up the previous demo first:
-
-```bash
-./scripts/cleanup-statefork-demo.sh
-./scripts/run-statefork-docker.sh
-```
-
-Manual equivalent, mostly for debugging:
-
-```bash
-cd ~/Web_Demo_For_Checkpointlite
-. .venv/bin/activate
-
-export DEMO_STATEFORK_BUILD=1
-export DEMO_STATEFORK_ROOT=/users/alexxjk/Andy_StateFork
-export DEMO_STATEFORK_CWD=/users/alexxjk/Andy_StateFork
-export DEMO_STATEFORK_METHOD=ckpt_build
-export CHECKPOINT_SESSIONS_DIR=/tmp/checkpoint-sessions-mailbox-demo
-export DEMO_BRANCH_HOST=127.0.0.1
-export DEMO_BRANCH_PORT_START=8300
-export PYTHONPATH=src
-
-sudo -E .venv/bin/uvicorn agent_safe_demo.control_plane.main:app --host 127.0.0.1 --port 8000
-```
-
-In Docker build mode, StateFork calls checkpoint-lite build mode against this
-repo's `Dockerfile`. The mailbox app is still the ordinary runtime app
-(`agent_safe_demo.app_plane.email_service.app:app`); Docker is only used by
-checkpoint-lite to prepare the managed environment from the outside.
-
-### 4. Open The UI Locally
+### 3. Open The UI Locally
 
 On your laptop, open:
 
@@ -356,35 +240,19 @@ http://127.0.0.1:18000
 Try this flow:
 
 ```text
-Run Agent -> Snapshot -> Restore Initial checkpoint -> Snapshot again
+AI Pick -> Snapshot -> Restore Initial snapshot -> Snapshot again
 ```
 
-The header should show `statefork / statefork:ckpt_build`. The
-`Runtime & Checkpoint Stats` panel shows the active backend, runtime branch,
+The `Runtime & Checkpoint Stats` panel shows the active backend, runtime branch,
 visible checkpoint nodes, and measured snapshot/restore calls for the current
-server process.
+server process. Runtime branch IDs start with `sf-`. If the UI shows a VM-side
+runtime URL like `http://127.0.0.1:8300`, replace local port `8300` with `18300`
+in your browser.
 
-The runtime URL should look like:
-
-```text
-http://127.0.0.1:8300
-```
-
-With the safer tunnel above, open the branch locally as:
-
-```text
-http://127.0.0.1:18300
-```
-
-The app may still display the VM-side runtime URL `http://127.0.0.1:8300`.
-Manually replace local port `8300` with `18300` in your browser.
-
-### 5. Avoid Accidentally Opening A Local Demo
+### 4. Avoid Accidentally Opening A Local Demo
 
 If you forwarded ports but still see an unexpected version, your laptop may
-already have a local server listening on the same port.
-
-Check whether your laptop has a local main server on `8000`:
+already be listening on the same port:
 
 ```bash
 lsof -iTCP:8000 -sTCP:LISTEN -n -P
@@ -397,57 +265,19 @@ lsof -tiTCP:8000 -sTCP:LISTEN | xargs -r kill
 lsof -tiTCP:8300-8350 -sTCP:LISTEN | xargs -r kill
 ```
 
-You are seeing the preferred StateFork VM version when:
-
-- The header shows `statefork / statefork:ckpt_build`.
-- Runtime branch IDs start with `sf-`.
-- The runtime app uses VM port `8300`, viewed locally through `18300`.
-
-### 6. Optional Smoke Test On The VM
-
-In another SSH session or after stopping the server:
-
-```bash
-cd ~/Web_Demo_For_Checkpointlite
-. .venv/bin/activate
-BASE_URL=http://127.0.0.1:8000 SMOKE_TIMEOUT=120 python scripts/smoke-test.py
-```
-
-This smoke test covers the mailbox workspace flow. Expected result:
-
-```text
-agent_action_statuses: labeled, moved, draft, received, archived
-branch mailbox after agent: changed
-main mailbox after agent: unchanged
-```
-
-### 7. Cleanup
-
-If a run is interrupted, clean up ports and checkpoint-lite/StateFork session
-mounts:
-
-```bash
-./scripts/cleanup-statefork-demo.sh
-```
-
 ## Bootstrap A Fresh Shared VM
 
-Use this section when `sf-exp` points to a newly rebuilt VM with the same OS
-configuration as the current shared VM but no project files.
+Use this when `sf-exp` points to a newly rebuilt VM with the same OS as the
+current shared VM but no project files.
 
 Assumptions:
 
-- You can SSH to the VM with `ssh sf-exp`.
-- You have `sudo` on the VM.
-- Your GitHub SSH key can access this private repo.
-- The StateFork source is available at `/users/alexxjk/Andy_StateFork`, or you can
-  clone it there.
-- The checkpoint-lite source or binary is available at
-  `/users/alexxjk/Andy_checkpoint-lite`, or you can clone/build it there.
+- You can `ssh sf-exp` and have `sudo` on the VM.
+- Your GitHub SSH key can access the private repos.
+- `Andy_StateFork` and `Andy_Waypoint` are available (or cloneable) under
+  `/users/alexxjk`, and the `~/shopgym` data/image archive is present.
 
 ### 1. Install System Packages
-
-On the VM:
 
 ```bash
 sudo apt-get update
@@ -459,260 +289,140 @@ sudo apt-get install -y \
   python3.12-venv \
   criu \
   golang-go \
-  docker.io
+  podman \
+  buildah \
+  unzip
 
 sudo criu check
-sudo docker version
 ```
 
-`sudo criu check` should print success. If it fails, checkpoint-lite process
-checkpointing is not ready on that VM.
+`sudo criu check` should print success. If it fails, CRIU process checkpointing
+is not ready on that VM.
 
-Docker is only required for `DEMO_STATEFORK_BUILD=1`. The default StateFork init
-mode can run without building the repo's Docker image.
-
-### 2. Clone This Private Repo
-
-On the VM:
+### 2. Clone The Repos
 
 ```bash
 cd ~
-git clone git@github.com:AndyGE44/Web_Demo_For_Checkpointlite.git
-cd Web_Demo_For_Checkpointlite
-```
+git clone git@github.com:AndyGE44/Branching_Webdemo.git
 
-If the repo already exists and you want a clean copy:
-
-```bash
-cd ~
-rm -rf Web_Demo_For_Checkpointlite
-git clone git@github.com:AndyGE44/Web_Demo_For_Checkpointlite.git
-cd Web_Demo_For_Checkpointlite
+cd /users/alexxjk
+git clone git@github.com:AndyGE44/Andy_StateFork.git
+git clone git@github.com:AndyGE44/Andy_Waypoint.git   # branch with the CRIU node-dump flags
 ```
 
 ### 3. Prepare The Python Environment
 
-On the VM:
-
 ```bash
+cd ~/Branching_Webdemo
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -e ".[dev]"
 pytest -q
 ```
 
-### 4. Prepare Checkpoint-Lite
+### 4. Prepare StateFork And Waypoint
 
-If `/users/alexxjk/Andy_checkpoint-lite/checkpoint-lite` already exists:
-
-```bash
-/users/alexxjk/Andy_checkpoint-lite/checkpoint-lite version
-```
-
-If checkpoint-lite is missing, clone/build it on the VM:
+`run-shopgym-statefork.sh` builds Waypoint + `bash_init` for you, but the
+Waypoint checkout must already carry the Node-friendly CRIU dump flags
+(`--force-irmap`, `--link-remap`) in `pkg/waypoint/memory.go`; the launcher
+refuses to start otherwise. Confirm StateFork is on the expected branch:
 
 ```bash
-cd /users/alexxjk
-git clone git@github.com:AndyGE44/Andy_checkpoint-lite.git
-cd Andy_checkpoint-lite
-go build -o checkpoint-lite ./cmd/waypoint
-go build -o bash_init cmd/bash-init/main.go
-./checkpoint-lite version
+cd /users/alexxjk/Andy_StateFork && git pull --ff-only
+cd /users/alexxjk/Andy_Waypoint  && git pull --ff-only
 ```
 
-### 5. Prepare StateFork
-
-If `/users/alexxjk/Andy_StateFork` already exists:
+### 5. Restore The Shopgym Data And Bake Images
 
 ```bash
-cd /users/alexxjk/Andy_StateFork
-git pull --ff-only
+~/shopgym/restore.sh                       # produces the shop base images
+cd ~/Branching_Webdemo
+./scripts/setup-shopgym-images.sh          # bakes product images into the base images
 ```
 
-If StateFork is missing, clone it on the VM:
-
-```bash
-cd /users/alexxjk
-git clone git@github.com:AndyGE44/Andy_StateFork.git
-cd Andy_StateFork
-```
-
-The shared VM demo expects `DEMO_STATEFORK_ROOT` and `DEMO_STATEFORK_CWD` to point
-at this directory.
-
-### 6. Verify OverlayFS With Checkpoint-Lite
-
-On the VM:
-
-```bash
-sudo umount -l /tmp/checkpoint-sessions/*/work 2>/dev/null || true
-sudo rm -rf /tmp/checkpoint-sessions /tmp/checkpoint-sessions-info
-
-mkdir -p /tmp/ckpt-lite-min
-echo hello > /tmp/ckpt-lite-min/hello.txt
-
-sudo env CHECKPOINT_SESSIONS_DIR=/tmp/checkpoint-sessions \
-  /users/alexxjk/Andy_checkpoint-lite/checkpoint-lite \
-  init /tmp/ckpt-lite-min --quiet
-```
-
-Expected output:
-
-```text
-<session-id>,/tmp/checkpoint-sessions/<session-id>/work
-```
-
-If you see `mount command failed: exit status 32`, make sure
-`CHECKPOINT_SESSIONS_DIR=/tmp/checkpoint-sessions` is set. Some VM images have
-old checkpoint-lite config pointing at `/mydata2/checkpoint-sessions`.
-
-Clean up after the check:
-
-```bash
-sudo umount -l /tmp/checkpoint-sessions/*/work 2>/dev/null || true
-sudo rm -rf /tmp/checkpoint-sessions /tmp/checkpoint-sessions-info /tmp/ckpt-lite-min
-```
-
-Then run the shared VM demo above.
-
-### 7. Verify Docker Build Mode
-
-Use this when you specifically want to prove the Dockerfile path. First verify
-the image builds:
-
-```bash
-cd ~/Web_Demo_For_Checkpointlite
-sudo docker build -t agent-safe-mailbox:manual-check .
-```
-
-Then start the demo with the recommended launcher:
-
-```bash
-./scripts/run-statefork-docker.sh
-```
-
-The first request to `/api/workspace` may take longer because checkpoint-lite is
-building from the Dockerfile:
-
-```bash
-curl -fsS http://127.0.0.1:8000/api/workspace
-```
-
-Expected signs that Docker build mode is working:
-
-- The top status pill shows `statefork / statefork:ckpt_build / Docker build`.
-- The `Runtime & Checkpoint Stats` panel shows `StateFork Mode` as
-  `Docker build` with hint `Dockerfile enabled`.
-- `GET /api/backend` still reports `statefork / statefork:ckpt_build`.
-- The workspace response includes a runtime URL such as
-  `http://127.0.0.1:8300`.
-- `python scripts/smoke-test.py` passes with the mailbox agent actions.
-
-Important: Docker build mode does not mean the mailbox app receives branching
-APIs. The Docker image still runs the plain mailbox app; StateFork/checkpoint-lite
-does snapshot and restore from the outside.
+Then run the demo as in "Running The Demo".
 
 ## StateFork Backend Quick Reference
 
-This is the preferred backend for the shared VM demo. It uses StateFork's Python
-controller API instead of calling checkpoint-lite directly from the web app. The
-UI and FastAPI endpoints stay the same because the controller always uses
-StateFork:
+`StateForkBackend` uses StateFork's Python controller API instead of calling the
+checkpoint backend directly from the web app. The launcher sets
+`DEMO_STATEFORK_BUILD=1`, `DEMO_STATEFORK_METHOD=ckpt_build`, the StateFork
+paths, `WAYPOINT_BIN` / `WAYPOINT_BASH_INIT_SRC`, the runtime ports,
+`CHECKPOINT_SESSIONS_DIR`, `DEMO_APP_ID`, `DEMO_VISIBLE_APP_IDS`, and
+`PYTHONPATH`.
 
-```bash
-./scripts/run-statefork-docker.sh
-```
+StateFork is a single-active-branch backend in this prototype: the app rejects a
+second running branch until the existing one is discarded.
 
-The launcher sets `DEMO_STATEFORK_BUILD=1`, `DEMO_APP_ID`, app DB paths,
-StateFork paths, runtime ports, `CHECKPOINT_SESSIONS_DIR`, and `PYTHONPATH`.
-
-`StateForkBackend` currently calls StateFork's `snapshot`, `restore`,
-`create_env_from_snapshot`, and `cleanup` methods. The control UI embeds the
-selected runtime app, shows manual checkpoints, and runs the selected app's
-deterministic agent flow when one is registered.
-
-StateFork is intentionally treated as a single-active-branch backend in this
-prototype. The app rejects a second running StateFork branch until the existing
-branch is committed or discarded.
-
-Commit no longer copies a branch SQLite database back over the seed database.
-Instead, commit creates a StateFork snapshot from the branch state, restores that
-snapshot as the managed environment, and marks the base as the controller's new
-StateFork head. If another base becomes head while a branch is running, commit
-rejects the stale branch and asks you to create a new branch from the current
-head.
-
-Target lifecycle:
+Lifecycle (build mode):
 
 ```text
-create base   -> StateFork init mode: create manager -> snapshot
-              -> StateFork Docker build mode: checkpoint-lite build Dockerfile
-                 -> reuse build manager's initial snapshot
+create base   -> Waypoint build mode: buildah builds the shop Dockerfile
+              -> reuse the build manager's initial snapshot
 create branch -> StateFork restore <base-id>
               -> StateFork create_env_from_snapshot <base-id>
-              -> start runtime app URL in the forked environment
-run agent     -> deterministic app-specific agent actions inside the branch
-status        -> /api/backend reports statefork:<method> and snapshot/restore stats
-discard       -> terminate runtime app and cleanup StateFork environment
-commit        -> StateFork snapshot + restore, then advance controller head
-reset         -> delete active branches, bases, sessions, and reset selected app DB
+              -> start the storefront URL in the forked environment
+AI Pick       -> scripted: restore initial snapshot, fill cart, snapshot
+snapshot      -> StateFork snapshot of the live process tree (cart included)
+restore       -> StateFork restore of a checkpoint node
+status        -> /api/backend reports statefork:ckpt_build and snapshot/restore stats
+discard       -> terminate runtime and cleanup the StateFork environment
+reset         -> delete active branches, bases, sessions, head metadata; clear cart cookie
+commit        -> DISABLED (returns 403)
 ```
 
-The same `Runtime & Checkpoint Stats` UI and `GET /api/backend` endpoint report
-the active StateFork method as `statefork:<method>`.
+The `Runtime & Checkpoint Stats` UI and `GET /api/backend` report the active
+StateFork method as `statefork:ckpt_build`.
 
 ## Repository Layout
 
 ```text
-agent_safe_demo/
+Branching_Webdemo/
 ├── src/agent_safe_demo/
-│   ├── control_plane/         # Workspace controller, branch backends, static UI
+│   ├── control_plane/         # Workspace controller, StateFork backend, static UI
 │   └── app_plane/
-│       ├── email_service/     # Independent managed email app
-│       ├── inventory_service/ # Independent managed inventory app
-│       ├── kv_service/        # Tiny KV app (wrapper-script launch)
-│       ├── shop_clothing/     # Shopify Hydrogen storefront (Dockerfile + manifest)
+│       ├── shop_clothing/     # Shopify Hydrogen storefront (Dockerfile + statefork.yaml)
 │       ├── shop_cookware/     # Shopify Hydrogen storefront
 │       └── shop_hardware/     # Shopify Hydrogen storefront
 ├── tests/                     # API tests
-├── docs/                      # Ubuntu / checkpoint-lite setup notes
-├── scripts/                   # Local run and smoke-test helpers
+├── docs/                      # Ubuntu / checkpoint setup notes
+├── scripts/                   # Run and helper scripts
 ├── pyproject.toml             # Python project metadata and dependencies
 ├── requirements.txt           # Convenience install entrypoint
-└── README.md                  # Project overview
+└── README.md                  # This file
 ```
 
 Generated runtime data is ignored by git:
 
 ```text
-demo_mailbox.db
-demo_inventory.db
+control_plane_metadata.db
 .branches/
 build/
 dist/
 ```
 
+### Scripts
+
+- `scripts/run-shopgym-statefork.sh` — canonical launcher (clean slate, host
+  prereqs, build Waypoint, load images, launch control plane on `:8000`).
+- `scripts/setup-shopgym-images.sh` — bake product images into the base images.
+- `scripts/run-dev.sh` — lightweight local dev runner (auto-reload, no
+  StateFork; UI only).
+- `scripts/run-cloudflare-quick-tunnel.sh` — public quick-tunnel helper.
+- `scripts/cleanup-statefork-demo.sh` — free ports and clean session mounts.
+
 ## Useful Endpoints
 
-Registered app-plane endpoints, served by the managed runtime:
-
-- `GET /api/mailbox` for the email app
-- `GET /api/inventory` for the inventory app
-- `GET /api/messages`
-- `GET /api/messages/{message_id}`
-- `GET /api/state`
-- `POST /api/reset`
-
-Workspace controller endpoints, served by the main controller:
+Workspace controller endpoints (served by the control plane):
 
 - `GET /api/apps`
 - `POST /api/apps/{app_id}/select`
 - `GET /api/workspace`
 - `GET /api/workspace/dirty`
-- `POST /api/workspace/run-agent`
 - `POST /api/workspace/snapshots`
 - `POST /api/workspace/restore`
 - `POST /api/workspace/reset`
+- `GET /api/workspace/commits`
 - `GET /api/backend`
 - `GET /api/bases`
 - `POST /api/bases`
@@ -720,21 +430,21 @@ Workspace controller endpoints, served by the main controller:
 - `POST /api/bases/{base_id}/branches`
 - `GET /api/branches`
 - `POST /api/branches`
-- `POST /api/branches/{branch_id}/commit`
 - `POST /api/branches/{branch_id}/discard`
 
-Base/branch endpoints are still available for compatibility and tests, but the
-preferred UI path uses `/api/workspace`. The controller intentionally does not
-serve app business APIs such as `/api/mailbox` or `/api/inventory`, and the
-business apps intentionally do not serve `/api/workspace`.
+Commit endpoints (`POST /api/workspace/commit`,
+`POST /api/branches/{branch_id}/commit`) are intentionally **disabled** and
+return `403 Commit is disabled in this build.` Any unmatched path is forwarded to
+the active storefront runtime so the embedded Hydrogen site's assets and
+navigation resolve on the control-plane origin.
 
 The generated OpenAPI docs are available at `/docs`.
 
 ## Local Development
 
-Local development still runs the StateFork-only controller. A real workspace
-requires StateFork to be available, so use the shared VM for full branch,
-snapshot, and restore flows.
+Local development runs the StateFork-only control plane UI. A real workspace
+(branch / snapshot / restore) requires the StateFork + Waypoint host setup, so
+use the shared VM for full flows.
 
 ```bash
 python3 -m venv .venv
@@ -749,18 +459,8 @@ Open:
 http://127.0.0.1:8000
 ```
 
-The controller starts local runtime copies from the selected app registry entry.
-Set `DEMO_APP_ID=email` or `DEMO_APP_ID=inventory` before startup to choose the
-initial app; the UI can switch apps at runtime.
-
 Run tests:
 
 ```bash
 pytest -q
-```
-
-For an end-to-end smoke test while the dev server is running:
-
-```bash
-python scripts/smoke-test.py
 ```
