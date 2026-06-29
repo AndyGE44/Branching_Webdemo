@@ -522,11 +522,47 @@ async function aiPickOrchestrate(choice) {
   if (!cartResponse.ok) {
     throw new Error(`cart add failed (${cartResponse.status})`);
   }
-  // 3. Snapshot the populated cart, then show the bag without resetting the frame.
+  // 3. Snapshot the populated cart.
   await saveWorkspaceSnapshot(`AI Pick — ${choice.label}`);
-  runtimeFrame.src = "/runtime/cart";
   showResult(`AI Pick: ${choice.label}`);
+  // 4. Reload the home page (the cart badge now reflects the picks) and pop the
+  //    cart drawer. This Hydrogen template has NO /cart page — the cart is an
+  //    aside opened by the header cart button; the iframe is same-origin, so we
+  //    click that button once it has hydrated.
+  runtimeFrame.src = "/runtime/";
+  openCartDrawerSoon();
   await refreshWorkspace({ skipFrame: true });
+}
+
+// Open the storefront's cart drawer inside the (same-origin) iframe by clicking
+// the header cart button. Clicks before hydration are no-ops, so retry until the
+// drawer reports open (`.overlay.expanded`) or we run out of attempts.
+function openCartDrawerSoon() {
+  let attempts = 0;
+  const tryOpen = () => {
+    attempts += 1;
+    let doc;
+    try {
+      doc = runtimeFrame.contentDocument;
+    } catch {
+      return; // cross-origin (shouldn't happen) — give up quietly
+    }
+    if (doc) {
+      if (doc.querySelector(".overlay.expanded")) {
+        return; // a drawer is open — done
+      }
+      // The three shops use different themes (class names differ), but every cart
+      // button carries an aria-label like "Cart, 2 items"; fall back to classes.
+      const cartButton = doc.querySelector(
+        '[aria-label^="Cart,"], .site-header-cart, .header-cart-button',
+      );
+      cartButton?.click();
+    }
+    if (attempts < 12) {
+      setTimeout(tryOpen, 400);
+    }
+  };
+  setTimeout(tryOpen, 700);
 }
 
 aiPickBtn.addEventListener("click", aiOpenModal);
