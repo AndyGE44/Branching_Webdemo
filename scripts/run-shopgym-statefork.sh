@@ -23,7 +23,9 @@ REPO_ROOT="$PWD"
 STATEFORK_ROOT="${DEMO_STATEFORK_ROOT:-$HOME/Andy_StateFork}"
 WAYPOINT_SRC="${WAYPOINT_SRC:-$HOME/Andy_Waypoint}"
 SHOPGYM_DIR="${SHOPGYM_DIR:-$HOME/shopgym}"
-HOST="${DEMO_MAIN_HOST:-127.0.0.1}"
+# Bind the control plane on all interfaces so it is reachable from other hosts
+# (not just localhost). Override with DEMO_MAIN_HOST=127.0.0.1 to keep it local.
+HOST="${DEMO_MAIN_HOST:-0.0.0.0}"
 PORT="${DEMO_MAIN_PORT:-8000}"
 
 # Shop container images to make available (also covers cookware/hardware).
@@ -172,9 +174,18 @@ if [[ -f .env ]]; then
   set +a
 fi
 
+# When bound to all interfaces, show a reachable address (LAN IP, falling back to
+# localhost) instead of the unhelpful 0.0.0.0 in the URL.
+if [[ "$HOST" == "0.0.0.0" || "$HOST" == "::" ]]; then
+  DISPLAY_HOST="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  DISPLAY_HOST="${DISPLAY_HOST:-127.0.0.1}"
+else
+  DISPLAY_HOST="$HOST"
+fi
+
 cat <<EOF
 
-  Control plane:  http://${HOST}:${PORT}
+  Control plane:  http://${DISPLAY_HOST}:${PORT}   (bound on ${HOST})
   Default app:    ${DEMO_APP_ID}   (switch shops in the UI)
   Branch ports:   ${DEMO_BRANCH_HOST}:${DEMO_BRANCH_PORT_START}+
 

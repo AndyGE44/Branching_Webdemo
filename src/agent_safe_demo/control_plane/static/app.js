@@ -63,7 +63,7 @@ function formatTime(epochSeconds) {
 // load, app switch, reset, restore). It is hidden when the iframe finishes
 // loading the real runtime URL, with a timeout as a safety net.
 function showBuilding(
-  title = "Building runtime…",
+  title = "Building Workspace",
   hint = "Starting the shop website. A cold start can take up to a minute.",
 ) {
   buildingTitle.textContent = title;
@@ -291,7 +291,7 @@ appSelect.addEventListener("change", async () => {
     appSelect.value = currentAppId;
     return;
   }
-  showBuilding("Building runtime…", `Starting ${label}. A cold start can take up to a minute.`);
+  showBuilding("Building Workspace", `Starting ${label}. A cold start can take up to a minute.`);
   runtimeFrame.removeAttribute("src");
   await mutate(`Switched to ${label}`, async () => {
     await request(`/api/apps/${encodeURIComponent(appSelect.value)}/select`, { method: "POST" });
@@ -323,7 +323,7 @@ document.querySelector("#resetBtn").addEventListener("click", async () => {
   if (!window.confirm("Reset the workspace and discard runtime snapshots?")) {
     return;
   }
-  showBuilding("Building runtime…", "Resetting and rebuilding a clean shop runtime.");
+  showBuilding("Building Workspace", "Resetting and rebuilding a clean shop runtime.");
   runtimeFrame.removeAttribute("src");
   await mutate("Workspace reset", () => request("/api/workspace/reset", { method: "POST" }));
 });
