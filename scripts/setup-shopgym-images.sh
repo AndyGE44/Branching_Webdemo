@@ -36,9 +36,20 @@ for entry in "${SHOPS[@]}"; do
   IFS='|' read -r shop image imgpath <<<"$entry"
   zip="$SHOPGYM_DIR/mock_${shop}.zip"
 
+  # The bake commits into ROOT container storage, so the base image must live
+  # there. On a fresh node it is not loaded yet (restore.sh only does a rootless
+  # `podman load`), so load it from the image archive here rather than skipping —
+  # otherwise no images get baked and every product picture 404s.
   if ! sudo podman image exists "$image" 2>/dev/null; then
-    echo ">> $shop: base image $image not loaded yet, skipping (run ~/shopgym/restore.sh)" >&2
-    continue
+    base="${image#localhost/}"; base="${base%:latest}"
+    tgz="$SHOPGYM_DIR/docker-images/$base.tar.gz"
+    if [ -f "$tgz" ]; then
+      echo ">> $shop: loading base image into root storage from $(basename "$tgz")"
+      sudo podman load -i "$tgz" >/dev/null
+    else
+      echo ">> $shop: base image $image not in root storage and $tgz missing, skipping" >&2
+      continue
+    fi
   fi
 
   # Idempotent: skip if the base image already has product images baked in.
