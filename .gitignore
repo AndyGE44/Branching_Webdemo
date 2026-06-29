@@ -1,8 +1,6 @@
 .venv/
 __pycache__/
 *.pyc
-demo_mailbox.db
-demo_inventory.db
 control_plane_metadata.db
 .branches/
 build/

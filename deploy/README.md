@@ -1,0 +1,54 @@
+# One-command deploy (fresh CloudLab node)
+
+Brings up the shopgym StateFork web demo on a clean node in the **same CloudLab
+project** (so the 3 GB shopgym archive is read from the project NFS). For a demo
+of "the web app **and** its deployment", this script *is* the deployment story:
+a bare node → a working CRIU checkpoint/restore storefront.
+
+## What it does
+
+`deploy/deploy.sh` runs five steps (see the script for detail):
+
+1. Install host packages — `podman buildah criu golang-go python3-venv …`.
+2. Clone + **pin** the sibling repos to the exact verified commits
+   (`deploy/versions.env`): `Andy_StateFork`, `Andy_Waypoint` (the branch with the
+   Node-friendly CRIU dump flags). It does **not** touch `Andy_harbor` (unrelated).
+3. Copy the shopgym archive from NFS → `~/shopgym` and run `~/shopgym/restore.sh`
+   (unzips mock data + shop image tarballs).
+4. Build artifacts — the Python venv, `waypoint` + `bash_init`, and bake product
+   images into the base images (`scripts/setup-shopgym-images.sh`).
+5. Launch `scripts/run-shopgym-statefork.sh` (sets `io_uring_disabled=2`, loads the
+   shop images into root podman storage, and serves the control plane on
+   `0.0.0.0:8000`).
+
+## Usage
+
+On the fresh node, with an ssh-agent forwarded that can read the private repos:
+
+```bash
+git clone -b feature/shopgym-slim git@github.com:AndyGE44/Branching_Webdemo.git
+cd Branching_Webdemo
+./deploy/deploy.sh                 # provision + build + launch
+# or: ./deploy/deploy.sh --no-launch   # stop after building
+```
+
+Then open `http://<node-ip>:8000` (the launcher prints the address). Different node
+performance is expected and fine — only the build / cold-start / snapshot-restore
+timings change; the demo behaves the same.
+
+## Reproducibility
+
+`deploy/versions.env` holds the pinned commit SHAs and the shopgym archive path.
+To move the demo to a different commit, edit those values. Overrides:
+
+- `SHOPGYM_SRC=/path/to/shopgym` — archive somewhere other than the default NFS path.
+- `DEPLOY_WORKDIR=/path` — where the sibling repos are cloned (default `$HOME`, which
+  is what the launcher's `DEMO_STATEFORK_ROOT` / `WAYPOINT_SRC` defaults expect).
+- `DEMO_MAIN_HOST=127.0.0.1` — keep the control plane local instead of all-interfaces.
+
+## Notes
+
+- Needs `sudo` (CRIU and podman run as root).
+- The sibling-repo clone uses SSH; forward your ssh-agent or pre-clone the repos.
+- This replaces the older NFS `bootstrap-vm.sh` for demo bring-up: it is versioned
+  with the code, pins exact commits, and skips the Claude-state/`Andy_harbor` steps.
