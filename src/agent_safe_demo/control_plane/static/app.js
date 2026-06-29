@@ -359,24 +359,55 @@ function aiCloseModal() {
   aiPickModal.hidden = true;
 }
 
-function aiOpenModal() {
-  aiChatBody.innerHTML = "";
-  aiChatChoices.innerHTML = "";
-  const preset = AI_PICK_PRESETS[currentAppId];
-  if (!preset) {
-    aiAddMessage("bot", "AI Pick isn't set up for this shop yet — try the Clothing Shop.");
-    aiPickModal.hidden = false;
+const aiSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Show a typing indicator for `delay`, then turn it into the given message. The
+// seq guard drops stale staging if the modal was reopened meanwhile.
+async function aiTypeThenSay(seq, text, delay = 800) {
+  const bubble = aiAddMessage("bot", `<span class="ai-typing"><i></i><i></i><i></i></span>`);
+  await aiSleep(delay);
+  if (seq !== aiSeq) {
+    return false;
+  }
+  bubble.innerHTML = escapeHtml(text);
+  return true;
+}
+
+async function aiRevealChoices(seq, preset, delay = 700) {
+  const typing = aiAddMessage("bot", `<span class="ai-typing"><i></i><i></i><i></i></span>`);
+  await aiSleep(delay);
+  if (seq !== aiSeq) {
     return;
   }
-  aiAddMessage("bot", escapeHtml(preset.intro));
-  preset.choices.forEach((choice) => {
+  typing.remove();
+  preset.choices.forEach((choice, index) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.innerHTML = `<strong>${escapeHtml(choice.label)}</strong>&nbsp;<span class="muted">· ${escapeHtml(choice.hint)}</span>`;
+    button.textContent = choice.label; // just the vibe — no item details
+    button.style.animationDelay = `${index * 100}ms`;
     button.addEventListener("click", () => aiChoose(preset, choice));
     aiChatChoices.appendChild(button);
   });
+}
+
+// Bumped each time the modal opens so pending staging timers know to stop.
+let aiSeq = 0;
+
+async function aiOpenModal() {
+  const seq = ++aiSeq;
+  aiChatBody.innerHTML = "";
+  aiChatChoices.innerHTML = "";
   aiPickModal.hidden = false;
+  const preset = AI_PICK_PRESETS[currentAppId];
+  if (!preset) {
+    await aiTypeThenSay(seq, "AI Pick isn't set up for this shop yet — try the Clothing Shop.");
+    return;
+  }
+  // Open like a real chat: think, greet, think again, then reveal the choices.
+  if (!(await aiTypeThenSay(seq, preset.intro))) {
+    return;
+  }
+  await aiRevealChoices(seq, preset);
 }
 
 async function aiChoose(preset, choice) {

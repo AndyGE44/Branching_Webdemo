@@ -115,6 +115,8 @@ button:hover, .icon-link:hover { border-color: var(--accent); color: var(--accen
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 button.primary:hover { background: var(--accent-strong); color: #fff; }
 button.danger { color: var(--danger); border-color: #e3b8b8; }
+.ai-pick-btn { background: var(--soft); border-color: var(--accent); color: var(--accent-dark); font-weight: 760; }
+.ai-pick-btn:hover { background: #d8e8fb; border-color: var(--accent); color: var(--accent-dark); }
 
 .rail-status { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .rail-status .backend-pill, .rail-status .result-pill { justify-content: center; min-height: 32px; white-space: normal; text-align: center; }
@@ -158,14 +160,15 @@ button.danger { color: var(--danger); border-color: #e3b8b8; }
 .ai-chat-title .muted { font-size: 12px; margin: 0; }
 .ai-close { margin-left: auto; min-height: 30px; width: 32px; padding: 0; flex: 0 0 auto; }
 .ai-chat-body { padding: 14px; display: grid; gap: 10px; overflow-y: auto; }
-.ai-msg { max-width: 88%; padding: 9px 12px; border-radius: 12px; font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }
+.ai-msg { max-width: 88%; padding: 9px 12px; border-radius: 12px; font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; animation: ai-pop 0.24s ease-out both; }
+@keyframes ai-pop { from { opacity: 0; transform: translateY(7px) scale(0.98); } to { opacity: 1; transform: none; } }
 .ai-msg.bot { justify-self: start; background: var(--surface); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
 .ai-msg.user { justify-self: end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
 .ai-msg ul { margin: 6px 0 0; padding-left: 18px; }
 .ai-msg li { margin: 2px 0; }
 .ai-choices { padding: 12px 14px; display: grid; gap: 8px; border-top: 1px solid var(--line); }
-.ai-choices button { width: 100%; justify-content: flex-start; text-align: left; }
-.ai-choices .muted { font-weight: 600; }
+.ai-choices button { width: 100%; justify-content: flex-start; text-align: left; animation: ai-rise 0.32s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+@keyframes ai-rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 .ai-typing { display: inline-flex; gap: 4px; padding: 2px 0; }
 .ai-typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); display: inline-block; animation: ai-blink 1s infinite; }
 .ai-typing i:nth-child(2) { animation-delay: 0.2s; }
