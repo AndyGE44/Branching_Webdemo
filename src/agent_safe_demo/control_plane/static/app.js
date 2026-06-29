@@ -318,7 +318,6 @@ const AI_PICK_PRESETS = {
       {
         id: "cozy",
         label: "Cozy loungewear",
-        hint: "soft hoodie + joggers",
         items: [
           { id: 10000, name: "Plush Hoodie — Flamingo / XS" },
           { id: 10084, name: "Print Joggers — Birch Fade / XS" },
@@ -327,7 +326,6 @@ const AI_PICK_PRESETS = {
       {
         id: "active",
         label: "Studio active",
-        hint: "legging + training short",
         items: [
           { id: 10273, name: "7/8 High-Waist Legging — Meadow" },
           { id: 10248, name: "Athletic Short — Black / S" },
@@ -336,10 +334,71 @@ const AI_PICK_PRESETS = {
       {
         id: "casual",
         label: "Smart casual",
-        hint: "pullover + tee",
         items: [
           { id: 10288, name: "Crew Neck Pullover — Oatmeal" },
           { id: 10471, name: "Dual-Layer Tee — Bone / S" },
+        ],
+      },
+    ],
+  },
+  shop_cookware: {
+    intro: "Hey! I'm your State-Fork kitchen helper. What are you cooking up today?",
+    closing:
+      "Here's your kit. I reverted the shop to a clean state, added these, and saved a snapshot — restore it anytime to get this setup back.",
+    choices: [
+      {
+        id: "everyday",
+        label: "Everyday cooking",
+        items: [
+          { id: 10000, name: '10-inch Nonstick Frypan — Slate Gray' },
+          { id: 10002, name: "Stainless Steel Saucepan, 2 qt" },
+        ],
+      },
+      {
+        id: "baking",
+        label: "Baking day",
+        items: [
+          { id: 10161, name: "Half-Sheet Baking Pan" },
+          { id: 10163, name: "Round Cake Pan, 9-inch" },
+        ],
+      },
+      {
+        id: "prep",
+        label: "Knife & prep",
+        items: [
+          { id: 10088, name: "8-inch Chef's Knife" },
+          { id: 10237, name: "Bamboo Cutting Board, Large" },
+        ],
+      },
+    ],
+  },
+  shop_hardware: {
+    intro: "Hey! I'm your State-Fork setup assistant. What are you setting up today?",
+    closing:
+      "Here's your setup. I reverted the shop to a clean state, added these, and saved a snapshot — restore it anytime to get it back.",
+    choices: [
+      {
+        id: "checkout",
+        label: "Checkout counter",
+        items: [
+          { id: 10008, name: "Bluetooth Thermal Slip Printer" },
+          { id: 10015, name: "16-Inch Heavy Duty Till Tray" },
+        ],
+      },
+      {
+        id: "scanpay",
+        label: "Scan & pay",
+        items: [
+          { id: 10002, name: "2D Wired Code Reader with Cradle" },
+          { id: 10069, name: "Compact Card Reader" },
+        ],
+      },
+      {
+        id: "labels",
+        label: "Shipping & labels",
+        items: [
+          { id: 10028, name: "XL Direct Thermal Label Printer" },
+          { id: 10032, name: "Direct Thermal Shipping Label Pack" },
         ],
       },
     ],
