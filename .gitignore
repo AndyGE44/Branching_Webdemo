@@ -1,8 +1,6 @@
 .venv/
 __pycache__/
 *.pyc
-control_plane_metadata.db
-.branches/
 build/
 dist/
 *.egg-info/

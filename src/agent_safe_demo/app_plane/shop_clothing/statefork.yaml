@@ -3,30 +3,21 @@ name: Clothing Shop
 description: Mock Shopify Hydrogen storefront. Cart/order state lives in-memory in the mock Storefront API and is captured by the StateFork container checkpoint (no state file).
 
 runtime:
-  # checkpoint_exec + build mode: StateFork/Waypoint builds the image, launches the
-  # app inside the managed session, and checkpoints the whole process tree (incl.
-  # the in-memory cart) via CRIU. run-shop.sh (baked by the Dockerfile) starts the
-  # PREBUNDLED plain-node mock-api on :4000 and the Hydrogen storefront on $PORT,
-  # so the embedded UI is the actual shop WEBSITE, not the bare GraphQL API.
+  # StateFork/Waypoint builds the image, launches the app inside the managed
+  # session, and checkpoints the whole process tree (incl. the in-memory cart)
+  # via CRIU. run-shop.sh (baked by the Dockerfile) starts the PREBUNDLED
+  # plain-node mock-api on :4000 and the Hydrogen storefront on $PORT, so the
+  # embedded UI is the actual shop WEBSITE, not the bare GraphQL API.
   # (Both are plain `node` — running the API via tsx is not CRIU-checkpointable.)
-  type: checkpoint_exec
   command: "bash /app/run-shop.sh ${PORT}"
   cwd: "/app"
   port_env: "PORT"
   health_path: "/health"
   ui_path: "/"
+  env:
+    # Belt-and-suspenders: also disable libuv io_uring per-process (the host
+    # also sets kernel.io_uring_disabled=2). CRIU 4.x cannot dump io_uring.
+    UV_USE_IO_URING: "0"
 
 build:
   dockerfile_dir: "."
-
-state:
-  # Cart/order state is in-memory only; the container checkpoint captures it.
-  # No state file to declare.
-  files: []
-  env:
-    # Belt-and-suspenders: also disable libuv io_uring per-process (the host
-    # also sets kernel.io_uring_disabled=2). CRIU 4.2 cannot dump io_uring.
-    UV_USE_IO_URING: "0"
-
-observability:
-  state_summary_path: "/health"

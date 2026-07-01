@@ -39,8 +39,10 @@ if [[ -z "${DEMO_AUTH_PASSWORD:-}" || "${DEMO_AUTH_PASSWORD}" == "replace-with-a
 fi
 DEMO_AUTH_USER="${DEMO_AUTH_USER:-demo}"
 upsert_env DEMO_AUTH_USER "$DEMO_AUTH_USER"
-# Public path = tunnel only. Force localhost so the raw port is never exposed.
+# Public path = tunnel only. Force localhost so the raw port is never exposed —
+# both in .env and in this process's environment (the launcher honors either).
 upsert_env DEMO_MAIN_HOST 127.0.0.1
+export DEMO_MAIN_HOST=127.0.0.1 DEMO_AUTH_USER DEMO_AUTH_PASSWORD
 
 # --- cloudflared --------------------------------------------------------------
 if ! command -v cloudflared >/dev/null 2>&1; then

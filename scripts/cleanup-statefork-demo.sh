@@ -3,11 +3,19 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+# .env provides defaults; explicit environment variables win (teardown.sh
+# passes CHECKPOINT_SESSIONS_DIR explicitly).
 if [[ -f .env ]]; then
+  _pre_env="$(env | grep -E '^(DEMO_|WAYPOINT_|SHOPGYM_|CHECKPOINT_)[A-Za-z0-9_]*=' || true)"
   set -a
   # shellcheck disable=SC1091
   source .env
   set +a
+  while IFS='=' read -r _key _value; do
+    [[ -n "$_key" ]] || continue
+    export "$_key=$_value"
+  done <<<"$_pre_env"
+  unset _key _value _pre_env
 fi
 
 main_port="${DEMO_MAIN_PORT:-8000}"

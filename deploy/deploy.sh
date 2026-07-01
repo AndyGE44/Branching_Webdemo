@@ -2,7 +2,8 @@
 # deploy/deploy.sh — one-command bring-up of the shopgym StateFork demo on a fresh
 # CloudLab node (same project, so the shopgym archive is fetched from the project
 # NFS). It provisions the host, clones+pins the sibling repos, restores the shop
-# images, builds the artifacts, and launches the control plane.
+# images, builds the artifacts, and then serves the demo through
+# deploy/serve-public.sh (localhost bind + HTTPS tunnel + Basic Auth + teardown).
 #
 #   Prereqs on the fresh node:
 #     - You already cloned THIS repo and are running this script from it.
@@ -11,7 +12,7 @@
 #     - sudo is available (CRIU/podman need root).
 #
 #   Usage:
-#     ./deploy/deploy.sh                 # provision + build + launch
+#     ./deploy/deploy.sh                 # provision + build + serve publicly
 #     ./deploy/deploy.sh --no-launch     # provision + build, then stop
 #     SHOPGYM_SRC=/path ./deploy/deploy.sh   # override the archive location
 #
@@ -100,8 +101,10 @@ echo "    waypoint + bash_init built"
 
 # ---------------------------------------------------------------------------
 if [[ "$LAUNCH" -eq 0 ]]; then
-  say "Done (provision + build). Launch with: ./scripts/run-shopgym-statefork.sh"
+  say "Done (provision + build)."
+  echo "    Serve it:      ./deploy/serve-public.sh   (recommended: tunnel + auth + auto-teardown)"
+  echo "    Local test:    ./scripts/run-shopgym-statefork.sh   (localhost only)"
   exit 0
 fi
-say "5/5  Launch control plane (http://0.0.0.0:8000)"
-exec ./scripts/run-shopgym-statefork.sh
+say "5/5  Serve the demo (tunnel + Basic Auth + auto-teardown)"
+exec "$HERE/serve-public.sh"

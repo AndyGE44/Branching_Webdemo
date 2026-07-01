@@ -49,13 +49,7 @@ function showResult(text, ok = true) {
 function badge(value) {
   const safeValue = escapeHtml(value);
   const normalized = String(value ?? "").toLowerCase();
-  let tone = "neutral";
-  if (["ready", "active", "draft", "saved", "current", "running"].includes(normalized)) {
-    tone = "ok";
-  }
-  if (["blocked", "failed", "dirty", "unsaved", "exited"].includes(normalized)) {
-    tone = "warn";
-  }
+  const tone = ["current", "running"].includes(normalized) ? "ok" : "warn";
   return `<span class="badge ${tone}">${safeValue}</span>`;
 }
 
@@ -202,11 +196,6 @@ async function refreshWorkspace({ skipFrame = false } = {}) {
   currentAppId = data.app.id;
   renderApps({ apps, current_app_id: currentAppId });
   renderCheckpoints(data.branch);
-  // Dirty/clean indicator on the result pill: red "unsnapshot change" when the
-  // runtime differs from the last snapshot; otherwise leave the last action result.
-  if (data.branch && data.branch.dirty) {
-    showResult("unsnapshot change", false);
-  }
   // AI Pick navigates the iframe to the cart itself, so it skips the frame reset.
   if (!skipFrame) {
     const url = data.workspace.runtime_ui_url;
@@ -251,33 +240,13 @@ async function saveWorkspaceSnapshot(label) {
 }
 
 async function restoreSnapshot(snapshotId) {
-  const dirty = await request("/api/workspace/dirty");
-  let force = false;
-  if (dirty.dirty) {
-    const saveFirst = window.confirm("This workspace has unsaved changes. Save a snapshot before restoring?");
-    if (saveFirst) {
-      const label = window.prompt("Snapshot label", "autosave before restore");
-      if (label === null) {
-        showResult("Restore canceled");
-        return;
-      }
-      await saveWorkspaceSnapshot(label.trim() || "autosave before restore");
-    } else {
-      const discard = window.confirm("Discard unsaved changes and restore the selected snapshot?");
-      if (!discard) {
-        showResult("Restore canceled");
-        return;
-      }
-      force = true;
-    }
-  }
   // The runtime is about to revert (e.g. the storefront cart), so reload the
   // embedded iframe — refreshWorkspace re-sets src once it is cleared.
   showBuilding("Restoring snapshot…", "Reverting the shop runtime to the selected snapshot.");
   runtimeFrame.removeAttribute("src");
   await request("/api/workspace/restore", {
     method: "POST",
-    body: JSON.stringify({ snapshot_id: snapshotId, force }),
+    body: JSON.stringify({ snapshot_id: snapshotId }),
   });
   showResult("Snapshot restored");
   await refresh();
@@ -502,7 +471,7 @@ async function aiPickOrchestrate(choice) {
   if (initial) {
     await request("/api/workspace/restore", {
       method: "POST",
-      body: JSON.stringify({ snapshot_id: initial.id, force: true }),
+      body: JSON.stringify({ snapshot_id: initial.id }),
     });
   }
   // 2. Add the picked lines through the storefront cart action — the same path the

@@ -6,20 +6,13 @@ runtime:
   # See app_plane/shop_clothing/statefork.yaml for the full rationale. run-shop.sh
   # starts the prebundled mock-api on :4000 and the Hydrogen storefront on $PORT
   # so the embedded UI is the actual shop website (whole tree is CRIU-checkpointable).
-  type: checkpoint_exec
   command: "bash /app/run-shop.sh ${PORT}"
   cwd: "/app"
   port_env: "PORT"
   health_path: "/health"
   ui_path: "/"
-
-build:
-  dockerfile_dir: "."
-
-state:
-  files: []
   env:
     UV_USE_IO_URING: "0"
 
-observability:
-  state_summary_path: "/health"
+build:
+  dockerfile_dir: "."

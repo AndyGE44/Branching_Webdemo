@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# run-shopgym-statefork.sh — one command to run the StateFork control plane with
-# the shopgym (Shopify Hydrogen mock) shops as branchable apps.
+# run-shopgym-statefork.sh — QUICK-TEST launcher for the shopgym StateFork demo.
 #
-# It first satisfies the host prerequisites that the shop containers need to be
-# CRIU-checkpointable (these are NOT things the webdemo repo can carry), then
-# launches the control plane in StateFork build mode. Select a shop in the UI.
+#   ***  For anything other than a local quick test, use the recommended    ***
+#   ***  path: ./deploy/serve-public.sh (localhost bind + HTTPS tunnel +    ***
+#   ***  Basic Auth + auto-teardown). The control plane runs as ROOT for   ***
+#   ***  CRIU/podman and must never face the network unauthenticated.      ***
+#
+# This script binds 127.0.0.1 only. It satisfies the host prerequisites the
+# shop containers need to be CRIU-checkpointable (these are NOT things the
+# webdemo repo can carry), then launches the control plane in StateFork build
+# mode. Select a shop in the UI.
 #
 #   1. kernel.io_uring_disabled=2  — Node 22 libuv uses io_uring, which CRIU
 #      cannot checkpoint.
@@ -13,20 +18,50 @@
 #   3. Waypoint built with the Node-friendly CRIU flags (--force-irmap
 #      --link-remap) — without them CRIU can't dump the shop's inotify watches.
 #
-# Override any path with the matching env var (DEMO_STATEFORK_ROOT, WAYPOINT_SRC,
-# SHOPGYM_DIR, DEMO_MAIN_PORT, DEMO_APP_ID, ...).
+# Configuration comes from .env (copy .env.example) or the matching env vars
+# (DEMO_STATEFORK_ROOT, WAYPOINT_SRC, SHOPGYM_DIR, DEMO_MAIN_PORT, ...);
+# explicit environment variables win over .env.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 REPO_ROOT="$PWD"
 
+# --- configuration: .env provides defaults, explicit env vars win -------------
+if [[ -f .env ]]; then
+  _pre_env="$(env | grep -E '^(DEMO_|WAYPOINT_|SHOPGYM_|CHECKPOINT_)[A-Za-z0-9_]*=' || true)"
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+  while IFS='=' read -r _key _value; do
+    [[ -n "$_key" ]] || continue
+    export "$_key=$_value"
+  done <<<"$_pre_env"
+  unset _key _value _pre_env
+fi
+
 STATEFORK_ROOT="${DEMO_STATEFORK_ROOT:-$HOME/Andy_StateFork}"
 WAYPOINT_SRC="${WAYPOINT_SRC:-$HOME/Andy_Waypoint}"
 SHOPGYM_DIR="${SHOPGYM_DIR:-$HOME/shopgym}"
-# Bind the control plane on all interfaces so it is reachable from other hosts
-# (not just localhost). Override with DEMO_MAIN_HOST=127.0.0.1 to keep it local.
-HOST="${DEMO_MAIN_HOST:-0.0.0.0}"
+# Quick-test default: localhost only. Overriding to a public interface requires
+# Basic Auth (or an explicit unsafe opt-in) — see the guard below.
+HOST="${DEMO_MAIN_HOST:-127.0.0.1}"
 PORT="${DEMO_MAIN_PORT:-8000}"
+
+if [[ "$HOST" != "127.0.0.1" && "$HOST" != "localhost" && "$HOST" != "::1" ]]; then
+  if [[ -z "${DEMO_AUTH_PASSWORD:-}" && "${DEMO_ALLOW_UNAUTH_PUBLIC:-0}" != "1" ]]; then
+    cat >&2 <<'EOF'
+ERROR: refusing to bind a non-localhost interface without Basic Auth.
+       The control plane runs as root — never expose it unauthenticated.
+
+       Recommended:  ./deploy/serve-public.sh   (tunnel + auth + auto-teardown)
+       Alternatives: set DEMO_AUTH_PASSWORD in .env, or force with
+       DEMO_ALLOW_UNAUTH_PUBLIC=1 (only behind a host firewall allowlist).
+EOF
+    exit 1
+  fi
+  echo "WARNING: binding ${HOST}:${PORT} — the demo is reachable from the network." >&2
+fi
 
 # Shop container images to make available (also covers cookware/hardware).
 SHOP_IMAGES=(
@@ -55,7 +90,6 @@ PY
 WAYPOINT_SESSIONS_DIR="${WAYPOINT_SESSIONS_DIR:-/mydata/waypoint-sessions}"
 BRANCH_PORT_START="${DEMO_BRANCH_PORT_START:-8300}"
 BRANCH_PORT_END="${DEMO_BRANCH_PORT_END:-8350}"
-CONTROL_PLANE_DB="${DEMO_CONTROL_PLANE_DB_PATH:-$REPO_ROOT/control_plane_metadata.db}"
 
 echo ">> 0/4  Clean slate (kill leftovers from a previous run)"
 # 1. Kill any storefront process tree left running from a previous launch. These
@@ -100,12 +134,6 @@ for dir in "$CHECKPOINT_SESSIONS_DIR" "$WAYPOINT_SESSIONS_DIR"; do
     sudo rm -rf "${dir:?}/"* 2>/dev/null || true
   fi
 done
-
-# 4. Drop committed-head/history metadata so a new run starts with no prior head.
-if [[ -f "$CONTROL_PLANE_DB" ]]; then
-  echo "        removing control-plane metadata db: $CONTROL_PLANE_DB"
-  sudo rm -f "$CONTROL_PLANE_DB" 2>/dev/null || rm -f "$CONTROL_PLANE_DB" 2>/dev/null || true
-fi
 
 echo ">> 1/4  Disable io_uring (CRIU 4.x cannot checkpoint it)"
 if [[ "$(sudo sysctl -n kernel.io_uring_disabled 2>/dev/null || echo 0)" != "2" ]]; then
@@ -159,20 +187,13 @@ export DEMO_STATEFORK_METHOD="${DEMO_STATEFORK_METHOD:-ckpt_build}"
 # WAYPOINT_BIN, then $PATH, then ./waypoint), and Waypoint at its bash_init helper.
 export WAYPOINT_BIN="${WAYPOINT_BIN:-$wp_bin}"
 export WAYPOINT_BASH_INIT_SRC="${WAYPOINT_BASH_INIT_SRC:-$bi_bin}"
-export CHECKPOINT_SESSIONS_DIR="${CHECKPOINT_SESSIONS_DIR:-/tmp/checkpoint-sessions-shopgym}"
+export CHECKPOINT_SESSIONS_DIR
 export DEMO_BRANCH_HOST="${DEMO_BRANCH_HOST:-127.0.0.1}"
 export DEMO_BRANCH_PORT_START="${DEMO_BRANCH_PORT_START:-8300}"
 export DEMO_APP_ID="${DEMO_APP_ID:-shop_clothing}"
-# Restrict the App selector to the three shops (hides email/inventory).
+# Restrict the App selector to the three shops.
 export DEMO_VISIBLE_APP_IDS="${DEMO_VISIBLE_APP_IDS:-shop_clothing,shop_cookware,shop_hardware}"
 export PYTHONPATH="$REPO_ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
-
-if [[ -f .env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source .env
-  set +a
-fi
 
 # When bound to all interfaces, show a reachable address (LAN IP, falling back to
 # localhost) instead of the unhelpful 0.0.0.0 in the URL.
@@ -188,6 +209,7 @@ cat <<EOF
   Control plane:  http://${DISPLAY_HOST}:${PORT}   (bound on ${HOST})
   Default app:    ${DEMO_APP_ID}   (switch shops in the UI)
   Branch ports:   ${DEMO_BRANCH_HOST}:${DEMO_BRANCH_PORT_START}+
+  Public demo:    use ./deploy/serve-public.sh instead (tunnel + auth + TTL)
 
 EOF
 

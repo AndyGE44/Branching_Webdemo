@@ -1,25 +1,40 @@
+"""Schema for the per-app ``statefork.yaml`` manifest.
+
+Every directory under ``app_plane/`` that contains a ``statefork.yaml`` is
+discovered as a selectable app (see ``app_registry``). The manifest declares
+everything the control plane needs to build and run the app under StateFork:
+the Dockerfile to build, the command that starts the app inside the
+checkpointed container, and the paths used to health-check and embed its UI.
+
+Adding a new shop = adding a directory with a Dockerfile and a manifest; no
+control-plane code changes are required.
+"""
+
 from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
-
 
 _TEMPLATE_RE = re.compile(r"\$\{([A-Z0-9_]+)\}")
 
 
 class RuntimeManifest(BaseModel):
+    """How the app runs inside the StateFork-managed container."""
+
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["process", "checkpoint_exec"] = "process"
     command: str = Field(min_length=1)
-    cwd: str = "."
+    cwd: str = "/"
     port_env: str = "PORT"
-    health_path: str = "/api/state"
+    health_path: str = "/health"
     ui_path: str = "/"
+    # Extra environment for the runtime process (values may use ${PORT},
+    # ${HOST}, ${BRANCH_WORKDIR} templates).
+    env: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("command", "cwd", "port_env", "health_path", "ui_path")
     @classmethod
@@ -29,23 +44,6 @@ class RuntimeManifest(BaseModel):
             raise ValueError("value cannot be blank")
         return stripped
 
-
-class StateManifest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    # May be empty for apps whose state is in-memory and captured by the
-    # container/process checkpoint (e.g. the shopgym shops) rather than a file.
-    files: list[str] = Field(default_factory=list)
-    env: dict[str, str] = Field(default_factory=dict)
-
-    @field_validator("files")
-    @classmethod
-    def files_are_not_blank(cls, values: list[str]) -> list[str]:
-        normalized = [value.strip() for value in values]
-        if any(not value for value in normalized):
-            raise ValueError("state.files cannot contain blank paths")
-        return normalized
-
     @field_validator("env")
     @classmethod
     def env_values_are_not_blank(cls, values: dict[str, str]) -> dict[str, str]:
@@ -54,12 +52,14 @@ class StateManifest(BaseModel):
             clean_key = key.strip()
             clean_value = value.strip()
             if not clean_key or not clean_value:
-                raise ValueError("state.env keys and values cannot be blank")
+                raise ValueError("runtime.env keys and values cannot be blank")
             normalized[clean_key] = clean_value
         return normalized
 
 
 class BuildManifest(BaseModel):
+    """Where the app's Dockerfile lives, relative to the manifest."""
+
     model_config = ConfigDict(extra="forbid")
 
     dockerfile_dir: str = "."
@@ -73,20 +73,6 @@ class BuildManifest(BaseModel):
         return stripped
 
 
-class ObservabilityManifest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    state_summary_path: str = "/api/state"
-
-    @field_validator("state_summary_path")
-    @classmethod
-    def path_not_blank(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("value cannot be blank")
-        return stripped
-
-
 class StateForkManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -94,9 +80,7 @@ class StateForkManifest(BaseModel):
     name: str = Field(min_length=1)
     description: str = ""
     runtime: RuntimeManifest
-    state: StateManifest
-    observability: ObservabilityManifest
-    build: BuildManifest | None = None
+    build: BuildManifest = Field(default_factory=BuildManifest)
 
     @field_validator("id", "name")
     @classmethod
@@ -123,6 +107,8 @@ def load_manifest(path: Path) -> StateForkManifest:
 
 
 def interpolate_template(value: str, variables: dict[str, Any]) -> str:
+    """Replace ``${NAME}`` placeholders; unknown names are left as-is."""
+
     def replace(match: re.Match[str]) -> str:
         key = match.group(1)
         if key not in variables:
