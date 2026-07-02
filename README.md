@@ -61,7 +61,7 @@ launcher refuses an unauthenticated public bind.
 ### Fresh node: one-command deploy
 
 ```bash
-git clone -b feature/shopgym-slim git@github.com:AndyGE44/Branching_Webdemo.git
+git clone git@github.com:AndyGE44/Branching_Webdemo.git
 cd Branching_Webdemo
 ./deploy/deploy.sh                 # provision + build + serve (--no-launch to stop after building)
 ```
