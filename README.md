@@ -29,8 +29,15 @@ a security decision:
 | Path | Script | Use when |
 |---|---|---|
 | **Recommended** | `./deploy/serve-public.sh` | Anyone other than you will reach the demo. Binds localhost, exposes via a Cloudflare HTTPS tunnel, enforces Basic Auth, auto-tears-down after `DEMO_TTL_HOURS`. |
+| **Run permanently** | `sudo ./deploy/install-service.sh` | The demo should stay up long-term. Installs systemd services that start on boot and restart on crash, with no auto-teardown. |
 | Fresh node | `./deploy/deploy.sh` | Nothing is provisioned yet. Installs packages, clones+pins sibling repos, restores images, builds, then runs `serve-public.sh`. |
 | **Quick test only** | `./scripts/run-shopgym-statefork.sh` | You are testing locally (or through an SSH tunnel). Binds `127.0.0.1` only and refuses a public bind without Basic Auth. |
+
+Any of these paths also **auto-resets an idle demo**: after `DEMO_IDLE_RESET_MINUTES`
+(default 10) with no activity, the control plane rebuilds a clean shop — the same
+Reset the UI button does. A shop already at its clean initial state is left alone,
+so a pristine demo is never needlessly rebuilt. Set `DEMO_IDLE_RESET_MINUTES=0` to
+disable.
 
 ### Recommended: public demo (tunnel + auth + auto-teardown)
 
@@ -57,6 +64,45 @@ instead need a raw `IP:8000` (no tunnel), front it with a host firewall
 allowlist (default-deny inbound, allow SSH + `:8000` from known source IPs),
 set `DEMO_AUTH_PASSWORD`, and set `DEMO_MAIN_HOST=0.0.0.0` — the quick-test
 launcher refuses an unauthenticated public bind.
+
+For a **permanent** run through this same path (no supervision, but no
+teardown), set `DEMO_TTL_HOURS=0`. To also survive crashes and reboots, use the
+systemd path below instead.
+
+### Run permanently (systemd: boot start + crash restart)
+
+```bash
+sudo ./deploy/install-service.sh              # quick tunnel (ephemeral URL)
+sudo ./deploy/install-service.sh --uninstall  # stop, disable, remove
+```
+
+Installs two services — `shopgym-demo.service` (control plane, root) and
+`shopgym-demo-tunnel.service` (tunnel) — both `enable`d (start on boot) with
+`Restart=always`. There is **no** auto-teardown. Manage them the usual way:
+
+```bash
+systemctl status shopgym-demo.service shopgym-demo-tunnel.service
+journalctl -u shopgym-demo.service -f        # control-plane log (idle resets show here)
+journalctl -u shopgym-demo-tunnel.service | grep trycloudflare   # the quick-tunnel URL
+./deploy/teardown.sh                          # stop now (services return on reboot)
+```
+
+**Public URL.** The tunnel mode is set by `DEMO_TUNNEL_MODE`:
+
+- `quick` (default) — free Cloudflare quick tunnel, but the `*.trycloudflare.com`
+  URL **changes every time the tunnel restarts** (so not a durable link).
+- `named` — a pre-created Cloudflare **named tunnel** with a **stable hostname**.
+  Free if you already have a domain on Cloudflare. Create the tunnel in the
+  dashboard (Zero Trust → Tunnels), then:
+  `DEMO_TUNNEL_MODE=named CLOUDFLARE_TUNNEL_TOKEN=eyJ... sudo -E ./deploy/install-service.sh`
+  (the token is stored `0600` in `/etc/shopgym-demo-tunnel.env`, never on the argv).
+- `none` — installs only the control plane; expose `127.0.0.1:8000` yourself, e.g.
+  **Tailscale Funnel** (a free, stable `https://<node>.<tailnet>.ts.net`, no domain
+  needed) or a firewalled direct `IP:8000`.
+
+> **CloudLab note:** on an ephemeral research node, "permanent" lasts as long as
+> the node does — boot-start covers reboots, but the node itself is reclaimed when
+> the experiment ends, which also ends any tunnel/URL.
 
 ### Fresh node: one-command deploy
 

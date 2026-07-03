@@ -64,6 +64,28 @@ It:
 inbound, allow SSH + `:8000` from known source IPs), keep Basic Auth on, and set
 `DEMO_MAIN_HOST=0.0.0.0` — the launcher refuses an unauthenticated public bind.
 
+## Run permanently (systemd)
+
+For a demo that should stay up long-term — surviving crashes and reboots, with
+no auto-teardown — install it as systemd services instead of `serve-public.sh`:
+
+```bash
+sudo ./deploy/install-service.sh              # control plane + tunnel, enabled on boot
+sudo ./deploy/install-service.sh --uninstall  # stop, disable, remove
+```
+
+- `shopgym-demo.service` runs the control plane (root; `run-shopgym-statefork.sh`)
+  and `shopgym-demo-tunnel.service` runs the tunnel — both `Restart=always`.
+- `DEMO_TUNNEL_MODE` picks the URL: `quick` (default, ephemeral), `named`
+  (stable Cloudflare hostname; set `CLOUDFLARE_TUNNEL_TOKEN`), or `none` (control
+  plane only — front it with Tailscale Funnel or a firewalled IP:port).
+- `./deploy/teardown.sh` stops the services now (they still return on boot until
+  you `--uninstall`).
+
+Both the systemd path and `serve-public.sh` also **auto-reset an idle demo**
+(`DEMO_IDLE_RESET_MINUTES`, default 10; `0` disables) — the control plane rebuilds
+a clean shop after the idle window, skipping a shop that is already clean.
+
 ## Reproducibility
 
 `deploy/versions.env` holds the pinned commit SHAs and the shopgym archive path.

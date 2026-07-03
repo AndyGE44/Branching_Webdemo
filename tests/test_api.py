@@ -18,6 +18,7 @@ from agent_safe_demo.control_plane.statefork import (
     SnapshotHandle,
     StateForkBackend,
 )
+from agent_safe_demo.control_plane.idle import ActivityTracker, should_reset
 from agent_safe_demo.control_plane.workspace import INITIAL_SNAPSHOT_LABEL, Workspace
 
 SHOP_IDS = {"shop_clothing", "shop_cookware", "shop_hardware"}
@@ -343,6 +344,136 @@ def test_workspace_select_app_resets_old_backend_and_switches(monkeypatch, tmp_p
 
     with pytest.raises(ValueError, match="Unknown app id"):
         workspace.select_app("not_an_app")
+
+
+# ------------------------------------------------------------------- idle auto-reset
+
+
+def test_activity_tracker_records_movement_and_dirtiness():
+    tracker = ActivityTracker()
+    assert tracker.dirty is False
+
+    # A real request resets the idle clock; the liveness probe does not.
+    tracker._last_activity -= 100
+    tracker.record_request("/healthz")
+    assert tracker.idle_seconds() > 50  # /healthz ignored — still idle
+    tracker.record_request("/api/workspace")
+    assert tracker.idle_seconds() < 5  # real movement reset the clock
+
+    tracker.mark_dirty()
+    assert tracker.dirty is True
+    tracker.mark_clean()
+    assert tracker.dirty is False
+
+
+def test_idle_reset_only_fires_when_dirty_and_idle():
+    tracker = ActivityTracker()
+    window = 600.0
+
+    # Fresh + clean: never reset, even after a long idle.
+    tracker._last_activity -= 2 * window
+    assert should_reset(tracker, window) is False
+
+    # Dirty but recently active: not yet.
+    tracker.mark_dirty()
+    assert should_reset(tracker, window) is False
+
+    # Dirty and idle past the window: reset.
+    tracker._last_activity -= window + 60
+    assert should_reset(tracker, window) is True
+
+    # Back at the original clean state: idle no longer triggers a reset.
+    tracker.mark_clean()
+    tracker._last_activity -= 2 * window
+    assert should_reset(tracker, window) is False
+
+
+def test_healthz_is_open_and_not_counted_as_activity(monkeypatch):
+    app = load_controller_app(monkeypatch, auth_password="secret-demo-password")
+    import agent_safe_demo.control_plane.main as main
+
+    with TestClient(app) as client:
+        main.activity._last_activity -= 100  # pretend the demo has gone idle
+        probe = client.get("/healthz")  # no credentials supplied
+        assert probe.status_code == 200
+        assert probe.json() == {"status": "ok"}
+        # An authenticated request IS movement and resets the idle clock.
+        assert client.get("/api/apps", auth=("demo", "secret-demo-password")).status_code == 200
+
+    # /healthz must not have reset the clock; the /api/apps call must have.
+    assert main.activity.idle_seconds() < 5
+
+
+def test_idle_monitor_resets_dirty_workspace(monkeypatch):
+    import asyncio
+
+    from agent_safe_demo.control_plane.idle import run_idle_reset_monitor
+
+    monkeypatch.setenv("DEMO_IDLE_RESET_MINUTES", "0.001")  # ~0.06s window
+    monkeypatch.setenv("DEMO_IDLE_CHECK_SECONDS", "0.01")
+
+    class FakeWorkspace:
+        def __init__(self):
+            self.calls = []
+
+        def reset(self):
+            self.calls.append("reset")
+            return {}
+
+        def ensure(self):
+            self.calls.append("ensure")
+            return {}
+
+    workspace = FakeWorkspace()
+    tracker = ActivityTracker()
+    tracker.mark_dirty()
+    tracker._last_activity -= 10  # well past the tiny idle window
+
+    async def drive():
+        task = asyncio.create_task(run_idle_reset_monitor(workspace, tracker))
+        for _ in range(200):  # let the loop tick until it acts
+            await asyncio.sleep(0.01)
+            if workspace.calls:
+                break
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(drive())
+
+    # The monitor ran the same reset the UI button does (tear down + rebuild)
+    # and marked the workspace clean so it will not immediately reset again.
+    assert workspace.calls[:2] == ["reset", "ensure"]
+    assert tracker.dirty is False
+
+
+def test_idle_monitor_can_be_disabled(monkeypatch):
+    import asyncio
+
+    from agent_safe_demo.control_plane.idle import run_idle_reset_monitor
+
+    monkeypatch.setenv("DEMO_IDLE_RESET_MINUTES", "0")  # disabled
+
+    class FakeWorkspace:
+        def __init__(self):
+            self.calls = []
+
+        def reset(self):
+            self.calls.append("reset")
+
+        def ensure(self):
+            self.calls.append("ensure")
+
+    workspace = FakeWorkspace()
+    tracker = ActivityTracker()
+    tracker.mark_dirty()
+    tracker._last_activity -= 10_000  # long idle — but disabled means no reset
+
+    # Returns promptly instead of looping forever.
+    asyncio.run(asyncio.wait_for(run_idle_reset_monitor(workspace, tracker), timeout=2))
+    assert workspace.calls == []
 
 
 # ----------------------------------------------------------------- statefork backend

@@ -6,6 +6,15 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# If the permanent systemd services are installed (deploy/install-service.sh),
+# stop them first — otherwise Restart=always would relaunch what we kill below.
+# This is "stop now": the units stay enabled and return on reboot. To remove
+# them for good, run:  sudo ./deploy/install-service.sh --uninstall
+echo ">> stopping systemd services (if installed)"
+for unit in shopgym-demo-tunnel.service shopgym-demo.service; do
+  sudo systemctl stop "$unit" 2>/dev/null && echo "   stopped $unit" || true
+done
+
 echo ">> stopping cloudflared tunnel"
 pkill -f "cloudflared tunnel" 2>/dev/null && echo "   tunnel stopped" || echo "   no tunnel running"
 

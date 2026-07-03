@@ -37,6 +37,10 @@ def _valid_basic_auth(authorization: str | None) -> bool:
 
 
 async def require_basic_auth(request: Request, call_next):
+    # The liveness probe stays open so a local supervisor / uptime check can
+    # reach it without credentials. It exposes nothing but {"status": "ok"}.
+    if request.url.path == "/healthz":
+        return await call_next(request)
     if auth_enabled() and not _valid_basic_auth(request.headers.get("authorization")):
         realm = os.getenv("DEMO_AUTH_REALM", "Agent-Safe Demo")
         return JSONResponse(

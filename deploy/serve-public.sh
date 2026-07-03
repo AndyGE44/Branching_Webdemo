@@ -79,15 +79,22 @@ for _ in $(seq 1 40); do
 done
 
 # --- schedule auto-teardown ---------------------------------------------------
+# DEMO_TTL_HOURS=0 (or "never"/empty) runs indefinitely — no auto-teardown. For a
+# supervised permanent run that also survives crashes/reboots, prefer the systemd
+# path: deploy/install-service.sh.
 ttl="${DEMO_TTL_HOURS:-24}"
-sudo systemctl reset-failed shopgym-demo-teardown.service shopgym-demo-teardown.timer 2>/dev/null || true
-if sudo systemd-run --on-active="${ttl}h" --unit=shopgym-demo-teardown --collect \
-     /bin/bash "$REPO_ROOT/deploy/teardown.sh" >/dev/null 2>&1; then
-  teardown_note="auto-teardown in ${ttl}h (cancel: sudo systemctl stop shopgym-demo-teardown.timer)"
+if [[ -z "$ttl" || "$ttl" == "0" || "$ttl" == "never" ]]; then
+  teardown_note="auto-teardown DISABLED — runs until stopped (./deploy/teardown.sh)"
 else
-  nohup bash -c "sleep $((ttl*3600)); bash '$REPO_ROOT/deploy/teardown.sh'" >/dev/null 2>&1 &
-  echo $! > "$RUN_DIR/teardown.pid"
-  teardown_note="auto-teardown in ${ttl}h (fallback timer pid $(cat "$RUN_DIR/teardown.pid"))"
+  sudo systemctl reset-failed shopgym-demo-teardown.service shopgym-demo-teardown.timer 2>/dev/null || true
+  if sudo systemd-run --on-active="${ttl}h" --unit=shopgym-demo-teardown --collect \
+       /bin/bash "$REPO_ROOT/deploy/teardown.sh" >/dev/null 2>&1; then
+    teardown_note="auto-teardown in ${ttl}h (cancel: sudo systemctl stop shopgym-demo-teardown.timer)"
+  else
+    nohup bash -c "sleep $((ttl*3600)); bash '$REPO_ROOT/deploy/teardown.sh'" >/dev/null 2>&1 &
+    echo $! > "$RUN_DIR/teardown.pid"
+    teardown_note="auto-teardown in ${ttl}h (fallback timer pid $(cat "$RUN_DIR/teardown.pid"))"
+  fi
 fi
 
 # --- summary ------------------------------------------------------------------
