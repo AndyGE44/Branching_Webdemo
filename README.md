@@ -104,6 +104,27 @@ journalctl -u shopgym-demo-tunnel.service | grep trycloudflare   # the quick-tun
 > the node does — boot-start covers reboots, but the node itself is reclaimed when
 > the experiment ends, which also ends any tunnel/URL.
 
+#### Stable free URL via Tailscale Funnel (no domain)
+
+`none` mode pairs with **Tailscale Funnel** for a free, stable public URL
+(`https://<name>.<tailnet>.ts.net`) — no domain, just a free Tailscale login.
+Visitors need nothing installed and Basic Auth still applies. On the demo node:
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up --hostname=statefork-shopify-demo   # open the printed URL to approve the node
+sudo tailscale funnel --bg 8000                       # click the enable-Funnel link if prompted
+DEMO_TUNNEL_MODE=none sudo -E ./deploy/install-service.sh   # control plane only (no cloudflared)
+```
+
+One-time, in the Tailscale admin console: enable **HTTPS Certificates** (DNS
+settings) and approve **Funnel** for the node. The device's machine name is the
+URL host — rename it under **Machines** if you want a different name (the client
+`--hostname` only sets it on first join). Funnel persists in `tailscaled` (which
+starts on boot), so the URL is fixed across process, tunnel, and machine
+restarts. Set `DEMO_TUNNEL_MODE=none` in `.env` so a later plain
+`install-service.sh` re-run does not re-add the cloudflared tunnel.
+
 ### Fresh node: one-command deploy
 
 ```bash

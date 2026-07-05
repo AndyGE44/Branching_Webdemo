@@ -23,6 +23,10 @@
 #   none             — install only the control plane; expose it yourself
 #                      (e.g. Tailscale Funnel for a free stable *.ts.net URL,
 #                      or a firewalled direct IP:port).
+#
+# DEMO_TUNNEL_MODE may also be set in .env so a plain re-run keeps your choice
+# (a command-line value still overrides .env). See the Tailscale Funnel recipe
+# in the README for the stable free-URL setup.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -49,8 +53,9 @@ if [[ "${1:-}" == "--uninstall" ]]; then
   exit 0
 fi
 
-PORT="${DEMO_MAIN_PORT:-8000}"
-TUNNEL_MODE="${DEMO_TUNNEL_MODE:-quick}"
+# Command-line overrides win over .env — capture them before .env is sourced.
+_cli_tunnel_mode="${DEMO_TUNNEL_MODE:-}"
+_cli_port="${DEMO_MAIN_PORT:-}"
 
 # systemd starts services with no HOME, but run-shopgym-statefork.sh resolves the
 # sibling repos via $HOME (WAYPOINT_SRC/SHOPGYM_DIR default to $HOME/Andy_* etc.)
@@ -76,6 +81,13 @@ fi
 DEMO_AUTH_USER="${DEMO_AUTH_USER:-demo}"
 upsert_env DEMO_AUTH_USER "$DEMO_AUTH_USER"
 upsert_env DEMO_MAIN_HOST 127.0.0.1   # permanent path = tunnel only; never a raw public port
+
+# Resolve config with precedence: command-line env > .env > default. This lets
+# .env pin DEMO_TUNNEL_MODE=none (e.g. when a Tailscale Funnel / self-hosted URL
+# fronts the demo) so a plain re-run does NOT re-add the cloudflared tunnel,
+# while `DEMO_TUNNEL_MODE=named sudo -E ...` still overrides on the command line.
+PORT="${_cli_port:-${DEMO_MAIN_PORT:-8000}}"
+TUNNEL_MODE="${_cli_tunnel_mode:-${DEMO_TUNNEL_MODE:-quick}}"
 
 # --- free the decks (any manual run / old teardown timer / prior install) -----
 say "Clearing any existing run"
