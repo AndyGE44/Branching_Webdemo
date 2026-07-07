@@ -79,6 +79,11 @@ sudo ./deploy/install-service.sh --uninstall  # stop, disable, remove
 - `DEMO_TUNNEL_MODE` picks the URL: `quick` (default, ephemeral), `named`
   (stable Cloudflare hostname; set `CLOUDFLARE_TUNNEL_TOKEN`), or `none` (control
   plane only — front it with Tailscale Funnel or a firewalled IP:port).
+- It also runs `deploy/harden-ports.sh`, a boot-persistent nftables rule that
+  **drops non-loopback access to the internal storefront/mock-api ports**
+  (`8300-8350`, `:4000`) — they bind `0.0.0.0` with no auth, so this keeps them
+  off the node's public IP. Standalone: `sudo ./deploy/harden-ports.sh` (or
+  `--uninstall`). SSH, `:8000`, `:443`, NFS and Tailscale are untouched.
 - `./deploy/teardown.sh` stops the services now (they still return on boot until
   you `--uninstall`).
 
