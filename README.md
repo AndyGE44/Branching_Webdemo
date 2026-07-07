@@ -125,22 +125,6 @@ starts on boot), so the URL is fixed across process, tunnel, and machine
 restarts. Set `DEMO_TUNNEL_MODE=none` in `.env` so a later plain
 `install-service.sh` re-run does not re-add the cloudflared tunnel.
 
-#### Locking down the internal ports
-
-The storefront runtimes (`8300-8350`) and the shop mock-api (`:4000`) bind
-`0.0.0.0` and have no auth of their own — on a node with a public IP and no host
-firewall they are reachable directly, **bypassing Basic Auth**.
-`install-service.sh` runs `deploy/harden-ports.sh`, which installs a
-boot-persistent nftables rule that **drops all non-loopback access to those
-ports**, so the app stays reachable only via the control plane (`:8000`, behind
-the tunnel + Basic Auth). It leaves SSH, `:8000`, `:443`, NFS (`:111`) and
-Tailscale untouched. Run it standalone with `sudo ./deploy/harden-ports.sh` (or
-`--uninstall`); ports come from `.env` (`DEMO_BRANCH_PORT_START/END`, `DEMO_MOCK_API_PORT`).
-
-> Residual risk: the control plane runs as **root**, so the URL + password are
-> effectively the only gate — keep them private, and prefer a long random
-> `DEMO_AUTH_PASSWORD`.
-
 ### Fresh node: one-command deploy
 
 ```bash

@@ -48,7 +48,6 @@ if [[ "${1:-}" == "--uninstall" ]]; then
   systemctl disable --now "$CP_UNIT" 2>/dev/null || true
   rm -f "$UNIT_DIR/$CP_UNIT" "$UNIT_DIR/$TUN_UNIT" "$TUN_ENV"
   systemctl daemon-reload
-  bash "$REPO_ROOT/deploy/harden-ports.sh" --uninstall 2>/dev/null || true
   bash "$REPO_ROOT/deploy/teardown.sh" || true   # free ports, clear sessions
   echo ">> uninstalled."
   exit 0
@@ -175,14 +174,6 @@ if [[ -n "$TUN_EXEC" ]]; then
 else
   systemctl disable --now "$TUN_UNIT" 2>/dev/null || true
 fi
-
-# --- restrict internal ports to loopback (defense in depth) ------------------
-# The storefront + mock-api bind 0.0.0.0 with no auth of their own; keep them off
-# the node's public IP so the app is reachable only via the control plane.
-say "Restricting internal storefront/mock-api ports to loopback"
-bash "$REPO_ROOT/deploy/harden-ports.sh" >/dev/null \
-  && echo "    done (deploy/harden-ports.sh)" \
-  || echo "    WARN: port hardening skipped — run: sudo ./deploy/harden-ports.sh"
 
 # --- wait for readiness ------------------------------------------------------
 echo -n "    waiting for the control plane"
