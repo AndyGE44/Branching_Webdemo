@@ -16,6 +16,9 @@ dependencies = [
   "psutil>=7.0.0",
   "paramiko>=3.4",
   "uvicorn[standard]==0.35.0",
+  # Control-plane client for the external Dolt sql-server data tier
+  # (DEMO_SHOP_DB_BACKEND=dolt_server, architecture A). Only used when enabled.
+  "PyMySQL>=1.1",
 ]
 
 [project.optional-dependencies]

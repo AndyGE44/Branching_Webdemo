@@ -179,6 +179,46 @@ class StateForkBackend:
         # forked from this base without rebuilding the image.
         self.active_base_id: str | None = None
         self.operation_stats: dict[str, list[float]] = {"snapshot": [], "restore": []}
+        # Optional external Dolt data tier (architecture A). When set, the
+        # storefront's pricing/inventory lives outside the checkpoint and is
+        # versioned by Dolt branches in lockstep with the CRIU snapshot/restore
+        # below. None keeps the original in-checkpoint behaviour (zero change).
+        self.data_tier: Any | None = None
+
+    def set_data_tier(self, tier: Any, runtime_env: dict[str, str] | None = None) -> None:
+        """Attach an external data tier and inject its connection env into the
+        shop runtime (so the in-runtime mock API reaches the same Dolt db)."""
+        self.data_tier = tier
+        if runtime_env:
+            self.runtime_manager.env.update(runtime_env)
+
+    def _data_tier_snapshot(self, snapshot_id: str) -> None:
+        if self.data_tier is None:
+            return
+        try:
+            self.data_tier.on_snapshot(str(snapshot_id))
+        except Exception as error:
+            raise BranchError(
+                f"Dolt data-tier snapshot failed for {snapshot_id}: {error}"
+            ) from error
+
+    def _data_tier_restore(self, snapshot_id: str) -> None:
+        if self.data_tier is None:
+            return
+        try:
+            self.data_tier.on_restore(str(snapshot_id))
+        except Exception as error:
+            raise BranchError(
+                f"Dolt data-tier restore failed for {snapshot_id}: {error}"
+            ) from error
+
+    def _data_tier_cleanup(self) -> None:
+        if self.data_tier is None:
+            return
+        try:
+            self.data_tier.cleanup()
+        except Exception:
+            pass
 
     @classmethod
     def from_env(cls, app: AppSpec) -> "StateForkBackend":
@@ -245,6 +285,8 @@ class StateForkBackend:
             raise BranchError("StateFork snapshot failed")
         snapshot_id = str(snapshot_id)
         self._record_operation("snapshot", started_at)
+        # Pin the seeded catalog to a Dolt branch matching this base checkpoint.
+        self._data_tier_snapshot(snapshot_id)
 
         base = BaseHandle(
             id=f"sfbase-{snapshot_id}",
@@ -329,8 +371,11 @@ class StateForkBackend:
         started_at = time.time()
         with self._quiesce_branch(branch):
             snapshot_id = self._call_checkpoint_operation(manager.snapshot, failure_value=None)
-        if not snapshot_id:
-            raise BranchError("StateFork snapshot failed")
+            if not snapshot_id:
+                raise BranchError("StateFork snapshot failed")
+            # Version the external catalog data in lockstep with the CRIU dump,
+            # while the runtime is still quiesced (proxy answers 503).
+            self._data_tier_snapshot(snapshot_id)
         self._wait_until_ready(branch)
         self._record_operation("snapshot", started_at)
 
@@ -357,8 +402,11 @@ class StateForkBackend:
                 lambda: manager.restore(snapshot.id),
                 failure_value=False,
             )
-        if ok is False:
-            raise BranchError(f"StateFork restore failed for snapshot {snapshot.id}")
+            if ok is False:
+                raise BranchError(f"StateFork restore failed for snapshot {snapshot.id}")
+            # Roll the external catalog data back to the same snapshot's Dolt
+            # branch, paired with the CRIU restore (runtime still quiesced).
+            self._data_tier_restore(snapshot.id)
         self._record_operation("restore", started_at)
 
         branch.status = "running"
@@ -369,6 +417,8 @@ class StateForkBackend:
     def reset(self) -> dict[str, Any]:
         branch_count = len(self.branches)
         base_count = len(self.bases)
+        # Prune the per-snapshot Dolt branches for this workspace (best effort).
+        self._data_tier_cleanup()
         for branch in list(self.branches.values()):
             branch.status = "discarded"
             self._terminate(branch)

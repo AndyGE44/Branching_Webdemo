@@ -8,6 +8,8 @@ UI renders. Switching apps tears the old backend down and starts over.
 
 from __future__ import annotations
 
+import logging
+import os
 from typing import Any
 
 from agent_safe_demo.control_plane.app_registry import (
@@ -16,9 +18,22 @@ from agent_safe_demo.control_plane.app_registry import (
     list_app_specs,
     list_manifest_errors,
 )
-from agent_safe_demo.control_plane.statefork import StateForkBackend
+from agent_safe_demo.control_plane.catalog import (
+    CatalogStore,
+    products_json_for_app,
+    shopgym_dir_default,
+)
+from agent_safe_demo.control_plane.data_tier import DoltServerDataTier
+from agent_safe_demo.control_plane.statefork import BranchError, StateForkBackend
+
+logger = logging.getLogger("control_plane.Workspace")
 
 INITIAL_SNAPSHOT_LABEL = "Initial snapshot"
+
+# Storefront data-tier backend: "dolt_server" runs the pricing/inventory overlay
+# in an external Dolt sql-server (architecture A). Anything else (default) keeps
+# the original in-checkpoint behaviour with no Dolt dependency.
+DATA_BACKEND = os.getenv("DEMO_SHOP_DB_BACKEND", "").lower()
 
 
 class Workspace:
@@ -26,6 +41,111 @@ class Workspace:
         self.app = app or get_app_spec()
         self.backend = StateForkBackend.from_env(self.app)
         self._branch_id: str | None = None
+        # External Dolt data tier (architecture A). ``dolt_server`` is set by the
+        # FastAPI lifespan once the process is up; ``catalog``/``data_tier`` are
+        # (re)built per selected app by provision_data_tier().
+        self.dolt_server: Any | None = None
+        self.catalog: CatalogStore | None = None
+        self.data_tier: DoltServerDataTier | None = None
+
+    # ------------------------------------------------------------- data tier
+
+    def attach_dolt_server(self, server: Any) -> None:
+        """Called from the app lifespan once the shared dolt sql-server is up."""
+        self.dolt_server = server
+        self.provision_data_tier()
+
+    def provision_data_tier(self) -> None:
+        """(Re)build the external data tier for the currently selected shop:
+        ensure its database, seed the pristine catalog, pin a clean baseline, and
+        attach the tier + connection env to the active backend. Env-gated and
+        best-effort: any failure falls back to serving the baked JSON catalog."""
+        self.catalog = None
+        self.data_tier = None
+        if DATA_BACKEND != "dolt_server" or self.dolt_server is None:
+            return
+        db = self.app.id  # one Dolt database per shop
+        try:
+            self.dolt_server.ensure_database(db)
+            conn = self.dolt_server.conn_params(db)
+            catalog = CatalogStore(conn)
+            catalog.ensure_schema()
+            tier = DoltServerDataTier(
+                host=conn["host"],
+                port=conn["port"],
+                database=db,
+                user=conn["user"],
+                password=conn["password"],
+            )
+            if catalog.is_empty():
+                products = products_json_for_app(self.app.id, shopgym_dir_default())
+                catalog.seed_from_products_json(
+                    products, default_stock=int(os.getenv("DEMO_SHOP_SEED_STOCK", "25"))
+                )
+                tier.mark_clean()
+            else:
+                # Reusing an existing db: start this selection from pristine.
+                tier.reset_to_clean()
+            self.catalog = catalog
+            self.data_tier = tier
+            self.backend.set_data_tier(
+                tier,
+                runtime_env={
+                    "SHOP_DOLT_HOST": str(conn["host"]),
+                    "SHOP_DOLT_PORT": str(conn["port"]),
+                    "SHOP_DOLT_DB": db,
+                    "SHOP_DOLT_USER": str(conn["user"]),
+                    "SHOP_DOLT_PASSWORD": str(conn["password"]),
+                },
+            )
+            logger.info("storefront data tier attached for %s (db=%s)", self.app.id, db)
+        except Exception as error:  # dolt down, missing seed, etc.
+            logger.warning(
+                "data-tier provisioning failed for %s: %s; serving baked JSON only",
+                self.app.id,
+                error,
+            )
+            self.catalog = None
+            self.data_tier = None
+
+    def _require_catalog(self) -> CatalogStore:
+        if self.catalog is None:
+            raise BranchError(
+                "Catalog data tier is not enabled. Start the control plane with "
+                "DEMO_SHOP_DB_BACKEND=dolt_server (and `dolt` on PATH)."
+            )
+        return self.catalog
+
+    def catalog_list(self, search: str | None = None) -> dict[str, Any]:
+        catalog = self._require_catalog()
+        return {
+            "backend": DATA_BACKEND,
+            "database": self.app.id,
+            "variants": catalog.list_variants(search=search),
+            "changes": catalog.diff_vs_clean(),
+        }
+
+    def catalog_update(
+        self,
+        variant_id: str,
+        *,
+        price: float | None = None,
+        compare_at_price: float | None = None,
+        on_hand: int | None = None,
+    ) -> dict[str, Any]:
+        catalog = self._require_catalog()
+        try:
+            variant = catalog.update_variant(
+                variant_id,
+                price=price,
+                compare_at_price=compare_at_price,
+                on_hand=on_hand,
+            )
+        except KeyError as error:
+            raise BranchError(str(error)) from error
+        except ValueError as error:
+            raise BranchError(str(error)) from error
+        return {"variant": variant, "changes": catalog.diff_vs_clean()}
 
     # ------------------------------------------------------------- app selection
 
@@ -45,6 +165,8 @@ class Workspace:
         self._branch_id = None
         self.app = next_app
         self.backend = StateForkBackend.from_env(next_app)
+        # Point the data tier at the newly selected shop's database.
+        self.provision_data_tier()
         return {"cleanup": cleanup, **self.apps_payload()}
 
     # ------------------------------------------------------------ workspace state
@@ -91,6 +213,13 @@ class Workspace:
                 "current_snapshot_id": branch.get("current_snapshot_id"),
             },
             "branch": branch,
+            # Lets the UI show the catalog editor only when the external Dolt
+            # data tier is live for this shop.
+            "data_tier": {
+                "enabled": self.catalog is not None,
+                "backend": DATA_BACKEND or None,
+                "database": self.app.id if self.catalog is not None else None,
+            },
         }
 
     # ----------------------------------------------------------------- actions
@@ -109,4 +238,11 @@ class Workspace:
         """Tear down the base and branch; the next ensure() rebuilds from scratch."""
         cleanup = self.backend.reset()
         self._branch_id = None
+        # Roll the external catalog back to its pristine baseline so Reset clears
+        # data edits too (mirrors clearing the in-memory cart).
+        if self.data_tier is not None:
+            try:
+                self.data_tier.reset_to_clean()
+            except Exception as error:
+                logger.warning("catalog reset_to_clean failed: %s", error)
         return cleanup

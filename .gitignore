@@ -11,5 +11,10 @@ dist/
 .env.*
 !.env.example
 
+# Generated per-shop copies of the mock-api Dolt overlay (canonical source is
+# src/agent_safe_demo/app_plane/mock_api_overlay/; synced by the control plane
+# at startup or scripts/sync-mock-api-overlay.sh).
+src/agent_safe_demo/app_plane/shop_*/mock-api-overlay/
+
 # Unrelated sibling repo that happens to live in the working dir
 Andy_harbor/

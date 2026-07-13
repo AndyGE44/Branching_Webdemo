@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>State-Fork Control Panel</title>
-    <link rel="stylesheet" href="/static/styles.css?v=29" />
+    <link rel="stylesheet" href="/static/styles.css?v=30" />
   </head>
   <body>
     <div class="workspace">
@@ -55,6 +55,17 @@
           <button id="resetBtn" class="danger" type="button">Reset</button>
         </div>
 
+        <section class="rail-section" id="catalogSection" hidden>
+          <div class="panel-header">
+            <div>
+              <h2>Catalog data</h2>
+              <p class="muted">External Dolt · price &amp; inventory</p>
+            </div>
+            <button id="catalogBtn" type="button">Edit</button>
+          </div>
+          <p id="catalogSummary" class="muted">—</p>
+        </section>
+
         <section class="rail-section">
           <div class="panel-header">
             <div>
@@ -65,6 +76,30 @@
           <div id="checkpoints" class="branch-list"></div>
         </section>
       </aside>
+    </div>
+
+    <!-- Catalog editor: edit price/stock in the external Dolt working set. A
+         snapshot commits the edits to a Dolt branch; restore/reset rolls back. -->
+    <div id="catalogModal" class="cat-modal" hidden>
+      <div class="cat-panel" role="dialog" aria-modal="true" aria-label="Catalog editor">
+        <header class="cat-head">
+          <div class="cat-title">
+            <strong>Catalog — price &amp; inventory</strong>
+            <span class="muted">Edits land in the Dolt working set; the live storefront reflects them within ~1s. Snapshot to commit them to a branch.</span>
+          </div>
+          <input id="catSearch" class="cat-search" type="search" placeholder="Search products…" />
+          <button id="catalogClose" class="ai-close" type="button" title="Close" aria-label="Close">✕</button>
+        </header>
+        <div id="catalogChanges" class="cat-changes"></div>
+        <div class="cat-table-wrap">
+          <table class="cat-table">
+            <thead>
+              <tr><th>Product</th><th>Variant</th><th>Price</th><th>Compare-at</th><th>Stock</th><th>Live</th></tr>
+            </thead>
+            <tbody id="catalogRows"></tbody>
+          </table>
+        </div>
+      </div>
     </div>
 
     <!-- AI Pick: scripted chat that demos restore → fill cart → snapshot. -->
@@ -84,6 +119,6 @@
       </div>
     </div>
 
-    <script src="/static/app.js?v=36"></script>
+    <script src="/static/app.js?v=37"></script>
   </body>
 </html>

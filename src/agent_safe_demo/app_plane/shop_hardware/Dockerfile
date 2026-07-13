@@ -5,6 +5,19 @@ FROM localhost/shop-arena-mock-hardware:latest
 
 # Prebundle the mock Storefront API to plain JS so the API process is one plain
 # `node` (CRIU cannot checkpoint the tsx loader). See shop_clothing.
+# --- External Dolt price/inventory overlay (architecture A) -----------------
+# Layer the overlay source over the baked mock-api and install its DB client.
+# The overlay is inert unless SHOP_DOLT_* env is set at runtime (mysql2 is
+# imported lazily), so the default no-Dolt storefront is unchanged. The
+# mock-api-overlay/ dir is synced from the canonical app_plane/mock_api_overlay/
+# by the control plane at startup. mysql2 is pure-JS; install needs build-time
+# network (vendor it into mock-api-overlay/node_modules for offline builds).
+COPY mock-api-overlay/ /app/mock-api/src/
+RUN cd /app/mock-api \
+    && (npm install --no-save mysql2 \
+        || echo "WARN: mysql2 install failed; the Dolt overlay will be unavailable")
+# ---------------------------------------------------------------------------
+
 RUN /usr/local/lib/node_modules/tsx/node_modules/@esbuild/linux-x64/bin/esbuild \
         /app/mock-api/src/server.ts \
         --bundle --platform=node --format=cjs --packages=external \

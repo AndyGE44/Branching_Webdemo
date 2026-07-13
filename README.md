@@ -234,6 +234,23 @@ See each shop's `Dockerfile` + `statefork.yaml`:
 Adding a shop = adding a directory under `app_plane/` with a `Dockerfile` and a
 `statefork.yaml`; no control-plane code changes are needed.
 
+### Optional: Dolt-backed pricing & inventory (architecture A)
+
+By default all runtime state (including the cart) is captured *inside* the CRIU
+checkpoint. Optionally, the storefront's **pricing and inventory** can instead
+live *outside* the checkpoint in an external [Dolt](https://github.com/dolthub/dolt)
+database on the host, versioned by Dolt's own branches in lockstep with
+StateFork snapshot/restore/commit — "the web service runs inside Waypoint, the
+data tier lives outside." This turns the demo into a merchandising/pricing
+what-if: edit prices/stock in a **Catalog data** panel, preview on the live
+storefront, snapshot (commits to a Dolt branch), diff the exact row-level
+changes, then restore or commit.
+
+It is **opt-in** — set `DEMO_SHOP_DB_BACKEND=dolt_server` (with `dolt` reachable
+by the root control plane) — and off by default. See
+[`docs/storefront-dolt-backend.md`](docs/storefront-dolt-backend.md) for the
+architecture, env vars, and the demo flow.
+
 ## Host Prerequisites
 
 The shop containers need a few host-level things to be CRIU-checkpointable.

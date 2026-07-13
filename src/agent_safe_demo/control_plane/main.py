@@ -13,6 +13,8 @@ this origin. The heavy lifting lives in the sibling modules:
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -25,7 +27,9 @@ from agent_safe_demo.control_plane.auth import require_basic_auth
 from agent_safe_demo.control_plane.idle import ActivityTracker, run_idle_reset_monitor
 from agent_safe_demo.control_plane.proxy import clear_storefront_cookies, forward_to_branch
 from agent_safe_demo.control_plane.statefork import BranchError
-from agent_safe_demo.control_plane.workspace import Workspace
+from agent_safe_demo.control_plane.workspace import DATA_BACKEND, Workspace
+
+logger = logging.getLogger("control_plane.main")
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -42,8 +46,42 @@ activity = ActivityTracker()
 READ_ONLY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
+def _start_dolt_server():
+    """Start the shared external dolt sql-server when the storefront data tier
+    is enabled (DEMO_SHOP_DB_BACKEND=dolt_server). Best-effort: on any failure
+    the demo falls back to the baked JSON catalog with no data tier."""
+    if DATA_BACKEND != "dolt_server":
+        return None
+    try:
+        from agent_safe_demo.control_plane.dolt_server import DoltSqlServer
+
+        server = DoltSqlServer(
+            Path(os.getenv("DEMO_SHOP_DOLT_DIR", str(Path.home() / "demo_shop_dolt"))).expanduser(),
+            host=os.getenv("DEMO_SHOP_DOLT_HOST", "127.0.0.1"),
+            port=int(os.getenv("DEMO_SHOP_DOLT_PORT", "3306")),
+            dolt_bin=os.getenv("DEMO_DOLT_BIN", "dolt"),
+        )
+        server.start()
+        workspace.attach_dolt_server(server)
+        return server
+    except Exception as error:
+        logger.warning("dolt sql-server unavailable: %s; serving baked JSON catalog only", error)
+        return None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Ensure each shop build dir has the mock-api overlay source before any image
+    # is built (the Dockerfiles COPY it). Cheap + idempotent; runs always so the
+    # shops build identically whether or not the Dolt data tier is enabled.
+    try:
+        from agent_safe_demo.control_plane.overlay_sync import sync_shop_overlay_sources
+
+        sync_shop_overlay_sources()
+    except Exception as error:
+        logger.warning("mock-api overlay sync failed: %s", error)
+    # Bring up the external Dolt data tier (if enabled) before serving traffic.
+    dolt_server = _start_dolt_server()
     # Run the idle auto-reset loop for the life of the process.
     monitor = asyncio.create_task(run_idle_reset_monitor(workspace, activity))
     try:
@@ -54,6 +92,8 @@ async def lifespan(app: FastAPI):
             await monitor
         except asyncio.CancelledError:
             pass
+        if dolt_server is not None:
+            dolt_server.stop()
 
 
 app = FastAPI(
@@ -170,6 +210,41 @@ def reset_workspace(response: Response) -> dict:
 def backend_status() -> dict:
     """Diagnostics: backend method, totals, and measured snapshot/restore timings."""
     return workspace.backend.status()
+
+
+class CatalogUpdateRequest(BaseModel):
+    """A price/inventory edit against the external Dolt catalog (working set)."""
+
+    price: float | None = Field(default=None, ge=0)
+    compare_at_price: float | None = Field(default=None, ge=0)
+    on_hand: int | None = Field(default=None, ge=0)
+
+
+@app.get("/api/catalog")
+def get_catalog(search: str | None = None) -> dict:
+    """List the storefront's pricing/inventory (variant_state) plus the row-level
+    Dolt diff vs the pristine catalog. 400 if the data tier is not enabled."""
+    try:
+        return workspace.catalog_list(search=search)
+    except BranchError as error:
+        return branch_error_response(error)
+
+
+@app.post("/api/catalog/{variant_id}")
+def update_catalog(variant_id: str, payload: CatalogUpdateRequest) -> dict:
+    """Edit one variant's price/stock in the Dolt working set. A later snapshot
+    commits it to a Dolt branch; restore/reset rolls it back."""
+    try:
+        result = workspace.catalog_update(
+            variant_id,
+            price=payload.price,
+            compare_at_price=payload.compare_at_price,
+            on_hand=payload.on_hand,
+        )
+        activity.mark_dirty()  # a data edit diverges the workspace from clean
+        return result
+    except BranchError as error:
+        return branch_error_response(error)
 
 
 # The proxy routes accept every method and are not part of the JSON API, so

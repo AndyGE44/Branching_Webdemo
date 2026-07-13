@@ -13,11 +13,21 @@ const buildingTitle = document.querySelector("#buildingTitle");
 const buildingHint = document.querySelector("#buildingHint");
 const railHideBtn = document.querySelector("#railHide");
 const railShowBtn = document.querySelector("#railShow");
+const catalogSection = document.querySelector("#catalogSection");
+const catalogSummary = document.querySelector("#catalogSummary");
+const catalogBtn = document.querySelector("#catalogBtn");
+const catalogModal = document.querySelector("#catalogModal");
+const catalogClose = document.querySelector("#catalogClose");
+const catalogRows = document.querySelector("#catalogRows");
+const catalogChanges = document.querySelector("#catalogChanges");
+const catSearch = document.querySelector("#catSearch");
 
 let apps = [];
 let currentAppId = null;
 let workspace = null;
 let buildingTimer = null;
+let catalogEnabled = false;
+let catSearchTimer = null;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -196,6 +206,7 @@ async function refreshWorkspace({ skipFrame = false } = {}) {
   currentAppId = data.app.id;
   renderApps({ apps, current_app_id: currentAppId });
   renderCheckpoints(data.branch);
+  updateCatalogSection(data.data_tier);
   // AI Pick navigates the iframe to the cart itself, so it skips the frame reset.
   if (!skipFrame) {
     const url = data.workspace.runtime_ui_url;
@@ -566,6 +577,148 @@ checkpointsEl.addEventListener("click", async (event) => {
     showResult(error.message, false);
     await refreshWorkspace();
   }
+});
+
+// ── Catalog editor ─────────────────────────────────────────────────────────
+// Edits price/stock in the external Dolt working set (architecture A). A
+// Snapshot commits them to a Dolt branch; Restore/Reset rolls them back. The
+// section is shown only when the Dolt data tier is live for the current shop.
+
+function updateCatalogSection(dataTier) {
+  catalogEnabled = Boolean(dataTier && dataTier.enabled);
+  catalogSection.hidden = !catalogEnabled;
+  if (!catalogEnabled) {
+    catalogModal.hidden = true;
+    return;
+  }
+  // Cheap summary probe (also refreshes the "N changes" line).
+  request("/api/catalog")
+    .then((data) => {
+      const n = (data.changes || []).length;
+      catalogSummary.textContent = n
+        ? `${data.variants.length} variants · ${n} edited vs clean`
+        : `${data.variants.length} variants · no edits yet`;
+    })
+    .catch(() => {
+      catalogSummary.textContent = "—";
+    });
+}
+
+function renderCatalogChanges(changes) {
+  if (!changes || !changes.length) {
+    catalogChanges.innerHTML = `<p class="muted">No edits yet. Change a price or stock below, then Snapshot to commit it to a Dolt branch.</p>`;
+    return;
+  }
+  const money = (v) => (v == null ? "—" : `$${Number(v).toFixed(2)}`);
+  const rows = changes
+    .map((c) => {
+      const bits = [];
+      if (c.price && c.price.from !== c.price.to) {
+        bits.push(`price ${money(c.price.from)} → <strong>${money(c.price.to)}</strong>`);
+      }
+      if (c.on_hand && c.on_hand.from !== c.on_hand.to) {
+        bits.push(`stock ${c.on_hand.from ?? "—"} → <strong>${c.on_hand.to ?? "—"}</strong>`);
+      }
+      const name = `${escapeHtml(c.product_title || "")}${c.variant_title ? " · " + escapeHtml(c.variant_title) : ""}`;
+      return `<li>${name} — ${bits.join(", ") || escapeHtml(c.diff_type || "changed")}</li>`;
+    })
+    .join("");
+  catalogChanges.innerHTML = `<strong>Changes vs clean catalog (${changes.length})</strong><ul>${rows}</ul>`;
+}
+
+function renderCatalogRows(variants) {
+  if (!variants || !variants.length) {
+    catalogRows.innerHTML = `<tr><td colspan="6" class="muted">No variants.</td></tr>`;
+    return;
+  }
+  catalogRows.innerHTML = variants
+    .map((v) => {
+      const cmp = v.compare_at_price == null ? "" : Number(v.compare_at_price).toFixed(2);
+      return `
+        <tr data-variant-id="${escapeHtml(v.variant_id)}">
+          <td>${escapeHtml(v.product_title || "")}</td>
+          <td>${escapeHtml(v.variant_title || "")}</td>
+          <td><input class="cat-price" type="number" min="0" step="0.01" value="${Number(v.price).toFixed(2)}" data-field="price" /></td>
+          <td><input class="cat-cmp" type="number" min="0" step="0.01" value="${cmp}" data-field="compare_at_price" placeholder="—" /></td>
+          <td><input class="cat-stock" type="number" min="0" step="1" value="${v.on_hand ?? 0}" data-field="on_hand" /></td>
+          <td>${v.available ? badge("in stock") : badge("sold out")}</td>
+        </tr>`;
+    })
+    .join("");
+}
+
+async function loadCatalog(search) {
+  const query = search ? `?search=${encodeURIComponent(search)}` : "";
+  const data = await request(`/api/catalog${query}`);
+  renderCatalogChanges(data.changes);
+  renderCatalogRows(data.variants);
+}
+
+async function openCatalog() {
+  catalogModal.hidden = false;
+  catSearch.value = "";
+  catalogRows.innerHTML = `<tr><td colspan="6" class="muted">Loading…</td></tr>`;
+  try {
+    await loadCatalog("");
+  } catch (error) {
+    catalogRows.innerHTML = `<tr><td colspan="6">${escapeHtml(error.message)}</td></tr>`;
+  }
+}
+
+function closeCatalog() {
+  catalogModal.hidden = true;
+}
+
+// Save one edited field for a variant, then refresh the change list + summary.
+async function saveVariantField(variantId, field, rawValue) {
+  const body = {};
+  const value = rawValue === "" ? null : Number(rawValue);
+  if (field === "compare_at_price" && value === null) {
+    return; // clearing compare-at is a no-op edit for the demo
+  }
+  body[field] = value;
+  const result = await request(`/api/catalog/${encodeURIComponent(variantId)}`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  renderCatalogChanges(result.changes);
+  showResult("Catalog updated");
+  // Reflect the "N changes" line in the rail and the availability badge.
+  updateCatalogSection(workspace && workspace.data_tier);
+  const row = catalogRows.querySelector(`tr[data-variant-id="${CSS.escape(variantId)}"]`);
+  if (row && result.variant) {
+    const badgeCell = row.lastElementChild;
+    badgeCell.innerHTML = result.variant.available ? badge("in stock") : badge("sold out");
+  }
+}
+
+catalogBtn.addEventListener("click", openCatalog);
+catalogClose.addEventListener("click", closeCatalog);
+catalogModal.addEventListener("click", (event) => {
+  if (event.target === catalogModal) {
+    closeCatalog();
+  }
+});
+
+// Commit an edit when a cell loses focus or Enter is pressed.
+catalogRows.addEventListener("change", async (event) => {
+  const input = event.target.closest("input[data-field]");
+  if (!input) {
+    return;
+  }
+  const row = input.closest("tr[data-variant-id]");
+  try {
+    await saveVariantField(row.dataset.variantId, input.dataset.field, input.value);
+  } catch (error) {
+    showResult(error.message, false);
+  }
+});
+
+catSearch.addEventListener("input", () => {
+  clearTimeout(catSearchTimer);
+  catSearchTimer = setTimeout(() => {
+    loadCatalog(catSearch.value.trim()).catch((error) => showResult(error.message, false));
+  }, 250);
 });
 
 // Collapse / expand the control rail to give the shop website the full screen.

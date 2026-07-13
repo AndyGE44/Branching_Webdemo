@@ -184,3 +184,23 @@ button.danger { color: var(--danger); border-color: #e3b8b8; }
   body.rail-collapsed .rail { display: grid; }
   .rail-show { display: none !important; }
 }
+
+/* ---- Catalog editor (external Dolt price/inventory, architecture A) ---- */
+.cat-modal { position: fixed; inset: 0; z-index: 55; display: flex; align-items: center; justify-content: center; background: rgba(16, 32, 51, 0.45); padding: 16px; }
+.cat-modal[hidden] { display: none; }
+.cat-panel { width: min(760px, 100%); max-height: min(86vh, 720px); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 18px 50px rgba(20, 49, 83, 0.28); display: flex; flex-direction: column; overflow: hidden; }
+.cat-head { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.cat-title { display: grid; line-height: 1.25; min-width: 0; }
+.cat-title .muted { font-size: 12px; margin: 0; }
+.cat-search { min-height: 32px; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; color: var(--ink); background: var(--surface); margin-left: auto; width: 180px; }
+.cat-changes { padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--surface); font-size: 12px; color: var(--ink); max-height: 140px; overflow-y: auto; }
+.cat-changes ul { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 3px; }
+.cat-changes strong { color: var(--accent-dark); }
+.cat-table-wrap { overflow: auto; }
+.cat-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cat-table th, .cat-table td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.cat-table thead th { position: sticky; top: 0; background: var(--soft); color: var(--accent-dark); font-weight: 800; z-index: 1; }
+.cat-table tbody tr:hover { background: var(--surface); }
+.cat-table input { width: 88px; min-height: 28px; border: 1px solid var(--line); border-radius: 6px; padding: 0 8px; color: var(--ink); background: #fff; font: inherit; }
+.cat-table input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+#catalogBtn { min-height: 30px; padding: 0 12px; }
