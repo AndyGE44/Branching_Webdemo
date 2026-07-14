@@ -223,3 +223,52 @@ def test_data_tier_snapshot_restore_roundtrip(dolt_server, tmp_path):
     assert summary["counts"]["variant_state"] == 2
 
     tier.cleanup()  # prunes sf_* branches; should not raise
+
+
+@requires_dolt
+def test_merge_into_working(dolt_server, tmp_path):
+    import pymysql
+
+    products = tmp_path / "products.json"
+    products.write_text(json.dumps(_SEED_PRODUCTS))
+    conn = dolt_server.conn_params("shop_test")
+    catalog = CatalogStore(conn)
+    catalog.ensure_schema()
+    catalog.seed_from_products_json(products, default_stock=25)
+    tier = DoltServerDataTier(host=conn["host"], port=conn["port"], database="shop_test")
+    tier.mark_clean()
+
+    # Two branches diverging from clean: sf_a edits price, sf_b edits stock.
+    c = pymysql.connect(autocommit=True, cursorclass=pymysql.cursors.DictCursor, **conn)
+    cur = c.cursor()
+
+    def run(sql):
+        cur.execute(sql)
+
+    run("CALL DOLT_BRANCH('sf_base','clean')")
+    run("CALL DOLT_BRANCH('sf_a','clean')")
+    run("CALL DOLT_CHECKOUT('sf_a')")
+    run("UPDATE variant_state SET price=5.00 WHERE variant_id='10000'")
+    run("CALL DOLT_COMMIT('-a','-m','a')")
+    run("CALL DOLT_CHECKOUT('main')")
+    run("CALL DOLT_BRANCH('sf_b','clean')")
+    run("CALL DOLT_CHECKOUT('sf_b')")
+    run("UPDATE variant_state SET on_hand=999 WHERE variant_id='10001'")
+    run("CALL DOLT_COMMIT('-a','-m','b')")
+    run("CALL DOLT_CHECKOUT('main')")
+
+    # Clean cell-level merge: both land.
+    assert tier.merge_into_working("base", ["a", "b"]) == []
+    items = {v["variant_id"]: v for v in catalog.list_variants()}
+    assert items["10000"]["price"] == 5.00 and items["10001"]["on_hand"] == 999
+
+    # Now make sf_b also edit 10000's price -> conflict on the same cell.
+    run("CALL DOLT_CHECKOUT('sf_b')")
+    run("UPDATE variant_state SET price=7.77 WHERE variant_id='10000'")
+    run("CALL DOLT_COMMIT('-a','-m','b2')")
+    run("CALL DOLT_CHECKOUT('main')")
+    conflicts = tier.merge_into_working("base", ["a", "b"])
+    assert "10000" in conflicts
+    # aborted + rolled back to base (clean) -> 10000 is the seed price again
+    assert {v["variant_id"]: v for v in catalog.list_variants()}["10000"]["price"] == 61.99
+    c.close()

@@ -125,6 +125,54 @@ class DoltServerDataTier:
         else:
             self.mark_clean()
 
+    def merge_into_working(self, base_ref: str, merge_refs: list[str]) -> list[str]:
+        """Reset the working branch to ``base_ref``'s snapshot branch, then
+        ``DOLT_MERGE`` each of ``merge_refs`` in turn (Dolt's cell-level 3-way
+        merge). Returns the list of conflicting ``variant_id``s (empty on a clean
+        merge). On conflict it aborts and rolls the working set back to
+        ``base_ref``, so the data stays consistent with the (restored) app base.
+
+        ``@@autocommit`` is disabled for the session so Dolt holds conflicts in
+        ``dolt_conflicts_*`` for inspection instead of erroring the statement.
+        """
+        import pymysql
+
+        base_branch = self.branch_name(base_ref)
+        conn = pymysql.connect(
+            host=self.host, port=self.port, user=self.user, password=self.password,
+            database=self.database, autocommit=True, cursorclass=pymysql.cursors.DictCursor,
+        )
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SET @@autocommit = 0")
+
+                def proc(sql, args=()):
+                    cur.execute(sql, args)
+                    rows = cur.fetchall()
+                    while cur.nextset():
+                        pass
+                    return rows
+
+                proc("CALL DOLT_CHECKOUT(%s)", (self.working_branch,))
+                proc("CALL DOLT_RESET('--hard', %s)", (base_branch,))
+                conn.commit()
+                for ref in merge_refs:
+                    result = proc("CALL DOLT_MERGE(%s)", (self.branch_name(ref),))
+                    conflicts = int((result[0].get("conflicts") if result else 0) or 0)
+                    if conflicts > 0:
+                        cur.execute(
+                            "SELECT our_variant_id AS vid FROM dolt_conflicts_variant_state"
+                        )
+                        ids = [str(r["vid"]) for r in cur.fetchall() if r.get("vid") is not None]
+                        proc("CALL DOLT_MERGE('--abort')")
+                        proc("CALL DOLT_RESET('--hard', %s)", (base_branch,))
+                        conn.commit()
+                        return ids or ["(unknown)"]
+                    conn.commit()
+            return []
+        finally:
+            conn.close()
+
     # ---- read-side summary / fingerprint -------------------------------- #
     def _tables(self) -> list[str]:
         return [

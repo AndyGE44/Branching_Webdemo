@@ -234,6 +234,25 @@ class Workspace:
         result = self.backend.restore_snapshot(branch_id, snapshot_id=snapshot_id)
         return {**result, "workspace": self.payload(result["branch"])["workspace"]}
 
+    def merge(self, a_id: str, b_id: str, app_base: str = "initial") -> dict[str, Any]:
+        """Merge two snapshots' catalog data into a new snapshot. ``app_base``
+        picks which app checkpoint the merged data runs on: 'initial' (default,
+        the clean Initial snapshot), 'a', or 'b'."""
+        branch = self.ensure()["branch"]
+        snap_ids = [s["id"] for s in branch["snapshots"]]
+        if a_id not in snap_ids or b_id not in snap_ids:
+            raise BranchError("Both snapshots must exist in the current workspace.")
+        if a_id == b_id:
+            raise BranchError("Pick two different snapshots to merge.")
+        if app_base == "a":
+            base_id = a_id
+        elif app_base == "b":
+            base_id = b_id
+        else:
+            base_id = snap_ids[0]  # the Initial snapshot
+        result = self.backend.merge_snapshots(branch["id"], a_id, b_id, base_id)
+        return {**result, "workspace": self.payload(result["branch"])["workspace"]}
+
     def reset(self) -> dict[str, Any]:
         """Tear down the base and branch; the next ensure() rebuilds from scratch."""
         cleanup = self.backend.reset()

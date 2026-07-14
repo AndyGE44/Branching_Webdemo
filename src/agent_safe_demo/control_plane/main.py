@@ -126,6 +126,13 @@ class RestoreRequest(BaseModel):
     snapshot_id: str
 
 
+class MergeRequest(BaseModel):
+    a: str
+    b: str
+    # Which app checkpoint the merged data runs on: "initial" | "a" | "b".
+    app_base: str = "initial"
+
+
 def branch_error_response(error: BranchError) -> JSONResponse:
     return JSONResponse({"detail": str(error)}, status_code=400)
 
@@ -184,6 +191,19 @@ def save_snapshot(payload: SnapshotRequest | None = None) -> dict:
 def restore_snapshot(payload: RestoreRequest) -> dict:
     try:
         result = workspace.restore(payload.snapshot_id)
+        activity.mark_dirty()
+        return result
+    except BranchError as error:
+        return branch_error_response(error)
+
+
+@app.post("/api/workspace/merge")
+def merge_snapshots(payload: MergeRequest) -> dict:
+    """Merge two snapshots' Dolt catalog data into a new snapshot, running on the
+    chosen app checkpoint (app_base: initial/a/b). 400 with the conflicting
+    variants if the two branches clash on the same cell."""
+    try:
+        result = workspace.merge(payload.a, payload.b, app_base=payload.app_base)
         activity.mark_dirty()
         return result
     except BranchError as error:

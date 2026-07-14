@@ -21,6 +21,11 @@ const catalogClose = document.querySelector("#catalogClose");
 const catalogRows = document.querySelector("#catalogRows");
 const catalogChanges = document.querySelector("#catalogChanges");
 const catSearch = document.querySelector("#catSearch");
+const mergeBox = document.querySelector("#mergeBox");
+const mergeA = document.querySelector("#mergeA");
+const mergeB = document.querySelector("#mergeB");
+const mergeBase = document.querySelector("#mergeBase");
+const mergeBtn = document.querySelector("#mergeBtn");
 
 let apps = [];
 let currentAppId = null;
@@ -207,6 +212,7 @@ async function refreshWorkspace({ skipFrame = false } = {}) {
   renderApps({ apps, current_app_id: currentAppId });
   renderCheckpoints(data.branch);
   updateCatalogSection(data.data_tier);
+  updateMergeBox(data.branch, data.data_tier);
   // AI Pick navigates the iframe to the cart itself, so it skips the frame reset.
   if (!skipFrame) {
     const url = data.workspace.runtime_ui_url;
@@ -719,6 +725,44 @@ catSearch.addEventListener("input", () => {
   catSearchTimer = setTimeout(() => {
     loadCatalog(catSearch.value.trim()).catch((error) => showResult(error.message, false));
   }, 250);
+});
+
+// ── Merge (Dolt data branches) ───────────────────────────────────────────────
+// Combine two snapshots' catalog data into a new snapshot. CRIU can't merge, so
+// you pick which app checkpoint the merged data runs on (Initial / A / B).
+function updateMergeBox(branch, dataTier) {
+  const enabled = Boolean(dataTier && dataTier.enabled);
+  const snaps = (branch && branch.snapshots) || [];
+  mergeBox.hidden = !(enabled && snaps.length >= 2);
+  if (mergeBox.hidden) return;
+  const options = snaps
+    .map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.label)}</option>`)
+    .join("");
+  const prevA = mergeA.value;
+  const prevB = mergeB.value;
+  mergeA.innerHTML = options;
+  mergeB.innerHTML = options;
+  const has = (id) => snaps.some((s) => s.id === id);
+  mergeA.value = has(prevA) ? prevA : (snaps[1] || snaps[0]).id;
+  mergeB.value = has(prevB) ? prevB : snaps[snaps.length - 1].id;
+}
+
+mergeBtn.addEventListener("click", async () => {
+  const a = mergeA.value;
+  const b = mergeB.value;
+  const app_base = mergeBase.value;
+  if (a === b) {
+    showResult("Pick two different snapshots", false);
+    return;
+  }
+  showBuilding("Merging…", "Combining the two snapshots' catalog data and snapshotting the result.");
+  runtimeFrame.removeAttribute("src");
+  await mutate("Snapshots merged", async () => {
+    await request("/api/workspace/merge", {
+      method: "POST",
+      body: JSON.stringify({ a, b, app_base }),
+    });
+  });
 });
 
 // Collapse / expand the control rail to give the shop website the full screen.

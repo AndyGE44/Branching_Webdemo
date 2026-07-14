@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>State-Fork Control Panel</title>
-    <link rel="stylesheet" href="/static/styles.css?v=30" />
+    <link rel="stylesheet" href="/static/styles.css?v=31" />
   </head>
   <body>
     <div class="workspace">
@@ -74,6 +74,24 @@
             </div>
           </div>
           <div id="checkpoints" class="branch-list"></div>
+          <div id="mergeBox" class="merge-box" hidden>
+            <div class="merge-title">Merge two snapshots <span class="muted">· Dolt data</span></div>
+            <div class="merge-row">
+              <select id="mergeA" title="Snapshot A"></select>
+              <span class="merge-plus">+</span>
+              <select id="mergeB" title="Snapshot B"></select>
+            </div>
+            <div class="merge-row">
+              <label class="merge-base">App base
+                <select id="mergeBase">
+                  <option value="initial">Initial (clean cart)</option>
+                  <option value="a">Snapshot A's app</option>
+                  <option value="b">Snapshot B's app</option>
+                </select>
+              </label>
+              <button id="mergeBtn" type="button">Merge</button>
+            </div>
+          </div>
         </section>
       </aside>
     </div>
@@ -119,6 +137,6 @@
       </div>
     </div>
 
-    <script src="/static/app.js?v=37"></script>
+    <script src="/static/app.js?v=38"></script>
   </body>
 </html>

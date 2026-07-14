@@ -204,3 +204,13 @@ button.danger { color: var(--danger); border-color: #e3b8b8; }
 .cat-table input { width: 88px; min-height: 28px; border: 1px solid var(--line); border-radius: 6px; padding: 0 8px; color: var(--ink); background: #fff; font: inherit; }
 .cat-table input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 #catalogBtn { min-height: 30px; padding: 0 12px; }
+
+/* ---- Merge two snapshots (Dolt data branches) ---- */
+.merge-box { margin-top: 10px; padding: 10px; border: 1px dashed var(--line); border-radius: 8px; background: var(--surface); display: grid; gap: 8px; }
+.merge-box[hidden] { display: none; }
+.merge-title { font-size: 12px; font-weight: 800; color: var(--accent-dark); }
+.merge-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.merge-plus { color: var(--muted); font-weight: 800; }
+.merge-box select { flex: 1 1 auto; min-width: 90px; min-height: 30px; border: 1px solid var(--line); border-radius: 6px; padding: 0 8px; background: #fff; color: var(--ink); font: inherit; }
+.merge-base { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); flex: 1 1 auto; }
+.merge-box #mergeBtn { min-height: 30px; padding: 0 14px; }

@@ -351,7 +351,9 @@ class StateForkBackend:
             self._refresh_status(branch)
         return [branch.to_dict() for branch in self.branches.values()]
 
-    def save_snapshot(self, branch_id: str, label: str | None = None) -> dict[str, Any]:
+    def save_snapshot(
+        self, branch_id: str, label: str | None = None, action: str = "manual"
+    ) -> dict[str, Any]:
         branch = self._require_branch(branch_id)
         if branch.status != "running":
             raise BranchError(f"Branch {branch_id} is not running")
@@ -382,7 +384,7 @@ class StateForkBackend:
         snapshot = SnapshotHandle(
             id=str(snapshot_id),
             label=label,
-            action="manual",
+            action=action,
             parent_id=branch.current_snapshot_id or branch.base_checkpoint_id,
         )
         branch.snapshots.append(snapshot)
@@ -413,6 +415,59 @@ class StateForkBackend:
         branch.current_snapshot_id = snapshot.id
         self._wait_until_ready(branch)
         return {"branch": branch.to_dict(), "snapshot": snapshot.to_dict(), "status": "restored"}
+
+    def merge_snapshots(
+        self,
+        branch_id: str,
+        a_id: str,
+        b_id: str,
+        app_base_id: str,
+        label: str | None = None,
+    ) -> dict[str, Any]:
+        """Combine two snapshots' Dolt catalog data into a NEW snapshot, running
+        on top of a chosen app checkpoint.
+
+        CRIU checkpoints cannot be merged, so ``app_base_id`` selects which
+        checkpoint's app/cart the merged data runs on (one of the two snapshots,
+        or the clean Initial snapshot). Flow: restore(app_base) [CRIU] -> merge
+        the two Dolt branches onto app_base's data -> snapshot the pair. A merge
+        conflict aborts the whole operation and leaves the workspace at the app
+        base (app + data consistent), reporting the conflicting variants.
+        """
+        if self.data_tier is None:
+            raise BranchError("Merge requires the external Dolt data tier.")
+        branch = self._require_branch(branch_id)
+        if branch.status != "running":
+            raise BranchError(f"Branch {branch_id} is not running")
+        a = self._require_snapshot(branch, a_id)
+        b = self._require_snapshot(branch, b_id)
+        base = self._require_snapshot(branch, app_base_id)
+        manager = self._require_manager(branch.base_id)
+
+        with self._quiesce_branch(branch):
+            # 1. restore the chosen app checkpoint (CRIU only; Dolt handled next)
+            ok = self._call_checkpoint_operation(
+                lambda: manager.restore(base.id), failure_value=False
+            )
+            if ok is False:
+                raise BranchError(f"Restore of app base {base.id} failed")
+            # 2. merge the two data branches onto the app base's data
+            conflicts = self.data_tier.merge_into_working(base.id, [a.id, b.id])
+        branch.current_snapshot_id = base.id
+        self._wait_until_ready(branch)
+        if conflicts:
+            raise BranchError(
+                "Merge conflict on variant(s): "
+                + ", ".join(conflicts)
+                + ". Workspace reset to the app base; per-variant conflict "
+                "resolution is not supported yet."
+            )
+        # 3. snapshot the merged pair (CRIU app base + committed merged data)
+        return self.save_snapshot(
+            branch_id,
+            label=label or f"merged {a_id[:6]} + {b_id[:6]}",
+            action="merge",
+        )
 
     def reset(self) -> dict[str, Any]:
         branch_count = len(self.branches)
