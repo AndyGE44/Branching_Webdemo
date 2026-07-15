@@ -6,6 +6,11 @@ of "the web app **and** its deployment", this script *is* the deployment story:
 a bare node → a working CRIU checkpoint/restore storefront, served the
 recommended way (tunnel + auth + auto-teardown).
 
+> **Not on CloudLab (e.g. an EC2 node)?** There is no `/proj` NFS to read
+> shopgym from, and the recommended public URL is different. Follow
+> [../docs/ec2-deploy.md](../docs/ec2-deploy.md) — rsync the shopgym archive in,
+> then Elastic IP + Route 53 + Caddy for a stable `https://` URL.
+
 ## What it does
 
 `deploy/deploy.sh` runs five steps (see the script for detail):
