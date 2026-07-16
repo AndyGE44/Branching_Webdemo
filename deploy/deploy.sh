@@ -68,9 +68,12 @@ clone_pin StateFork "$STATEFORK_URL" "$STATEFORK_REF"
 clone_pin waypoint  "$WAYPOINT_URL"  "$WAYPOINT_REF"
 
 local_ref="$(git -C "$REPO_ROOT" rev-parse HEAD)"
-if [[ "$local_ref" != "$WEBDEMO_REF" ]]; then
-  echo "    WARN: this repo is at ${local_ref:0:12}, pinned is ${WEBDEMO_REF:0:12}." >&2
-  echo "          checkout $WEBDEMO_REF if you want the exact verified build." >&2
+# Warn only when this checkout does NOT contain the verified commit. Being AHEAD
+# of it is the normal case (WEBDEMO_REF can never name the commit that sets it),
+# so a plain != check would warn on every deploy of main and train you to ignore it.
+if ! git -C "$REPO_ROOT" merge-base --is-ancestor "$WEBDEMO_REF" "$local_ref" 2>/dev/null; then
+  echo "    WARN: this checkout (${local_ref:0:12}) does not contain the last verified" >&2
+  echo "          commit ${WEBDEMO_REF:0:12}. Expect drift from the verified build." >&2
 fi
 
 # ---------------------------------------------------------------------------
