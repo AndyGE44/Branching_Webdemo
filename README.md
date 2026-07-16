@@ -117,6 +117,16 @@ sudo tailscale funnel --bg 8000                       # click the enable-Funnel 
 DEMO_TUNNEL_MODE=none sudo -E ./deploy/install-service.sh   # control plane only (no cloudflared)
 ```
 
+> **If `tailscale up` hangs with no auth URL** (reproducible on EC2: it stalls at
+> `RegisterReq` and prints nothing, even with a TTY), join with an **auth key**
+> instead — that path skips the AuthURL round-trip that stalls:
+> ```bash
+> printf '%s' 'tskey-auth-XXXX' | sudo tee /tmp/tskey >/dev/null && sudo chmod 600 /tmp/tskey
+> sudo tailscale up --auth-key=file:/tmp/tskey --hostname=statefork-shopify-demo
+> sudo shred -u /tmp/tskey
+> ```
+> See [`docs/ec2-deploy.md`](docs/ec2-deploy.md) for the full EC2 path.
+
 One-time, in the Tailscale admin console: enable **HTTPS Certificates** (DNS
 settings) and approve **Funnel** for the node. The device's machine name is the
 URL host — rename it under **Machines** if you want a different name (the client
