@@ -7,8 +7,8 @@
 #
 #   Prereqs on the fresh node:
 #     - You already cloned THIS repo and are running this script from it.
-#     - An ssh-agent with access to the private GitHub repos is forwarded
-#       (the script clones Andy_StateFork / Andy_Waypoint over SSH).
+#     - The sibling repos are reachable (they clone over the URLs in
+#       versions.env; forward an ssh-agent if those are SSH URLs / private).
 #     - sudo is available (CRIU/podman need root).
 #
 #   Usage:
@@ -64,8 +64,8 @@ clone_pin() { # name url ref
   git -C "$dir" checkout -q "$3" || die "checkout $3 in $1 failed"
   echo "    $1 @ $(git -C "$dir" rev-parse --short HEAD)"
 }
-clone_pin Andy_StateFork "$STATEFORK_URL" "$STATEFORK_REF"
-clone_pin Andy_Waypoint  "$WAYPOINT_URL"  "$WAYPOINT_REF"
+clone_pin StateFork "$STATEFORK_URL" "$STATEFORK_REF"
+clone_pin waypoint  "$WAYPOINT_URL"  "$WAYPOINT_REF"
 
 local_ref="$(git -C "$REPO_ROOT" rev-parse HEAD)"
 if [[ "$local_ref" != "$WEBDEMO_REF" ]]; then
@@ -92,7 +92,7 @@ if [[ ! -x .venv/bin/uvicorn ]]; then
 fi
 .venv/bin/pip install -q -e '.[dev]'
 
-( cd "$DEPLOY_WORKDIR/Andy_Waypoint" \
+( cd "$DEPLOY_WORKDIR/waypoint" \
     && go build -o waypoint ./cmd/waypoint \
     && go build -o bash_init ./cmd/bash-init )
 echo "    waypoint + bash_init built"

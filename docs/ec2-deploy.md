@@ -1,138 +1,147 @@
 # Deploy the shopgym StateFork demo on a fresh EC2 node
 
 `deploy/deploy.sh` was written for a CloudLab node in the same project (it reads
-the shopgym archive from `/proj` NFS). This runbook covers the **EC2** path: no
-`/proj` NFS, shopgym moved in over `rsync`, and a stable public URL via
-**Elastic IP + Route 53 + Caddy** (all AWS, plus a free auto-renewing Let's
-Encrypt cert).
+the shopgym archive from `/proj` NFS). This is the **EC2** path: no `/proj` NFS,
+shopgym copied in over the network, and a stable public URL via **Tailscale
+Funnel** — free, no domain, and **no inbound ports**.
 
-The viewer experience is identical to any other HTTPS option: a stable
-`https://demo.yourdomain.com` behind the demo's Basic Auth. The control plane
-runs as **root** (CRIU/podman need it), so it stays bound to `127.0.0.1` and
-Caddy is the only thing on a public port.
+Verified end-to-end on Ubuntu 24.04 (2026-07-16), including CRIU
+snapshot/restore and add-to-cart through the public URL.
+
+> **You do not need an Elastic IP or Route 53 for the URL.** Funnel dials *out*
+> to Tailscale, so the public hostname is independent of the box's IP. An
+> Elastic IP is only worth it if you want a stable address for your own SSH.
 
 ---
 
 ## 0. Provision the instance
 
-- **AMI/size:** Ubuntu 22.04 or 24.04, ≥ 8 GB RAM and ≥ 4 vCPU (e.g. `m6i.xlarge`
-  / `t3.xlarge`) — buildah + CRIU + the Node/Hydrogen build are not tiny.
-- **Disk:** ≥ 50 GB gp3 EBS (shopgym unzips to several GB and each shop image is
-  large).
-- **Elastic IP:** allocate one and **associate it** with the instance. This is
-  what makes the public IP survive stop/start/reboot, so the URL stays fixed.
-- **Security group (inbound):**
-  - `22/tcp` from your admin IP **and** from the CloudLab node's public IP (for
-    the rsync push in step 1).
-  - `80/tcp` + `443/tcp` from your audience (`0.0.0.0/0` for a public demo).
-    Port 80 is required for Caddy's ACME HTTP-01 challenge; 443 serves the demo.
-  - Nothing else — the app's `:8000` is never public (Caddy proxies to it over
-    localhost).
+- **AMI/size:** Ubuntu 24.04, ≥ 4 vCPU / ≥ 8 GB RAM (buildah + CRIU + the
+  Node/Hydrogen build are not tiny). 4 vCPU / 15 GB is comfortable.
+- **Disk:** ≥ 50 GB gp3. shopgym unzips to several GB and each shop image is large.
+- **Security group (inbound):** **SSH (22) only** — from your admin IP, plus the
+  IP of whichever machine will push the shopgym archive. Funnel needs **nothing**
+  inbound. Do not open 8000 or 8300: the shop runtime binds `0.0.0.0:8300`, so
+  the security group is what keeps it private.
 
-## 1. Move shopgym in with rsync (CloudLab → EC2)
+## 1. Copy shopgym onto the box (~3.2 GB)
 
 `restore.sh` rebuilds everything from the four zips, so only move those plus the
-two scripts (~3.2 GB) — not the redundant pre-extracted dirs.
+two scripts — not the pre-extracted dirs.
 
-Run **on the CloudLab node** (where shopgym lives). You need the EC2 SSH key
-here, and the EC2 security group must already allow SSH from this node:
+From a machine that has the archive (e.g. a CloudLab node):
 
 ```bash
 SRC=/proj/cuserverless-PG0/share/shopgym
-EC2=ubuntu@<elastic-ip>
-ssh -i ~/ec2-key.pem "$EC2" 'mkdir -p ~/shopgym-src'
-rsync -avhP -e "ssh -i ~/ec2-key.pem" \
+EC2=ubuntu@<ec2-ip>
+ssh "$EC2" 'mkdir -p ~/shopgym-src'
+rsync -avh --info=progress2 \
   "$SRC"/mock_clothing.zip "$SRC"/mock_cookware.zip "$SRC"/mock_hardware.zip \
   "$SRC"/shop_docker_images.zip "$SRC"/restore.sh "$SRC"/shopgym.sh \
   "$EC2":~/shopgym-src/
 ```
 
-`-P` makes it resumable — re-run the same command if the link drops and it picks
-up where it left off. (rsync is preinstalled on Ubuntu; if not, `sudo apt install
--y rsync` on the EC2 side first, or fall back to `scp`.)
+Re-run the same command to resume if the link drops. (An S3 bucket works too and
+is reusable for future nodes: `aws s3 cp` up, then pull down with an instance
+IAM role.)
 
-## 2. Deploy the app
+## 2. Build
 
-SSH in with **agent forwarding** (`-A`) so the deploy can clone the private
-`Alex-XJK/*` repos as you:
+All repos are public, so **no ssh-agent forwarding is needed**:
 
 ```bash
-ssh -A ubuntu@<elastic-ip>
+ssh ubuntu@<ec2-ip>
 chmod +x ~/shopgym-src/restore.sh ~/shopgym-src/shopgym.sh
-git clone git@github.com:AndyGE44/Branching_Webdemo.git
-cd Branching_Webdemo && git checkout main
-SHOPGYM_SRC=~/shopgym-src ./deploy/deploy.sh --no-launch
+git clone https://github.com/AndyGE44/Branching_Webdemo.git
+cd Branching_Webdemo
+SHOPGYM_SRC=$HOME/shopgym-src ./deploy/deploy.sh --no-launch
 ```
 
-`deploy.sh` installs host packages, clones + pins the sibling repos from
-`deploy/versions.env` (now **`Alex-XJK/StateFork@main`** and
-**`Alex-XJK/waypoint@feature/session-isolation`**), restores shopgym, and builds
-`waypoint`/`bash_init` + the baked shop images. `--no-launch` stops before
-serving so you can set up the URL first.
+That installs host packages, clones + pins the sibling repos per
+`deploy/versions.env` (into `~/StateFork` and `~/waypoint`), restores shopgym,
+builds `waypoint`/`bash_init`, and bakes the product images. Takes ~10–15 min.
 
-> **This is the acceptance test.** Alex's forks have not been run with the
-> webdemo before. If it fails at the build or first checkpoint, the likely cause
-> is StateFork API drift — fall back to the known-good Andy pins (kept in the
-> comments in `deploy/versions.env`: `Andy_StateFork@d9f36b0`,
-> `Andy_Waypoint@b3ff442`) and re-run.
-
-## 3. Fixed URL — Route 53 + Caddy
-
-**Route 53:** create/confirm a hosted zone for `yourdomain.com`, then add an
-**A record** `demo.yourdomain.com → <Elastic IP>`. Wait for it to resolve
-(`dig +short demo.yourdomain.com` should return the Elastic IP) before the next
-step, or Caddy's certificate request will fail and retry.
-
-**Caddy** (installs the official apt repo, then Caddy):
+## 3. Run it (localhost + systemd)
 
 ```bash
-sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
-  | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
-  | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-sudo apt update && sudo apt install -y caddy
-```
-
-Set `/etc/caddy/Caddyfile` to:
-
-```
-demo.yourdomain.com {
-    reverse_proxy 127.0.0.1:8000
-}
-```
-
-```bash
-sudo systemctl restart caddy   # auto-provisions + auto-renews the Let's Encrypt cert
-```
-
-## 4. Run the demo permanently (localhost + Caddy, no tunnel)
-
-```bash
-cd ~/Branching_Webdemo
 sudo DEMO_TUNNEL_MODE=none ./deploy/install-service.sh
+grep -E '^DEMO_AUTH_(USER|PASSWORD)=' .env      # your login
 ```
 
-`DEMO_TUNNEL_MODE=none` installs only the control plane (bound to `127.0.0.1:8000`,
-Basic Auth on, idle auto-reset), with **no cloudflared** — Caddy is your front
-door. The services start on boot and restart on crash. Grab the generated login:
+`DEMO_TUNNEL_MODE=none` installs only the control plane — bound to
+`127.0.0.1:8000`, Basic Auth on, idle auto-reset, started on boot, restarted on
+crash. No cloudflared. Funnel becomes the front door next.
+
+## 4. Public URL — Tailscale Funnel
 
 ```bash
-grep -E '^DEMO_AUTH_(USER|PASSWORD)=' ~/Branching_Webdemo/.env
+curl -fsSL https://tailscale.com/install.sh | sh
 ```
+
+**Join with an auth key — not the interactive login.** Generate a key in the
+Tailscale admin console (*Settings → Keys → Generate auth key*), then:
+
+```bash
+printf '%s' 'tskey-auth-XXXX' | sudo tee /tmp/tskey >/dev/null && sudo chmod 600 /tmp/tskey
+sudo tailscale up --auth-key=file:/tmp/tskey --hostname=statefork-shopify-demo
+sudo shred -u /tmp/tskey
+sudo tailscale funnel --bg 8000
+```
+
+`--auth-key=file:` keeps the key out of the process list. Revoke the key in the
+console afterwards.
+
+> **Why not `sudo tailscale up` interactively?** On EC2 it hangs: it sends
+> `RegisterReq`, logs `controlhttp: forcing port 443 dial due to recent noise
+> dial`, and never prints an auth URL (silent, even with a forced TTY).
+> Outbound to Tailscale is fine (`/key` 200, `/ts2021` 400, DERP 200) — the
+> auth-key path simply skips the AuthURL round-trip that stalls. Don't burn time
+> debugging it.
+
+One-time in the admin console: enable **HTTPS Certificates** (DNS settings) and
+allow **Funnel** for the node (`tailscale funnel` errors with a link if not).
+
+Your URL is the machine name: `https://<machine>.<tailnet>.ts.net`. If that name
+is already held by an old (even offline) node, Tailscale silently appends `-1` —
+delete the stale machine and rename *before* sharing the link, since renaming
+changes the URL.
 
 ## 5. Verify
 
 ```bash
-dig +short demo.yourdomain.com          # -> your Elastic IP
-curl -sI https://demo.yourdomain.com     # HTTP/2 401 + valid cert = working (401 = Basic Auth)
+sudo tailscale status                                  # Online, shows the DNS name
+curl -sI https://<machine>.<tailnet>.ts.net/           # 401 = Basic Auth = working
 ```
 
-Then open `https://demo.yourdomain.com` and log in with the values from step 4.
+**Funnel's public DNS record can take well over 5 minutes to publish.** Don't
+conclude it's broken early — query the authoritative server (`dig <name>
+@ns1.dnsimple.com`) rather than a local resolver, which negative-caches misses
+for 300s (the ts.net SOA minimum TTL).
 
-## Ops
+Then open the URL, log in, and **add something to the cart**. That exercises the
+write path (Hydrogen action → mock Storefront API); a plain page load does not,
+and the two fail independently.
 
-- **Logs:** `journalctl -u shopgym-demo.service -f` (app), `journalctl -u caddy -f` (TLS/proxy).
-- **Stop now:** `./deploy/teardown.sh` (services still return on boot until you `--uninstall`).
-- **Remove:** `sudo ./deploy/install-service.sh --uninstall`.
-- **Move to different repo versions:** edit `deploy/versions.env`, re-run `deploy.sh`.
+## Troubleshooting
+
+- **Shop logs.** The shop runs under `chroot` with an isolated PID namespace but
+  a *shared* mount namespace, so its `/tmp/sf-<id>-runtime.log` is **not** the
+  host's `/tmp`. Read it through the process's own root, and expand the glob as
+  root or it silently resolves to nothing:
+  ```bash
+  PID=$(pgrep -f 'node server.mjs' | head -1)
+  sudo sh -c "cat /proc/$PID/root/tmp/sf-*.log"     # Hydrogen stack traces
+  ```
+  The `shell_*.log` under the Waypoint session dir is only bash_init chatter.
+- **Everything loads but writes 500.** That is React Router's action guard
+  comparing `x-forwarded-host` against `Origin`. `control_plane/proxy.py` strips
+  that header for exactly this reason; if you front the demo with something new
+  that injects other `X-Forwarded-*` headers, look there first.
+- **`deploy.sh` can't find shopgym.** `SHOPGYM_SRC` must be set in the
+  environment when the script runs — `deploy.sh` *sources* `versions.env`, which
+  defines it as `${SHOPGYM_SRC:-...}` so your value wins.
+- **Ports.** `ss -tlnp | grep -E ':4000|:8300'` — the mock Storefront API (4000)
+  and the shop (8300) live in the **host** network namespace, so a leaked
+  process from a previous run can squat those ports.
+- **Logs:** `journalctl -u shopgym-demo.service -f`.
+- **Stop / remove:** `./deploy/teardown.sh` / `sudo ./deploy/install-service.sh --uninstall`.

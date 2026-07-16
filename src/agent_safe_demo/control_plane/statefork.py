@@ -184,7 +184,7 @@ class StateForkBackend:
     def from_env(cls, app: AppSpec) -> "StateForkBackend":
         """Build a backend from the DEMO_* environment (see the launchers)."""
         statefork_root = Path(
-            os.getenv("DEMO_STATEFORK_ROOT", str(REPO_ROOT.parent / "Andy_StateFork"))
+            os.getenv("DEMO_STATEFORK_ROOT", str(REPO_ROOT.parent / "StateFork"))
         )
         kwargs = json.loads(os.getenv("DEMO_STATEFORK_KWARGS", "{}"))
         if "build" not in kwargs and "DEMO_STATEFORK_BUILD" in os.environ:

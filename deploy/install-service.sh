@@ -58,7 +58,7 @@ _cli_tunnel_mode="${DEMO_TUNNEL_MODE:-}"
 _cli_port="${DEMO_MAIN_PORT:-}"
 
 # systemd starts services with no HOME, but run-shopgym-statefork.sh resolves the
-# sibling repos via $HOME (WAYPOINT_SRC/SHOPGYM_DIR default to $HOME/Andy_* etc.)
+# sibling repos via $HOME (WAYPOINT_SRC/SHOPGYM_DIR default to $HOME/waypoint etc.)
 # and runs under `set -u`. Pin HOME to the invoking user's home (the repos live
 # there as siblings of this repo); fall back to the repo's parent directory.
 DEMO_HOME="$(getent passwd "${SUDO_USER:-root}" 2>/dev/null | cut -d: -f6)"
