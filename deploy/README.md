@@ -6,14 +6,20 @@ of "the web app **and** its deployment", this script *is* the deployment story:
 a bare node → a working CRIU checkpoint/restore storefront, served the
 recommended way (tunnel + auth + auto-teardown).
 
+> **Not on CloudLab (e.g. an EC2 node)?** There is no `/proj` NFS to read
+> shopgym from. Follow [../docs/ec2-deploy.md](../docs/ec2-deploy.md) — copy the
+> shopgym archive in (rsync/S3), then **Tailscale Funnel** for a stable free
+> `https://` URL with no inbound ports and no domain.
+
 ## What it does
 
 `deploy/deploy.sh` runs five steps (see the script for detail):
 
 1. Install host packages — `podman buildah criu golang-go python3-venv …`.
 2. Clone + **pin** the sibling repos to the exact verified commits
-   (`deploy/versions.env`): `Andy_StateFork`, `Andy_Waypoint` (the branch with the
-   Node-friendly CRIU dump flags). It does **not** touch `Andy_harbor` (unrelated).
+   (`deploy/versions.env`): `StateFork` and `waypoint` (the ref carrying the
+   Node-friendly CRIU dump flags). Both are public and clone over HTTPS — no
+   ssh-agent needed. It does **not** touch the harbor repo (unrelated).
 3. Copy the shopgym archive from NFS → `~/shopgym` and run `~/shopgym/restore.sh`
    (unzips mock data + shop image tarballs).
 4. Build artifacts — the Python venv, `waypoint` + `bash_init`, and bake product
@@ -23,10 +29,10 @@ recommended way (tunnel + auth + auto-teardown).
 
 ## Usage
 
-On the fresh node, with an ssh-agent forwarded that can read the private repos:
+On the fresh node (all repos are public — no ssh-agent needed):
 
 ```bash
-git clone git@github.com:AndyGE44/Branching_Webdemo.git
+git clone https://github.com/AndyGE44/Branching_Webdemo.git
 cd Branching_Webdemo
 ./deploy/deploy.sh                 # provision + build + serve publicly
 # or: ./deploy/deploy.sh --no-launch   # stop after building
@@ -98,6 +104,6 @@ To move the demo to a different commit, edit those values. Overrides:
 ## Notes
 
 - Needs `sudo` (CRIU and podman run as root).
-- The sibling-repo clone uses SSH; forward your ssh-agent or pre-clone the repos.
+- The sibling repos are public and clone over HTTPS — no ssh-agent required.
 - This replaces the older NFS `bootstrap-vm.sh` for demo bring-up: it is versioned
-  with the code, pins exact commits, and skips the Claude-state/`Andy_harbor` steps.
+  with the code, pins exact commits, and skips the Claude-state/harbor steps.

@@ -67,6 +67,12 @@ def _proxy_headers(request: Request, branch: dict) -> dict[str, str]:
         "content-length",
         "accept-encoding",
         "connection",
+        # A fronting proxy (Tailscale Funnel, some CDN tunnels) adds
+        # X-Forwarded-Host: <public host>. React Router's action guard compares
+        # that against Origin — which we realign to the runtime just below — so
+        # it can never match and every action POST (add-to-cart) 500s. Strip it
+        # and the guard falls back to Host, which does match.
+        "x-forwarded-host",
         # We proxy to branch.url, so urllib sends Host=<branch host>. React
         # Router's single-fetch action guard rejects a POST whose Origin host
         # != Host, which breaks add-to-cart through the control-plane origin —

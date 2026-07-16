@@ -117,6 +117,16 @@ sudo tailscale funnel --bg 8000                       # click the enable-Funnel 
 DEMO_TUNNEL_MODE=none sudo -E ./deploy/install-service.sh   # control plane only (no cloudflared)
 ```
 
+> **If `tailscale up` hangs with no auth URL** (reproducible on EC2: it stalls at
+> `RegisterReq` and prints nothing, even with a TTY), join with an **auth key**
+> instead — that path skips the AuthURL round-trip that stalls:
+> ```bash
+> printf '%s' 'tskey-auth-XXXX' | sudo tee /tmp/tskey >/dev/null && sudo chmod 600 /tmp/tskey
+> sudo tailscale up --auth-key=file:/tmp/tskey --hostname=statefork-shopify-demo
+> sudo shred -u /tmp/tskey
+> ```
+> See [`docs/ec2-deploy.md`](docs/ec2-deploy.md) for the full EC2 path.
+
 One-time, in the Tailscale admin console: enable **HTTPS Certificates** (DNS
 settings) and approve **Funnel** for the node. The device's machine name is the
 URL host — rename it under **Machines** if you want a different name (the client
@@ -139,7 +149,7 @@ versions are pinned.
 ### Quick test: local launcher
 
 Use this only for local testing on an already-provisioned node (venv +
-`~/Andy_StateFork` + `~/Andy_Waypoint` + `~/shopgym` present):
+`~/StateFork` + `~/waypoint` + `~/shopgym` present):
 
 ```bash
 cd ~/Branching_Webdemo
@@ -265,7 +275,7 @@ they describe what the node must provide:
   `~/shopgym/restore.sh` (unzips `shop_docker_images.zip` to
   `~/shopgym/docker-images/*.tar.gz`); the launcher then `sudo podman load`s them.
 - **Waypoint built with the Node-friendly CRIU dump flags `--force-irmap` and
-  `--link-remap`** (in `Andy_Waypoint/pkg/waypoint/memory.go`), plus the
+  `--link-remap`** (in `waypoint/pkg/waypoint/memory.go`), plus the
   `bash_init` helper that Waypoint launches inside each built container. The
   launcher builds both and points StateFork at them via `WAYPOINT_BIN` /
   `WAYPOINT_BASH_INIT_SRC`. Without those flags CRIU cannot dump the shop's
@@ -289,10 +299,13 @@ rebuild the workspace (Reset in the UI) to pick them up.
 
 ### Related repos and data
 
-- `Andy_StateFork` — the StateFork controller (`DEMO_STATEFORK_ROOT` /
-  `DEMO_STATEFORK_CWD` point here).
-- `Andy_Waypoint` — the Waypoint CRIU backend, on the branch carrying the
-  Node-friendly dump flags (`--force-irmap`, `--link-remap`).
+- `StateFork` — the StateFork controller (`DEMO_STATEFORK_ROOT` /
+  `DEMO_STATEFORK_CWD` point here). Cloned from `Alex-XJK/StateFork`.
+- `waypoint` — the Waypoint CRIU backend, on the ref carrying the Node-friendly
+  dump flags (`--force-irmap`, `--link-remap`). Cloned from `Alex-XJK/waypoint`.
+  The directory names are owner-neutral on purpose: the previous `Andy_*` names
+  encoded the fork owner and went stale when the active fork moved. Exact URLs
+  and pinned SHAs live in [`deploy/versions.env`](deploy/versions.env).
 - `~/shopgym` — the data/image archive: `restore.sh`, `shop_docker_images.zip`,
   and the `mock_*` product-image zips.
 
@@ -383,9 +396,9 @@ equivalent for when you need to deviate from it.
 Assumptions:
 
 - You can `ssh sf-exp` and have `sudo` on the VM.
-- Your GitHub SSH key can access the private repos.
-- `Andy_StateFork` and `Andy_Waypoint` are available (or cloneable) under
-  `/users/alexxjk`, and the `~/shopgym` data/image archive is present.
+- `StateFork` and `waypoint` are available (or cloneable) under `$HOME`, and the
+  `~/shopgym` data/image archive is present. All repos are public — no GitHub
+  SSH key or agent forwarding needed.
 
 ### 1. Install System Packages
 
@@ -413,11 +426,12 @@ is not ready on that VM.
 
 ```bash
 cd ~
-git clone git@github.com:AndyGE44/Branching_Webdemo.git
+git clone https://github.com/AndyGE44/Branching_Webdemo.git
 
-cd /users/alexxjk
-git clone git@github.com:AndyGE44/Andy_StateFork.git
-git clone git@github.com:AndyGE44/Andy_Waypoint.git   # branch with the CRIU node-dump flags
+# Sibling repos (public; pinned SHAs live in deploy/versions.env)
+git clone https://github.com/Alex-XJK/StateFork.git
+git clone https://github.com/Alex-XJK/waypoint.git
+cd waypoint && git checkout feature/session-isolation   # the ref with the CRIU node-dump flags
 ```
 
 ### 3. Prepare The Python Environment
@@ -438,8 +452,8 @@ Waypoint checkout must already carry the Node-friendly CRIU dump flags
 refuses to start otherwise. Confirm both repos are on the expected branches:
 
 ```bash
-cd /users/alexxjk/Andy_StateFork && git pull --ff-only
-cd /users/alexxjk/Andy_Waypoint  && git pull --ff-only
+cd ~/StateFork && git pull --ff-only
+cd ~/waypoint  && git pull --ff-only
 ```
 
 ### 5. Restore The Shopgym Data And Bake Images

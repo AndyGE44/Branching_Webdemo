@@ -40,8 +40,8 @@ if [[ -f .env ]]; then
   unset _key _value _pre_env
 fi
 
-STATEFORK_ROOT="${DEMO_STATEFORK_ROOT:-$HOME/Andy_StateFork}"
-WAYPOINT_SRC="${WAYPOINT_SRC:-$HOME/Andy_Waypoint}"
+STATEFORK_ROOT="${DEMO_STATEFORK_ROOT:-$HOME/StateFork}"
+WAYPOINT_SRC="${WAYPOINT_SRC:-$HOME/waypoint}"
 SHOPGYM_DIR="${SHOPGYM_DIR:-$HOME/shopgym}"
 # Quick-test default: localhost only. Overriding to a public interface requires
 # Basic Auth (or an explicit unsafe opt-in) — see the guard below.
