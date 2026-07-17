@@ -44,6 +44,7 @@ disable.
 ```bash
 ./deploy/serve-public.sh            # prints the https URL + login
 DEMO_TTL_HOURS=8 ./deploy/serve-public.sh
+./deploy/status.sh                  # is a demo live? reprint its URL + login
 ./deploy/teardown.sh                # stop everything now (or wait for the timer)
 ```
 
@@ -490,6 +491,8 @@ Branching_Webdemo/
   repos + restore images + build + serve). See `deploy/README.md`.
 - `deploy/serve-public.sh` — **recommended start path**: localhost bind +
   Cloudflare tunnel + Basic Auth + auto-teardown. `deploy/teardown.sh` stops it.
+- `deploy/status.sh` — is a demo live right now? Reprints the access box (URL +
+  login + auto-teardown time) for any start mode; exits non-zero if it is down.
 - `scripts/run-shopgym-statefork.sh` — **quick test only**: clean slate, host
   prereqs, build Waypoint, load images, launch on `127.0.0.1:8000`.
 - `scripts/setup-shopgym-images.sh` — bake product images into the base images.
