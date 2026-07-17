@@ -91,6 +91,9 @@
               </label>
               <button id="mergeBtn" type="button">Merge</button>
             </div>
+            <!-- Filled by app.js when a merge returns 409: one card per
+                 conflicted variant with keep-A / keep-B / custom choices. -->
+            <div id="conflictPanel" class="conflict-panel" hidden></div>
           </div>
         </section>
       </aside>

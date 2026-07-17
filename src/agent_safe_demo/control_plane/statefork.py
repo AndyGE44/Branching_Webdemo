@@ -30,6 +30,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Iterator
 from urllib import request
@@ -49,6 +50,70 @@ _STATEFORK_LOCK = threading.RLock()
 
 class BranchError(RuntimeError):
     pass
+
+
+class MergeConflictError(BranchError):
+    """A data-tier merge hit cell-level conflicts the caller must decide on.
+
+    Carries the per-variant conflict payload (base / snapshot A / snapshot B
+    values, JSON-safe) so the API can return it for interactive resolution.
+    The workspace has already been reset to the chosen app base when raised.
+    """
+
+    def __init__(self, message: str, conflicts: list[dict], refs: dict[str, str]):
+        super().__init__(message)
+        self.conflicts = conflicts
+        self.refs = refs
+
+
+def _display_value(value: Any) -> Any:
+    """JSON-safe cell value (DECIMAL comes back as decimal.Decimal)."""
+    if isinstance(value, Decimal):
+        return format(value, "f")
+    return value
+
+
+def _merge_conflicts_for_ui(
+    conflicts: list[dict[str, Any]], a_id: str, b_id: str
+) -> list[dict[str, Any]]:
+    """Map the tier's ours/theirs conflict rows onto snapshot A/B for the UI.
+
+    A conflict arises while merging one branch ("theirs") into the working set
+    ("ours" — the app base plus any branch already merged), so exactly one of
+    A/B is the theirs side; the other side's values are the working set's.
+    Only fields where A and B actually differ are reported.
+    """
+    payload = []
+    for conflict in conflicts:
+        theirs_is_a = str(conflict.get("theirs_ref")) == str(a_id)
+        side_a = conflict["theirs"] if theirs_is_a else conflict["ours"]
+        side_b = conflict["ours"] if theirs_is_a else conflict["theirs"]
+        base = conflict.get("base") or {}
+        fields = {}
+        for column in side_a.keys() | side_b.keys():
+            if column == "variant_id":
+                continue
+            a_value = _display_value(side_a.get(column))
+            b_value = _display_value(side_b.get(column))
+            if a_value != b_value:
+                fields[column] = {
+                    "base": _display_value(base.get(column)),
+                    "a": a_value,
+                    "b": b_value,
+                }
+        titles = next(
+            (side for side in (conflict["ours"], conflict["theirs"], base) if side.get("product_title")),
+            base,
+        )
+        payload.append(
+            {
+                "variant_id": conflict["variant_id"],
+                "product_title": titles.get("product_title"),
+                "variant_title": titles.get("variant_title"),
+                "fields": fields,
+            }
+        )
+    return payload
 
 
 @dataclass
@@ -423,6 +488,7 @@ class StateForkBackend:
         b_id: str,
         app_base_id: str,
         label: str | None = None,
+        resolutions: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Combine two snapshots' Dolt catalog data into a NEW snapshot, running
         on top of a chosen app checkpoint.
@@ -430,9 +496,14 @@ class StateForkBackend:
         CRIU checkpoints cannot be merged, so ``app_base_id`` selects which
         checkpoint's app/cart the merged data runs on (one of the two snapshots,
         or the clean Initial snapshot). Flow: restore(app_base) [CRIU] -> merge
-        the two Dolt branches onto app_base's data -> snapshot the pair. A merge
-        conflict aborts the whole operation and leaves the workspace at the app
-        base (app + data consistent), reporting the conflicting variants.
+        the two Dolt branches onto app_base's data -> snapshot the pair.
+
+        Cell-level conflicts are resolved per variant via ``resolutions``
+        (variant_id -> ``{"take": <snapshot id>}`` or ``{"set": {field: value}}``,
+        see the data tier). Any conflict left unresolved aborts the whole merge,
+        leaves the workspace at the app base (app + data consistent), and raises
+        :class:`MergeConflictError` carrying base/A/B values per variant so the
+        UI can offer choices and retry.
         """
         if self.data_tier is None:
             raise BranchError("Merge requires the external Dolt data tier.")
@@ -452,20 +523,31 @@ class StateForkBackend:
             if ok is False:
                 raise BranchError(f"Restore of app base {base.id} failed")
             # 2. merge the two data branches onto the app base's data
-            conflicts = self.data_tier.merge_into_working(base.id, [a.id, b.id])
+            result = self.data_tier.merge_into_working(
+                base.id, [a.id, b.id], resolutions=resolutions
+            )
         branch.current_snapshot_id = base.id
         self._wait_until_ready(branch)
+        conflicts = result["conflicts"]
         if conflicts:
-            raise BranchError(
+            payload = _merge_conflicts_for_ui(conflicts, a.id, b.id)
+            raise MergeConflictError(
                 "Merge conflict on variant(s): "
-                + ", ".join(conflicts)
-                + ". Workspace reset to the app base; per-variant conflict "
-                "resolution is not supported yet."
+                + ", ".join(c["variant_id"] for c in payload)
+                + ". The workspace was reset to the app base; choose which side "
+                "to keep for each variant (or a custom value) and merge again.",
+                conflicts=payload,
+                refs={"a": a.id, "b": b.id, "app_base": base.id},
             )
         # 3. snapshot the merged pair (CRIU app base + committed merged data)
+        resolved = result.get("resolved") or []
+        default_label = f"merged {a_id[:6]} + {b_id[:6]}"
+        if resolved:
+            plural = "s" if len(resolved) != 1 else ""
+            default_label += f" ({len(resolved)} conflict{plural} resolved)"
         return self.save_snapshot(
             branch_id,
-            label=label or f"merged {a_id[:6]} + {b_id[:6]}",
+            label=label or default_label,
             action="merge",
         )
 

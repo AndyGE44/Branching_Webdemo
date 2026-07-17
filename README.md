@@ -509,6 +509,10 @@ Endpoints the control panel uses (all behind Basic Auth when enabled):
   `DEMO_MAX_SNAPSHOTS`, default 20 — each snapshot is a full CRIU dump on disk;
   Reset clears them)
 - `POST /api/workspace/restore` — restore a snapshot
+- `POST /api/workspace/merge` — combine two snapshots' Dolt catalog data into a
+  new snapshot (Dolt data tier only). A same-cell clash returns 409 with
+  per-variant base/A/B values; re-POST with `resolutions`
+  (`variant_id -> "a" | "b" | {field: value}`) to settle each conflict.
 - `POST /api/workspace/reset` — tear down and rebuild from scratch
 - `GET /api/backend` — diagnostics: backend method, totals, snapshot/restore timings
 - `/runtime/*` — reverse proxy to the embedded storefront

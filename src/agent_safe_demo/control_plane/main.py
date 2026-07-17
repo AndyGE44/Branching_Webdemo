@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 from agent_safe_demo.control_plane.auth import require_basic_auth
 from agent_safe_demo.control_plane.idle import ActivityTracker, run_idle_reset_monitor
 from agent_safe_demo.control_plane.proxy import clear_storefront_cookies, forward_to_branch
-from agent_safe_demo.control_plane.statefork import BranchError
+from agent_safe_demo.control_plane.statefork import BranchError, MergeConflictError
 from agent_safe_demo.control_plane.workspace import DATA_BACKEND, Workspace
 
 logger = logging.getLogger("control_plane.main")
@@ -131,6 +131,9 @@ class MergeRequest(BaseModel):
     b: str
     # Which app checkpoint the merged data runs on: "initial" | "a" | "b".
     app_base: str = "initial"
+    # Conflict resolutions from the UI: variant_id -> "a" | "b" | {field: value}.
+    # Omitted on the first attempt; a 409 response lists the conflicts to resolve.
+    resolutions: dict[str, str | dict[str, float | int | str | None]] | None = None
 
 
 def branch_error_response(error: BranchError) -> JSONResponse:
@@ -200,12 +203,29 @@ def restore_snapshot(payload: RestoreRequest) -> dict:
 @app.post("/api/workspace/merge")
 def merge_snapshots(payload: MergeRequest) -> dict:
     """Merge two snapshots' Dolt catalog data into a new snapshot, running on the
-    chosen app checkpoint (app_base: initial/a/b). 400 with the conflicting
-    variants if the two branches clash on the same cell."""
+    chosen app checkpoint (app_base: initial/a/b). If the two branches clash on
+    the same cell, responds 409 with per-variant base/A/B values; re-POST with
+    ``resolutions`` (variant_id -> "a" | "b" | {field: value}) to settle each
+    conflict and complete the merge."""
     try:
-        result = workspace.merge(payload.a, payload.b, app_base=payload.app_base)
+        result = workspace.merge(
+            payload.a, payload.b, app_base=payload.app_base, resolutions=payload.resolutions
+        )
         activity.mark_dirty()
         return result
+    except MergeConflictError as error:
+        # The workspace was CRIU-restored to the app base — that is real
+        # movement even though the merge itself did not land.
+        activity.mark_dirty()
+        return JSONResponse(
+            {
+                "detail": str(error),
+                "status": "conflict",
+                "refs": error.refs,
+                "conflicts": error.conflicts,
+            },
+            status_code=409,
+        )
     except BranchError as error:
         return branch_error_response(error)
 

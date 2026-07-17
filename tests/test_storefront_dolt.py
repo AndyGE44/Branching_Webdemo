@@ -27,7 +27,7 @@ from agent_safe_demo.control_plane.catalog import (
     products_json_for_app,
 )
 from agent_safe_demo.control_plane.data_tier import DoltServerDataTier
-from agent_safe_demo.control_plane.statefork import StateForkBackend
+from agent_safe_demo.control_plane.statefork import StateForkBackend, _merge_conflicts_for_ui
 from agent_safe_demo.control_plane.workspace import Workspace
 
 DOLT = shutil.which("dolt")
@@ -75,6 +75,34 @@ def test_coerce_variant_types():
 def test_dolt_branch_name():
     tier = DoltServerDataTier(database="shop_clothing")
     assert tier.branch_name("abc123") == "sf_abc123"
+
+
+def test_merge_conflicts_for_ui_maps_sides_to_snapshots():
+    """ours/theirs depend on merge order; the UI payload is always A/B."""
+    from decimal import Decimal
+
+    conflict = {
+        "variant_id": "10000",
+        "theirs_ref": "b",
+        "base": {"variant_id": "10000", "product_title": "Hoodie", "variant_title": "XS",
+                 "price": Decimal("61.99"), "on_hand": 25},
+        "ours": {"variant_id": "10000", "product_title": "Hoodie", "variant_title": "XS",
+                 "price": Decimal("5.00"), "on_hand": 25},
+        "theirs": {"variant_id": "10000", "product_title": "Hoodie", "variant_title": "XS",
+                   "price": Decimal("7.77"), "on_hand": 25},
+    }
+    [row] = _merge_conflicts_for_ui([conflict], "a", "b")
+    assert row["variant_id"] == "10000"
+    assert row["product_title"] == "Hoodie" and row["variant_title"] == "XS"
+    # Only the clashing cell is listed (identical columns are noise), with
+    # Decimals rendered JSON-safe.
+    assert row["fields"] == {"price": {"base": "61.99", "a": "5.00", "b": "7.77"}}
+
+    # Conflict while merging A (app base = B): theirs is A, ours holds B.
+    inverted = {**conflict, "theirs_ref": "a"}
+    [row] = _merge_conflicts_for_ui([inverted], "a", "b")
+    assert row["fields"]["price"]["a"] == "7.77"
+    assert row["fields"]["price"]["b"] == "5.00"
 
 
 def test_set_data_tier_injects_runtime_env():
@@ -225,8 +253,11 @@ def test_data_tier_snapshot_restore_roundtrip(dolt_server, tmp_path):
     tier.cleanup()  # prunes sf_* branches; should not raise
 
 
-@requires_dolt
-def test_merge_into_working(dolt_server, tmp_path):
+def _pin_snapshot_branches(dolt_server, tmp_path, conflict: bool) -> tuple:
+    """Seed the catalog and pin sf_base/sf_a/sf_b diverging from ``clean``.
+
+    sf_a sets 10000's price to 5.00; sf_b sets 10001's stock to 999 and — when
+    ``conflict`` — also 10000's price to 7.77 (same cell as sf_a)."""
     import pymysql
 
     products = tmp_path / "products.json"
@@ -238,37 +269,120 @@ def test_merge_into_working(dolt_server, tmp_path):
     tier = DoltServerDataTier(host=conn["host"], port=conn["port"], database="shop_test")
     tier.mark_clean()
 
-    # Two branches diverging from clean: sf_a edits price, sf_b edits stock.
-    c = pymysql.connect(autocommit=True, cursorclass=pymysql.cursors.DictCursor, **conn)
-    cur = c.cursor()
+    statements = [
+        "CALL DOLT_BRANCH('sf_base','clean')",
+        "CALL DOLT_BRANCH('sf_a','clean')",
+        "CALL DOLT_CHECKOUT('sf_a')",
+        "UPDATE variant_state SET price=5.00 WHERE variant_id='10000'",
+        "CALL DOLT_COMMIT('-a','-m','a')",
+        "CALL DOLT_CHECKOUT('main')",
+        "CALL DOLT_BRANCH('sf_b','clean')",
+        "CALL DOLT_CHECKOUT('sf_b')",
+        "UPDATE variant_state SET on_hand=999 WHERE variant_id='10001'",
+    ]
+    if conflict:
+        statements.append("UPDATE variant_state SET price=7.77 WHERE variant_id='10000'")
+    statements += ["CALL DOLT_COMMIT('-a','-m','b')", "CALL DOLT_CHECKOUT('main')"]
 
-    def run(sql):
-        cur.execute(sql)
+    connection = pymysql.connect(autocommit=True, cursorclass=pymysql.cursors.DictCursor, **conn)
+    try:
+        with connection.cursor() as cur:
+            for sql in statements:
+                cur.execute(sql)
+    finally:
+        connection.close()
+    return catalog, tier
 
-    run("CALL DOLT_BRANCH('sf_base','clean')")
-    run("CALL DOLT_BRANCH('sf_a','clean')")
-    run("CALL DOLT_CHECKOUT('sf_a')")
-    run("UPDATE variant_state SET price=5.00 WHERE variant_id='10000'")
-    run("CALL DOLT_COMMIT('-a','-m','a')")
-    run("CALL DOLT_CHECKOUT('main')")
-    run("CALL DOLT_BRANCH('sf_b','clean')")
-    run("CALL DOLT_CHECKOUT('sf_b')")
-    run("UPDATE variant_state SET on_hand=999 WHERE variant_id='10001'")
-    run("CALL DOLT_COMMIT('-a','-m','b')")
-    run("CALL DOLT_CHECKOUT('main')")
+
+@requires_dolt
+def test_merge_into_working(dolt_server, tmp_path):
+    catalog, tier = _pin_snapshot_branches(dolt_server, tmp_path, conflict=False)
 
     # Clean cell-level merge: both land.
-    assert tier.merge_into_working("base", ["a", "b"]) == []
+    assert tier.merge_into_working("base", ["a", "b"]) == {"conflicts": [], "resolved": []}
     items = {v["variant_id"]: v for v in catalog.list_variants()}
     assert items["10000"]["price"] == 5.00 and items["10001"]["on_hand"] == 999
 
-    # Now make sf_b also edit 10000's price -> conflict on the same cell.
-    run("CALL DOLT_CHECKOUT('sf_b')")
-    run("UPDATE variant_state SET price=7.77 WHERE variant_id='10000'")
-    run("CALL DOLT_COMMIT('-a','-m','b2')")
-    run("CALL DOLT_CHECKOUT('main')")
-    conflicts = tier.merge_into_working("base", ["a", "b"])
-    assert "10000" in conflicts
+
+@requires_dolt
+def test_merge_conflict_reports_sides_and_rolls_back(dolt_server, tmp_path):
+    catalog, tier = _pin_snapshot_branches(dolt_server, tmp_path, conflict=True)
+
+    result = tier.merge_into_working("base", ["a", "b"])
+    assert result["resolved"] == []
+    [conflict] = result["conflicts"]
+    assert conflict["variant_id"] == "10000"
+    # The clash surfaces while merging B onto (base + A): theirs is B.
+    assert conflict["theirs_ref"] == "b"
+    assert float(conflict["base"]["price"]) == 61.99
+    assert float(conflict["ours"]["price"]) == 5.00
+    assert float(conflict["theirs"]["price"]) == 7.77
     # aborted + rolled back to base (clean) -> 10000 is the seed price again
     assert {v["variant_id"]: v for v in catalog.list_variants()}["10000"]["price"] == 61.99
-    c.close()
+
+
+@requires_dolt
+def test_merge_resolution_take_either_side(dolt_server, tmp_path):
+    catalog, tier = _pin_snapshot_branches(dolt_server, tmp_path, conflict=True)
+
+    # Keep B's side of the clash; B's clean cell (10001 stock) lands either way.
+    result = tier.merge_into_working("base", ["a", "b"], resolutions={"10000": {"take": "b"}})
+    assert result == {"conflicts": [], "resolved": ["10000"]}
+    items = {v["variant_id"]: v for v in catalog.list_variants()}
+    assert items["10000"]["price"] == 7.77 and items["10001"]["on_hand"] == 999
+
+    # Re-run keeping A's side (each merge resets the working set to base first).
+    result = tier.merge_into_working("base", ["a", "b"], resolutions={"10000": {"take": "a"}})
+    assert result == {"conflicts": [], "resolved": ["10000"]}
+    items = {v["variant_id"]: v for v in catalog.list_variants()}
+    assert items["10000"]["price"] == 5.00 and items["10001"]["on_hand"] == 999
+
+    # The resolved working set must be versionable (the merge left no dangling
+    # conflict state): snapshotting commits and pins a branch as usual.
+    tier.on_snapshot("merged1")
+    branches = {
+        row["name"]
+        for row in tier._query("SELECT name FROM dolt_branches WHERE name LIKE %s", ("sf_%",))
+    }
+    assert "sf_merged1" in branches
+
+
+@requires_dolt
+def test_merge_resolution_custom_value(dolt_server, tmp_path):
+    catalog, tier = _pin_snapshot_branches(dolt_server, tmp_path, conflict=True)
+
+    result = tier.merge_into_working(
+        "base", ["a", "b"], resolutions={"10000": {"set": {"price": 6.5, "on_hand": 3}}}
+    )
+    assert result == {"conflicts": [], "resolved": ["10000"]}
+    items = {v["variant_id"]: v for v in catalog.list_variants()}
+    assert items["10000"]["price"] == 6.50 and items["10000"]["on_hand"] == 3
+    assert items["10001"]["on_hand"] == 999
+
+
+@requires_dolt
+def test_merge_resolution_ignores_unresolved_and_rolls_back(dolt_server, tmp_path):
+    catalog, tier = _pin_snapshot_branches(dolt_server, tmp_path, conflict=True)
+
+    # A resolutions map that misses the conflicted variant aborts like no map.
+    result = tier.merge_into_working("base", ["a", "b"], resolutions={"99999": {"take": "a"}})
+    assert [c["variant_id"] for c in result["conflicts"]] == ["10000"]
+    assert {v["variant_id"]: v for v in catalog.list_variants()}["10000"]["price"] == 61.99
+
+
+@requires_dolt
+def test_merge_conflict_with_b_as_base_inverts_sides(dolt_server, tmp_path):
+    """app_base = B: the working set starts at B, so the clash surfaces while
+    merging A — theirs is A and ours carries B's values."""
+    catalog, tier = _pin_snapshot_branches(dolt_server, tmp_path, conflict=True)
+
+    result = tier.merge_into_working("b", ["a", "b"])
+    [conflict] = result["conflicts"]
+    assert conflict["theirs_ref"] == "a"
+    assert float(conflict["ours"]["price"]) == 7.77
+    assert float(conflict["theirs"]["price"]) == 5.00
+
+    result = tier.merge_into_working("b", ["a", "b"], resolutions={"10000": {"take": "a"}})
+    assert result == {"conflicts": [], "resolved": ["10000"]}
+    items = {v["variant_id"]: v for v in catalog.list_variants()}
+    assert items["10000"]["price"] == 5.00 and items["10001"]["on_hand"] == 999

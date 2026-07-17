@@ -214,3 +214,27 @@ button.danger { color: var(--danger); border-color: #e3b8b8; }
 .merge-box select { flex: 1 1 auto; min-width: 90px; min-height: 30px; border: 1px solid var(--line); border-radius: 6px; padding: 0 8px; background: #fff; color: var(--ink); font: inherit; }
 .merge-base { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); flex: 1 1 auto; }
 .merge-box #mergeBtn { min-height: 30px; padding: 0 14px; }
+
+/* Merge-conflict resolution panel (rendered by app.js on a 409 merge). */
+.conflict-panel { display: grid; gap: 8px; padding: 10px; border: 1px solid #e5b9a5; border-radius: 8px; background: #fdf3ee; }
+.conflict-panel[hidden] { display: none; }
+.conflict-title { font-size: 12px; font-weight: 800; color: #8a341f; }
+.conflict-panel > .muted { margin: 0; font-size: 12px; }
+.conflict-item { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.ci-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; font-size: 12px; }
+.ci-head .muted { margin: 0; font-size: 11px; }
+.ci-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ci-table th, .ci-table td { padding: 3px 6px; text-align: left; border-bottom: 1px solid var(--line); }
+.ci-table thead th { color: var(--muted); font-weight: 700; }
+.ci-table tbody th { color: var(--muted); font-weight: 600; }
+.ci-choice { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; }
+.ci-choice label { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; color: var(--ink); }
+.ci-choice input[type="radio"] { width: auto; min-height: 0; margin: 0; }
+.ci-custom { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; }
+.ci-custom[hidden] { display: none; }
+.ci-custom label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.ci-custom input { width: 90px; min-height: 26px; padding: 0 8px; }
+.ci-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.ci-actions button { min-height: 28px; padding: 0 12px; }
+.ci-actions button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ci-actions button.primary:hover { background: var(--accent-strong); color: #fff; }

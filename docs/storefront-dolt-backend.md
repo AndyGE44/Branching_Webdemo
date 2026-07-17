@@ -107,6 +107,26 @@ pristine catalog.
 `GET /api/catalog` and `POST /api/catalog/{variant_id}` back the editor;
 `GET /api/backend` reports timings.
 
+### Merging two snapshots (and resolving conflicts)
+
+With ≥2 snapshots, the **Merge** box combines two snapshots' *catalog data*
+(CRIU checkpoints cannot merge, so you pick which snapshot's *app* the merged
+data runs on: Initial / A / B). `POST /api/workspace/merge` restores the app
+base, resets the Dolt working set to its branch, then `DOLT_MERGE`s A and B in
+turn — Dolt's cell-level 3-way merge, so edits to different cells (even on the
+same row) combine cleanly.
+
+When A and B wrote **the same cell**, Dolt files the clash in its
+`dolt_conflicts_variant_state` system table (base/ours/theirs per column)
+instead of picking a winner. The control plane reads those rows, aborts the
+merge (the workspace stays consistently at the app base), and responds **409**
+with per-variant `{field: {base, a, b}}` values. The UI then shows a conflict
+panel: **Keep A / Keep B / Custom value** per variant (plus keep-all shortcuts),
+and re-POSTs the merge with `resolutions` (`variant_id -> "a" | "b" |
+{field: value}`). The re-run resolves each clash row-by-row in one
+`@@autocommit=0` session — the flow Dolt documents — clears the conflict
+markers, commits, and snapshots the merged result as usual.
+
 ## Constraints / caveats
 
 - **Requires the VM** (StateFork/Waypoint/CRIU). On a plain dev box the shop
@@ -124,5 +144,6 @@ pristine catalog.
 ## Testing
 
 `tests/test_storefront_dolt.py` covers the no-DB logic always, and the live Dolt
-roundtrip (seed/list/update/diff + snapshot/restore versioning) when a `dolt`
-binary is on PATH (skipped otherwise).
+roundtrip (seed/list/update/diff + snapshot/restore versioning + merge with
+conflict reporting and per-variant resolution) when a `dolt` binary is on PATH
+(skipped otherwise).

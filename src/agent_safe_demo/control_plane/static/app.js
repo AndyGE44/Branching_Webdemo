@@ -26,6 +26,7 @@ const mergeA = document.querySelector("#mergeA");
 const mergeB = document.querySelector("#mergeB");
 const mergeBase = document.querySelector("#mergeBase");
 const mergeBtn = document.querySelector("#mergeBtn");
+const conflictPanel = document.querySelector("#conflictPanel");
 
 let apps = [];
 let currentAppId = null;
@@ -33,6 +34,7 @@ let workspace = null;
 let buildingTimer = null;
 let catalogEnabled = false;
 let catSearchTimer = null;
+let pendingMerge = null; // {a, b, app_base} while the conflict panel is open
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -730,11 +732,16 @@ catSearch.addEventListener("input", () => {
 // ── Merge (Dolt data branches) ───────────────────────────────────────────────
 // Combine two snapshots' catalog data into a new snapshot. CRIU can't merge, so
 // you pick which app checkpoint the merged data runs on (Initial / A / B).
+// A 409 means both snapshots changed the same cell(s): the conflict panel shows
+// Base / A / B per variant, and re-posts the merge with the chosen resolutions.
 function updateMergeBox(branch, dataTier) {
   const enabled = Boolean(dataTier && dataTier.enabled);
   const snaps = (branch && branch.snapshots) || [];
   mergeBox.hidden = !(enabled && snaps.length >= 2);
-  if (mergeBox.hidden) return;
+  if (mergeBox.hidden) {
+    hideConflictPanel();
+    return;
+  }
   const options = snaps
     .map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.label)}</option>`)
     .join("");
@@ -747,6 +754,159 @@ function updateMergeBox(branch, dataTier) {
   mergeB.value = has(prevB) ? prevB : snaps[snaps.length - 1].id;
 }
 
+const CONFLICT_FIELD_LABELS = {
+  price: "Price",
+  compare_at_price: "Compare-at price",
+  on_hand: "Stock",
+  available: "Available",
+};
+
+function snapshotLabelById(id) {
+  const snaps = (workspace && workspace.branch && workspace.branch.snapshots) || [];
+  const snap = snaps.find((s) => s.id === id);
+  return snap ? snap.label : id;
+}
+
+function conflictValue(value) {
+  return value === null || value === undefined ? "—" : String(value);
+}
+
+function hideConflictPanel() {
+  conflictPanel.hidden = true;
+  conflictPanel.innerHTML = "";
+  pendingMerge = null;
+}
+
+function renderConflictPanel(mergeBody, conflicts) {
+  pendingMerge = { a: mergeBody.a, b: mergeBody.b, app_base: mergeBody.app_base };
+  const labelA = snapshotLabelById(mergeBody.a);
+  const labelB = snapshotLabelById(mergeBody.b);
+  const cards = conflicts
+    .map((conflict, index) => {
+      const fields = Object.entries(conflict.fields || {});
+      const rows = fields
+        .map(
+          ([name, values]) => `
+          <tr>
+            <th>${escapeHtml(CONFLICT_FIELD_LABELS[name] || name)}</th>
+            <td>${escapeHtml(conflictValue(values.base))}</td>
+            <td>${escapeHtml(conflictValue(values.a))}</td>
+            <td>${escapeHtml(conflictValue(values.b))}</td>
+          </tr>`,
+        )
+        .join("");
+      const customInputs = fields
+        .map(
+          ([name, values]) => `
+          <label>${escapeHtml(CONFLICT_FIELD_LABELS[name] || name)}
+            <input type="text" data-field="${escapeHtml(name)}" value="${escapeHtml(conflictValue(values.a))}" />
+          </label>`,
+        )
+        .join("");
+      return `
+        <div class="conflict-item" data-variant-id="${escapeHtml(conflict.variant_id)}">
+          <div class="ci-head">
+            <strong>${escapeHtml(conflict.product_title || conflict.variant_id)}</strong>
+            <span class="muted">${escapeHtml(conflict.variant_title || "")} · ${escapeHtml(conflict.variant_id)}</span>
+          </div>
+          <table class="ci-table">
+            <thead>
+              <tr><th></th><th>Base</th><th>A · ${escapeHtml(labelA)}</th><th>B · ${escapeHtml(labelB)}</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+          <div class="ci-choice">
+            <label><input type="radio" name="ci-${index}" value="a" checked /> Keep A</label>
+            <label><input type="radio" name="ci-${index}" value="b" /> Keep B</label>
+            <label><input type="radio" name="ci-${index}" value="custom" /> Custom</label>
+          </div>
+          <div class="ci-custom" hidden>${customInputs}</div>
+        </div>`;
+    })
+    .join("");
+  conflictPanel.innerHTML = `
+    <div class="conflict-title">Merge conflict · ${conflicts.length} variant${conflicts.length === 1 ? "" : "s"}</div>
+    <p class="muted">Both snapshots changed the same cell. Pick a side — or type a value — per variant. The workspace is waiting at the app base.</p>
+    ${cards}
+    <div class="ci-actions">
+      <button type="button" data-conflict-action="all-a">Keep all A</button>
+      <button type="button" data-conflict-action="all-b">Keep all B</button>
+      <button type="button" data-conflict-action="apply" class="primary">Apply &amp; snapshot</button>
+      <button type="button" data-conflict-action="cancel">Cancel</button>
+    </div>`;
+  conflictPanel.hidden = false;
+}
+
+// Collect {variant_id: "a" | "b" | {field: value}} from the panel; null if a
+// Custom choice has no usable value (an error pill explains which variant).
+function gatherResolutions() {
+  const resolutions = {};
+  for (const item of conflictPanel.querySelectorAll(".conflict-item")) {
+    const variantId = item.dataset.variantId;
+    const choice = item.querySelector('input[type="radio"]:checked');
+    const side = choice ? choice.value : "a";
+    if (side !== "custom") {
+      resolutions[variantId] = side;
+      continue;
+    }
+    const fields = {};
+    for (const input of item.querySelectorAll('.ci-custom input[data-field]')) {
+      const raw = input.value.trim();
+      if (raw === "" || raw === "—") continue;
+      fields[input.dataset.field] = raw;
+    }
+    if (!Object.keys(fields).length) {
+      showResult(`Enter a custom value for variant ${variantId} (or keep A/B)`, false);
+      return null;
+    }
+    resolutions[variantId] = fields;
+  }
+  return resolutions;
+}
+
+async function requestMerge(body) {
+  const response = await fetch("/api/workspace/merge", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await response.json();
+  if (response.status === 409 && Array.isArray(data.conflicts)) {
+    const error = new Error(data.detail || "Merge conflict");
+    error.conflicts = data.conflicts;
+    throw error;
+  }
+  if (!response.ok) {
+    throw new Error(data.detail || `Request failed: ${response.status}`);
+  }
+  return data;
+}
+
+async function runMerge(body, successLabel) {
+  showBuilding("Merging…", "Combining the two snapshots' catalog data and snapshotting the result.");
+  runtimeFrame.removeAttribute("src");
+  try {
+    await requestMerge(body);
+    hideConflictPanel();
+    showResult(successLabel);
+    await refresh();
+  } catch (error) {
+    hideBuilding();
+    if (error.conflicts) {
+      showResult(`Merge conflict — ${error.conflicts.length} variant(s) need a decision`, false);
+      renderConflictPanel(body, error.conflicts);
+    } else {
+      hideConflictPanel();
+      showResult(error.message, false);
+    }
+    try {
+      await refreshWorkspace(); // the workspace now sits at the app base
+    } catch {
+      // Keep the original error visible if the refresh also fails.
+    }
+  }
+}
+
 mergeBtn.addEventListener("click", async () => {
   const a = mergeA.value;
   const b = mergeB.value;
@@ -755,14 +915,45 @@ mergeBtn.addEventListener("click", async () => {
     showResult("Pick two different snapshots", false);
     return;
   }
-  showBuilding("Merging…", "Combining the two snapshots' catalog data and snapshotting the result.");
-  runtimeFrame.removeAttribute("src");
-  await mutate("Snapshots merged", async () => {
-    await request("/api/workspace/merge", {
-      method: "POST",
-      body: JSON.stringify({ a, b, app_base }),
-    });
-  });
+  hideConflictPanel(); // a fresh attempt invalidates any earlier conflict set
+  await runMerge({ a, b, app_base }, "Snapshots merged");
+});
+
+// A different snapshot pair (or app base) invalidates an open conflict set.
+for (const select of [mergeA, mergeB, mergeBase]) {
+  select.addEventListener("change", hideConflictPanel);
+}
+
+conflictPanel.addEventListener("change", (event) => {
+  const radio = event.target.closest('input[type="radio"]');
+  if (!radio) return;
+  const item = radio.closest(".conflict-item");
+  if (item) item.querySelector(".ci-custom").hidden = radio.value !== "custom";
+});
+
+conflictPanel.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-conflict-action]");
+  if (!button) return;
+  const action = button.dataset.conflictAction;
+  if (action === "cancel") {
+    hideConflictPanel();
+    showResult("Merge cancelled — workspace left at the app base");
+    return;
+  }
+  if (action === "all-a" || action === "all-b") {
+    const side = action === "all-a" ? "a" : "b";
+    for (const radio of conflictPanel.querySelectorAll(`input[type="radio"][value="${side}"]`)) {
+      radio.checked = true;
+      const item = radio.closest(".conflict-item");
+      if (item) item.querySelector(".ci-custom").hidden = true;
+    }
+    return;
+  }
+  if (action === "apply" && pendingMerge) {
+    const resolutions = gatherResolutions();
+    if (!resolutions) return;
+    await runMerge({ ...pendingMerge, resolutions }, "Snapshots merged (conflicts resolved)");
+  }
 });
 
 // Collapse / expand the control rail to give the shop website the full screen.

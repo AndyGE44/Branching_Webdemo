@@ -15,6 +15,7 @@ from agent_safe_demo.control_plane.runtime_manager import RuntimeManager
 from agent_safe_demo.control_plane.statefork import (
     BranchError,
     BranchHandle,
+    MergeConflictError,
     SnapshotHandle,
     StateForkBackend,
 )
@@ -253,6 +254,10 @@ class FakeBackend:
         branch["current_snapshot_id"] = snapshot_id
         return {"branch": dict(branch), "snapshot": {"id": snapshot_id}, "status": "restored"}
 
+    def merge_snapshots(self, branch_id, a_id, b_id, app_base_id, label=None, resolutions=None):
+        self.calls.append(("merge_snapshots", branch_id, a_id, b_id, app_base_id, resolutions))
+        return self.save_snapshot(branch_id, label=label or f"merged {a_id[:6]} + {b_id[:6]}")
+
     def reset(self):
         self.calls.append(("reset",))
         cleanup = {
@@ -312,6 +317,81 @@ def test_workspace_snapshot_and_restore_delegate_to_ensured_branch(tmp_path):
     restored = workspace.restore(result["snapshot"]["id"])
     assert restored["status"] == "restored"
     assert ("restore_snapshot", restored["branch"]["id"], result["snapshot"]["id"]) in fake.calls
+
+
+def test_workspace_merge_translates_resolutions_to_tier_form(tmp_path):
+    """The wire form (variant -> "a" | "b" | {field: value}) becomes the tier's
+    take/set form keyed on the actual snapshot ids."""
+    workspace = make_workspace(tmp_path)
+    fake = workspace.backend
+    workspace.ensure()  # snap-1 = Initial
+    a_id = workspace.snapshot(label="A")["snapshot"]["id"]
+    b_id = workspace.snapshot(label="B")["snapshot"]["id"]
+
+    workspace.merge(
+        a_id,
+        b_id,
+        app_base="a",
+        resolutions={"10000": "a", "10001": "b", "10002": {"price": 6.5}},
+    )
+    call = fake.calls[-2]  # last is the save_snapshot the fake merge delegates to
+    assert call[0] == "merge_snapshots"
+    assert call[2] == a_id and call[3] == b_id and call[4] == a_id  # app base = A
+    assert call[5] == {
+        "10000": {"take": a_id},
+        "10001": {"take": b_id},
+        "10002": {"set": {"price": 6.5}},
+    }
+
+    # Without resolutions the backend receives None (first attempt).
+    workspace.merge(a_id, b_id)
+    assert fake.calls[-2][5] is None
+
+    for bad in ("c", {}, 42):
+        with pytest.raises(BranchError):
+            workspace.merge(a_id, b_id, resolutions={"10000": bad})
+
+
+def test_merge_endpoint_returns_409_with_conflicts_then_accepts_resolutions(monkeypatch):
+    app = load_controller_app(monkeypatch)
+    module = sys.modules["agent_safe_demo.control_plane.main"]
+    conflicts = [
+        {
+            "variant_id": "10000",
+            "product_title": "Hoodie",
+            "variant_title": "XS",
+            "fields": {"price": {"base": "61.99", "a": "5.00", "b": "7.77"}},
+        }
+    ]
+    seen = {}
+
+    def fake_merge(a, b, app_base="initial", resolutions=None):
+        seen["resolutions"] = resolutions
+        if resolutions is None:
+            raise MergeConflictError(
+                "Merge conflict on variant(s): 10000.",
+                conflicts=conflicts,
+                refs={"a": a, "b": b, "app_base": "init"},
+            )
+        return {"merged": True}
+
+    monkeypatch.setattr(module.workspace, "merge", fake_merge)
+    with TestClient(app) as client:
+        first = client.post("/api/workspace/merge", json={"a": "s1", "b": "s2"})
+        second = client.post(
+            "/api/workspace/merge",
+            json={"a": "s1", "b": "s2", "resolutions": {"10000": "b", "10001": {"price": "6.50"}}},
+        )
+
+    assert first.status_code == 409
+    body = first.json()
+    assert body["status"] == "conflict"
+    assert body["conflicts"] == conflicts
+    assert body["refs"] == {"a": "s1", "b": "s2", "app_base": "init"}
+
+    assert second.status_code == 200
+    assert second.json() == {"merged": True}
+    assert seen["resolutions"] == {"10000": "b", "10001": {"price": "6.50"}}
 
 
 def test_workspace_reset_rebuilds_from_scratch(tmp_path):

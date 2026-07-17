@@ -234,10 +234,20 @@ class Workspace:
         result = self.backend.restore_snapshot(branch_id, snapshot_id=snapshot_id)
         return {**result, "workspace": self.payload(result["branch"])["workspace"]}
 
-    def merge(self, a_id: str, b_id: str, app_base: str = "initial") -> dict[str, Any]:
+    def merge(
+        self,
+        a_id: str,
+        b_id: str,
+        app_base: str = "initial",
+        resolutions: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Merge two snapshots' catalog data into a new snapshot. ``app_base``
         picks which app checkpoint the merged data runs on: 'initial' (default,
-        the clean Initial snapshot), 'a', or 'b'."""
+        the clean Initial snapshot), 'a', or 'b'.
+
+        ``resolutions`` comes from the conflict UI after a first attempt hit
+        cell-level clashes: variant_id -> ``"a"`` | ``"b"`` | ``{field: value}``,
+        translated here to the data tier's take/set form."""
         branch = self.ensure()["branch"]
         snap_ids = [s["id"] for s in branch["snapshots"]]
         if a_id not in snap_ids or b_id not in snap_ids:
@@ -250,7 +260,24 @@ class Workspace:
             base_id = b_id
         else:
             base_id = snap_ids[0]  # the Initial snapshot
-        result = self.backend.merge_snapshots(branch["id"], a_id, b_id, base_id)
+        tier_resolutions: dict[str, dict[str, Any]] | None = None
+        if resolutions:
+            tier_resolutions = {}
+            for variant_id, choice in resolutions.items():
+                if choice == "a":
+                    tier_resolutions[str(variant_id)] = {"take": a_id}
+                elif choice == "b":
+                    tier_resolutions[str(variant_id)] = {"take": b_id}
+                elif isinstance(choice, dict) and choice:
+                    tier_resolutions[str(variant_id)] = {"set": choice}
+                else:
+                    raise BranchError(
+                        f"Invalid resolution for variant {variant_id}: expected "
+                        "'a', 'b', or a {field: value} mapping."
+                    )
+        result = self.backend.merge_snapshots(
+            branch["id"], a_id, b_id, base_id, resolutions=tier_resolutions
+        )
         return {**result, "workspace": self.payload(result["branch"])["workspace"]}
 
     def reset(self) -> dict[str, Any]:
